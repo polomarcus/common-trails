@@ -53,8 +53,8 @@ test.describe('Community map — public map, members-only export', () => {
     await expect(page.getByTestId('export-login-gate')).toBeVisible();
     await expect(page.getByTestId('email-login-form')).toBeVisible();
     // The download form controls must NOT be present for anonymous users.
-    await expect(page.getByTestId('export-format-pmtiles')).toHaveCount(0);
-    await expect(page.getByTestId('export-download-button')).toHaveCount(0);
+    await expect(page.getByTestId('export-download-pmtiles')).toHaveCount(0);
+    await expect(page.getByTestId('export-download-geojsonl')).toHaveCount(0);
   });
 
   test('a logged-in visitor reaches the export form', async ({ page }) => {
@@ -69,7 +69,7 @@ test.describe('Community map — public map, members-only export', () => {
 
     // Members see the real export form, not the gate.
     await expect(page.getByTestId('export-login-gate')).toHaveCount(0);
-    await expect(page.getByTestId('export-format-pmtiles')).toBeVisible();
-    await expect(page.getByTestId('export-download-button')).toBeVisible();
+    await expect(page.getByTestId('export-download-pmtiles')).toBeVisible();
+    await expect(page.getByTestId('export-download-geojsonl')).toBeVisible();
   });
 });

@@ -72,16 +72,7 @@ test.describe('Heatmap tile performance', () => {
     await ctx.dispose();
   });
 
-  test('.fgraph loads in <500ms', async () => {
-    const ctx = await pwRequest.newContext();
-    const t0 = Date.now();
-    const resp = await ctx.get(`${FRONTEND_URL}/offroad-sud-est.fgraph`);
-    const ms = Date.now() - t0;
-    const body = await resp.body();
-    console.log(`[perf] .fgraph: ${ms}ms, ${(body.byteLength / 1024 / 1024).toFixed(1)}MB`);
-    expect(resp.status()).toBe(200);
-    expect(ms, `.fgraph <3s (got ${ms}ms)`).toBeLessThan(3000);
-    expect(body.byteLength, '.fgraph >1MB').toBeGreaterThan(1_000_000);
-    await ctx.dispose();
-  });
+  // REMOVED: the '.fgraph loads' perf test. Client-side routing (the WASM
+  // router + regional .fgraph shards) was decommissioned in the raw-trace
+  // pivot — there is no .fgraph artifact to serve any more.
 });
