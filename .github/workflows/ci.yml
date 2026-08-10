@@ -182,6 +182,16 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: "http://localhost:8787"
           NEXT_PUBLIC_MAP_OFFLINE: "true"
+          # Point the community heatmap PMTiles source at the fixture served by
+          # serve.py (same-origin), so the raw-PMTiles wiring is BUILT into the
+          # export. Without this, a prod build with NEXT_PUBLIC_HEATMAP_URL unset
+          # omits the source and every heatmap spec takes its graceful-skip branch
+          # (asserting nothing). The fixture is copied into out/ below.
+          NEXT_PUBLIC_HEATMAP_URL: "http://localhost:3787/heatmap-display.pmtiles"
+
+      # ── Serve the PMTiles fixture so the community source resolves ─────
+      - name: Stage heatmap PMTiles fixture into the export
+        run: cp e2e/fixtures/heatmap-display.pmtiles frontend/out/heatmap-display.pmtiles
 
       # ── Wait for backend ───────────────────────────────────────────────
       - name: Wait for API /healthz
