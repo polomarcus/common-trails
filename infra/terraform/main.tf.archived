@@ -1,0 +1,2062 @@
+/**
+ * CHEMINS COMMUNS — GCP Serverless-First Infrastructure
+ *
+ * Architecture:
+ * - Frontend: Cloud Storage (static) + Cloud CDN (no container)
+ * - Backend API: Cloud Run (scale-to-zero, cold start accepted)
+ * - Jobs: Cloud Run Jobs (import, ingestion, purge)
+ * - DB: Cloud SQL PostgreSQL + PostGIS
+ * - Storage: Cloud Storage buckets (frontend + uploads)
+ * - Secrets: Secret Manager
+ *
+ * Cost target: minimal for serverless
+ *   db-f1-micro + scale-to-zero Cloud Run ≈ $10-15/month
+ *   db-g1-small (prod)                    ≈ $30-40/month
+ */
+
+terraform {
+  required_version = ">= 1.5"
+
+  backend "gcs" {
+    # Bucket must be created manually before first `terraform init`.
+    # See README.md for bootstrap instructions.
+    # Override with: terraform init -backend-config="bucket=my-bucket"
+    bucket = "common-trails-tfstate"
+    prefix = "terraform/state"
+    # M16: Enable state encryption at rest.
+    # Set GOOGLE_ENCRYPTION_KEY env var with a 32-byte base64-encoded AES key.
+    # Generate with: openssl rand -base64 32
+    # Terraform reads this automatically from the environment.
+  }
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
+  }
+}
+
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
+}
+
+# ── Enable required APIs ─────────────────────────────────────────────────────
+
+locals {
+  required_apis = [
+    "run.googleapis.com",
+    "sqladmin.googleapis.com",
+    "storage.googleapis.com",
+    "secretmanager.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "compute.googleapis.com",
+    "vpcaccess.googleapis.com",
+    "iam.googleapis.com",
+    "monitoring.googleapis.com",
+    "billingbudgets.googleapis.com",
+    "cloudscheduler.googleapis.com",
+    "cloudtasks.googleapis.com",
+  ]
+}
+
+resource "google_project_service" "apis" {
+  for_each = toset(local.required_apis)
+  service  = each.value
+
+  disable_on_destroy = false
+}
+
+# ── Artifact Registry ─────────────────────────────────────────────────────────
+
+resource "google_artifact_registry_repository" "docker" {
+  depends_on    = [google_project_service.apis]
+  location      = var.region
+  repository_id = "common-trails"
+  description   = "CHEMINS COMMUNS Docker images"
+  format        = "DOCKER"
+
+  labels = {
+    env     = var.env
+    project = "common-trails"
+  }
+}
+
+# ── Service Accounts ──────────────────────────────────────────────────────────
+
+resource "google_service_account" "api" {
+  account_id   = "common-trails-api"
+  display_name = "CHEMINS COMMUNS API (Cloud Run)"
+  description  = "Service account for the backend API Cloud Run service"
+}
+
+resource "google_service_account" "jobs" {
+  account_id   = "common-trails-jobs"
+  display_name = "CHEMINS COMMUNS Jobs (Cloud Run Jobs)"
+  description  = "Service account for async import/ingestion jobs"
+}
+
+# Cloud Tasks → API service: signs OIDC tokens and is the only identity
+# allowed to invoke the /internal/* endpoints on the API service.
+resource "google_service_account" "tasks_invoker" {
+  account_id   = "common-trails-tasks-invoker"
+  display_name = "CHEMINS COMMUNS Cloud Tasks → API Invoker"
+  description  = "Identity Cloud Tasks signs OIDC tokens as when calling /internal/* on the API"
+}
+
+# API SA: access secrets + write to uploads bucket
+resource "google_project_iam_member" "api_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "api_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+# API SA: can trigger Cloud Run Jobs (run_job)
+resource "google_project_iam_member" "api_run_developer" {
+  project = var.project_id
+  role    = "roles/run.developer"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+# API SA: can enqueue Cloud Tasks (POST /gpx/upload defers heat compute)
+resource "google_project_iam_member" "api_cloudtasks_enqueuer" {
+  project = var.project_id
+  role    = "roles/cloudtasks.enqueuer"
+  member  = "serviceAccount:${google_service_account.api.email}"
+}
+
+# API SA: can act as the tasks-invoker SA when creating tasks with OIDC
+# tokens (Cloud Tasks signs tokens as that SA; the enqueuer needs
+# iam.serviceAccountUser on the signer).
+resource "google_service_account_iam_member" "api_acts_as_invoker" {
+  service_account_id = google_service_account.tasks_invoker.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_project_iam_member" "jobs_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.jobs.email}"
+}
+
+resource "google_project_iam_member" "jobs_cloudsql" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.jobs.email}"
+}
+
+# ── Deploy SA (GitHub Actions, key-file auth) ────────────────────────────────
+# The deploy SA is provisioned manually (its key lives in GitHub secret
+# GCP_SA_KEY) and therefore isn't a google_service_account resource here,
+# but its IAM grants belong in terraform so the bindings drift-check on
+# every apply. Both grants below were discovered missing on 2026-05-16
+# when terraform-apply failed at the Cloud Run Job create step:
+#
+#   * compute.backendBuckets.get — needed by the matview/PMTiles
+#     deploy step that reads the LB backend bucket to compute drift.
+#   * cloudtasks.queues.get — needed by terraform's google_cloud_tasks_queue
+#     drift check.
+#
+# We grant the read-only viewer roles (not full admin) because the deploy
+# SA only needs to read state for drift detection; mutations on these
+# resources stay manual.
+resource "google_project_iam_member" "deploy_github_compute_viewer" {
+  project = var.project_id
+  role    = "roles/compute.viewer"
+  member  = "serviceAccount:deploy-github@${var.project_id}.iam.gserviceaccount.com"
+}
+
+resource "google_project_iam_member" "deploy_github_cloudtasks_viewer" {
+  project = var.project_id
+  role    = "roles/cloudtasks.viewer"
+  member  = "serviceAccount:deploy-github@${var.project_id}.iam.gserviceaccount.com"
+}
+
+# secretmanager.secrets.get — terraform refresh failed without this on the
+# 2026-05-16 deploy. Already granted out-of-band via gcloud earlier; this
+# line just brings terraform state in sync.
+resource "google_project_iam_member" "deploy_github_secretmanager_viewer" {
+  project = var.project_id
+  role    = "roles/secretmanager.viewer"
+  member  = "serviceAccount:deploy-github@${var.project_id}.iam.gserviceaccount.com"
+}
+
+# monitoring.dashboards.get — terraform refresh on
+# google_monitoring_dashboard.main failed without this on the 2026-05-16
+# deploy #2. roles/monitoring.viewer is the minimum-privilege read role.
+resource "google_project_iam_member" "deploy_github_monitoring_viewer" {
+  project = var.project_id
+  role    = "roles/monitoring.viewer"
+  member  = "serviceAccount:deploy-github@${var.project_id}.iam.gserviceaccount.com"
+}
+
+# monitoring.dashboards.update — terraform apply on
+# google_monitoring_dashboard.main failed with 403 on the 2026-05-30 deploy
+# (monitoring.viewer is read-only). roles/monitoring.dashboardEditor is the
+# minimum-privilege role granting dashboards.{create,update,delete}. Already
+# granted out-of-band via gcloud on 2026-05-30; this line syncs terraform state.
+resource "google_project_iam_member" "deploy_github_monitoring_dashboard_editor" {
+  project = var.project_id
+  role    = "roles/monitoring.dashboardEditor"
+  member  = "serviceAccount:deploy-github@${var.project_id}.iam.gserviceaccount.com"
+}
+
+# iam.serviceAccounts.getIamPolicy — terraform refresh on the IAM binding
+# `roles/iam.serviceAccountUser` for the tasks-invoker SA failed without
+# this on the 2026-05-16 deploy #2. roles/iam.serviceAccountViewer is the
+# narrow read-only role; gives `iam.serviceAccounts.get`, `.list`, and
+# `.getIamPolicy` across all project SAs. Doesn't let the deploy SA
+# *modify* any service account.
+resource "google_project_iam_member" "deploy_github_serviceaccount_viewer" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountViewer"
+  member  = "serviceAccount:deploy-github@${var.project_id}.iam.gserviceaccount.com"
+}
+
+# ── Secret Manager ────────────────────────────────────────────────────────────
+# Secrets must be populated manually or via CI/CD after creation.
+
+resource "google_secret_manager_secret" "jwt_secret" {
+  depends_on = [google_project_service.apis]
+  secret_id  = "JWT_SECRET"
+  replication {
+    auto {}
+  }
+  labels = { env = var.env }
+}
+
+resource "google_secret_manager_secret" "database_url" {
+  depends_on = [google_project_service.apis]
+  secret_id  = "DATABASE_URL"
+  replication {
+    auto {}
+  }
+  labels = { env = var.env }
+}
+
+resource "google_secret_manager_secret" "strava_client_id" {
+  depends_on = [google_project_service.apis]
+  secret_id  = "STRAVA_CLIENT_ID"
+  replication {
+    auto {}
+  }
+  labels = { env = var.env }
+}
+
+resource "google_secret_manager_secret" "strava_client_secret" {
+  depends_on = [google_project_service.apis]
+  secret_id  = "STRAVA_CLIENT_SECRET"
+  replication {
+    auto {}
+  }
+  labels = { env = var.env }
+}
+
+# Fernet key (base64-urlsafe 32 bytes) for at-rest encryption of
+# IntegrationAccount.access_token / refresh_token. Generated once via:
+#   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+# Wired into the api service + import_strava + resync_strava jobs.
+# Plaintext rows continue to decrypt as-is; rotation happens naturally
+# on the next Strava token refresh (every 6 h).
+resource "google_secret_manager_secret" "strava_token_enc_key" {
+  depends_on = [google_project_service.apis]
+  secret_id  = "STRAVA_TOKEN_ENC_KEY"
+  replication {
+    auto {}
+  }
+  labels = { env = var.env }
+}
+
+# ── Cloud SQL (PostgreSQL + PostGIS) ──────────────────────────────────────────
+
+resource "google_sql_database_instance" "main" {
+  depends_on       = [google_project_service.apis]
+  name             = "common-trails-${var.env}"
+  database_version = "POSTGRES_17"
+  region           = var.region
+
+  settings {
+    tier              = var.db_tier
+    edition           = "ENTERPRISE"
+    availability_type = "ZONAL" # Single zone — no HA surcharge
+    disk_autoresize   = true
+    disk_size         = 10 # Minimum; auto-resize handles growth
+    disk_type         = "PD_SSD"
+
+    backup_configuration {
+      enabled    = var.enable_backups
+      start_time = "02:00"
+      # Transaction log retention: 7 days (default), point-in-time recovery
+      transaction_log_retention_days = var.enable_backups ? 7 : null
+    }
+
+    database_flags {
+      name  = "cloudsql.enable_pg_cron"
+      value = "off"
+    }
+
+    # Maintenance window — Tuesday 3am UTC (low-traffic slot)
+    maintenance_window {
+      day          = 3 # Tuesday
+      hour         = 3
+      update_track = "stable"
+    }
+
+    ip_configuration {
+      ipv4_enabled = true
+
+      authorized_networks {
+        name  = "cloud-run"
+        value = "0.0.0.0/0"
+      }
+    }
+  }
+
+  deletion_protection = true
+
+  lifecycle {
+    prevent_destroy = true
+    # `disk_size` and `tier` drift away from the variables at runtime and we
+    # accept that:
+    # - `disk_size` only grows (autoresize). Hardcoding the initial 10 GB
+    #   would force-replace the instance whenever live disk > 10 GB.
+    # - `tier` is managed out-of-band via `gcloud sql instances patch` when
+    #   we want to bump/downgrade — a terraform run shouldn't quietly
+    #   shrink the prod tier just because the variable still says
+    #   `db-f1-micro`. When we plan a deliberate tier change, either patch
+    #   live first then update the variable, or remove this ignore
+    #   temporarily for a single apply.
+    ignore_changes = [
+      settings[0].disk_size,
+      settings[0].tier,
+    ]
+  }
+}
+
+resource "google_sql_database" "common_trails" {
+  name     = "common_trails"
+  instance = google_sql_database_instance.main.name
+}
+
+resource "random_password" "db_password" {
+  length  = 32
+  special = false
+}
+
+resource "google_sql_user" "api" {
+  name     = "api"
+  instance = google_sql_database_instance.main.name
+  password = random_password.db_password.result
+}
+
+# ── Cloud Storage Buckets ─────────────────────────────────────────────────────
+
+# Frontend static hosting bucket
+resource "google_storage_bucket" "frontend" {
+  depends_on                  = [google_project_service.apis]
+  name                        = var.frontend_bucket_name
+  location                    = var.region
+  force_destroy               = false
+  uniform_bucket_level_access = true
+
+  website {
+    main_page_suffix = "index.html"
+    not_found_page   = "404.html"
+  }
+
+  cors {
+    origin          = ["*"]
+    method          = ["GET", "HEAD"]
+    response_header = ["*"]
+    max_age_seconds = 3600
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "frontend-static"
+  }
+}
+
+# Public read access for frontend bucket
+resource "google_storage_bucket_iam_member" "frontend_public" {
+  bucket = google_storage_bucket.frontend.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# Data bucket (private — DFCI cache, DEM tiles, routing fixtures)
+resource "google_storage_bucket" "data" {
+  depends_on                  = [google_project_service.apis]
+  name                        = "${var.project_id}-common-trails-data-${var.env}"
+  location                    = var.region
+  force_destroy               = false
+  uniform_bucket_level_access = true
+
+  labels = {
+    env     = var.env
+    purpose = "data"
+  }
+}
+
+# API SA can read from data bucket
+resource "google_storage_bucket_iam_member" "data_api_read" {
+  bucket = google_storage_bucket.data.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+# Uploads bucket (private — GPX, ZIP, photos)
+resource "google_storage_bucket" "uploads" {
+  depends_on                  = [google_project_service.apis]
+  name                        = "${var.project_id}-common-trails-uploads-${var.env}"
+  location                    = var.region
+  force_destroy               = false
+  uniform_bucket_level_access = true
+
+  lifecycle_rule {
+    condition {
+      age = 730 # Purge uploads after 2 years
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "uploads"
+  }
+}
+
+# API SA can write to uploads bucket
+resource "google_storage_bucket_iam_member" "uploads_api_write" {
+  bucket = google_storage_bucket.uploads.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_storage_bucket_iam_member" "uploads_jobs_write" {
+  bucket = google_storage_bucket.uploads.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.jobs.email}"
+}
+
+# ── Cloud CDN (frontend) ──────────────────────────────────────────────────────
+
+resource "google_compute_backend_bucket" "frontend_cdn" {
+  depends_on  = [google_project_service.apis]
+  name        = "common-trails-frontend-cdn-${var.env}"
+  description = "CDN backend for CHEMINS COMMUNS static frontend"
+  bucket_name = google_storage_bucket.frontend.name
+  enable_cdn  = true
+
+  cdn_policy {
+    cache_mode        = "CACHE_ALL_STATIC"
+    default_ttl       = 86400  # 24 hours — invalidated at deploy time
+    max_ttl           = 604800 # 7 days max (Next.js hashed assets are immutable)
+    client_ttl        = 3600   # Browser cache: 1 hour
+    negative_caching  = false  # Don't cache 404s
+    serve_while_stale = 86400  # Serve stale 24h on origin failure
+  }
+}
+
+# ── Cloud Run API ─────────────────────────────────────────────────────────────
+
+resource "google_cloud_run_v2_service" "api" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-api-${var.env}"
+  location   = var.region
+  ingress    = "INGRESS_TRAFFIC_ALL"
+
+  template {
+    service_account = google_service_account.api.email
+
+    scaling {
+      min_instance_count = 0 # Scale to zero — $0 when idle
+      max_instance_count = 1 # Single instance for beta (db-f1-micro can't handle more)
+    }
+
+    # Cloud Run gateway timeout. Raised from the 60s default after
+    # 2026-05-18 incident: a GPX upload during a cold start blew past
+    # 60s (first DB connection + first PostGIS spatial call stacked up)
+    # and the gateway returned 504 → friend-blocking failure.
+    #
+    # Bumped 300s → 900s for the heatmap-export Phase 3 async worker
+    # (PRD #391). /internal/export/build/{id} can take 5-10 min on a
+    # 250 km × 250 km MBTiles raster build; the prior 300s ceiling
+    # triggered 504s + Cloud Tasks retries (and now also the
+    # SELECT FOR UPDATE SKIP LOCKED race guard). 900s = 15 min, which
+    # is the worker's natural ceiling (a build that long should fail
+    # explicitly, not 504).
+    timeout = "900s"
+
+    # Cloud Run execution environment: gen2 for lower cold start latency
+    execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
+
+    containers {
+      image = var.api_image
+
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "4Gi" # First deploy needs headroom for DB seeding; lower to 2Gi after
+        }
+        cpu_idle          = false # Keep CPU allocated during startup to avoid throttled cold starts
+        startup_cpu_boost = true  # Free CPU burst during cold start
+      }
+
+      # Inject secrets as environment variables
+      env {
+        name = "JWT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.jwt_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "STRAVA_CLIENT_ID"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.strava_client_id.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "STRAVA_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.strava_client_secret.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "STRAVA_TOKEN_ENC_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.strava_token_enc_key.secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name  = "ENABLE_STRAVA_INTEGRATION"
+        value = "true"
+      }
+
+      env {
+        name  = "TEST_MODE"
+        value = "false"
+      }
+
+      env {
+        name  = "HEATMAP_K_ANONYMITY"
+        value = tostring(var.heatmap_k_anonymity)
+      }
+
+      env {
+        name  = "SENTRY_DSN"
+        value = var.sentry_dsn
+      }
+
+      # Public origin of the frontend. Used by the API for server-side
+      # redirects after OAuth (Strava → /strava?status=connected). When
+      # unset, the API defaults to http://localhost:3787 (config.py:9)
+      # and prod Strava connects redirect users to localhost. This var
+      # has been set manually via `gcloud run services update
+      # --update-env-vars=FRONTEND_URL=...` twice in the past; codifying
+      # it here closes the drift loop.
+      env {
+        name  = "FRONTEND_URL"
+        value = var.frontend_url
+      }
+
+      env {
+        name  = "ENV"
+        value = "production"
+      }
+
+      env {
+        name  = "RATELIMIT_ENABLED"
+        value = "true"
+      }
+
+      env {
+        name  = "DATA_DIR"
+        value = "/app/data"
+      }
+
+      # ── Cloud SQL pool sizing (db-f1-micro = 25 max_connections) ───────
+      # db-f1-micro reserves 3 conns for superuser, leaving 22 for clients.
+      # With max_instances=1 today (line ~400) we use 5+3=8 conns,
+      # leaving 14 for Cloud SQL proxy / admin / migrations. When
+      # max_instance_count is raised to 2 (planned), 2×8 = 16 still leaves 6.
+      env {
+        name  = "DB_POOL_SIZE"
+        value = "5"
+      }
+      env {
+        name  = "DB_MAX_OVERFLOW"
+        value = "3"
+      }
+
+      env {
+        name  = "UPLOADS_BUCKET"
+        value = google_storage_bucket.uploads.name
+      }
+
+      # ── Cloud Tasks (async heat compute) ─────────────────────────────
+      # The API service enqueues heat-compute tasks here. The handler
+      # endpoint is on this same service, but Cloud Tasks reaches it via
+      # the public URL using OIDC auth (not the localhost loop).
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = var.project_id
+      }
+
+      # Strava OAuth redirect URI. Code reads STRAVA_REDIRECT_URI from env
+      # (integrations_strava.py:54-56) with a `http://localhost:8787/...`
+      # default — same drift pattern as FRONTEND_URL (#328). Codifying so
+      # `terraform apply` keeps it stable.
+      env {
+        name  = "STRAVA_REDIRECT_URI"
+        value = "https://chemins-communs.fr/integrations/strava/callback"
+      }
+
+      # Cloud Run Job dispatch — _trigger_cloud_run_job (integrations_strava.py
+      # :309-310) reads GCP_PROJECT and GCP_REGION specifically (NOT
+      # GOOGLE_CLOUD_PROJECT / CLOUD_TASKS_LOCATION). Without these set,
+      # _trigger_cloud_run_job silently returns False and every /import_all
+      # falls back to the in-process BackgroundTasks path that #314 was
+      # supposed to deprecate. Audit 2026-05-25 caught this; without the
+      # codification a future terraform apply can wipe these even if set
+      # manually via gcloud.
+      env {
+        name  = "GCP_PROJECT"
+        value = var.project_id
+      }
+
+      env {
+        name  = "GCP_REGION"
+        value = var.region
+      }
+
+      env {
+        name  = "IMPORT_JOB_NAME"
+        value = google_cloud_run_v2_job.import_strava.name
+      }
+
+      env {
+        name  = "CLOUD_TASKS_LOCATION"
+        value = var.region
+      }
+
+      env {
+        name  = "CLOUD_TASKS_QUEUE"
+        value = google_cloud_tasks_queue.heat_compute.name
+      }
+
+      env {
+        name  = "CLOUD_TASKS_INVOKER_SA"
+        value = google_service_account.tasks_invoker.email
+      }
+
+      # The handler URL must be absolute because Cloud Tasks signs OIDC
+      # tokens against it. We can't reference the service's own .uri
+      # attribute here (self-cycle), so set var.api_public_url after the
+      # first apply (it's printed in outputs). When empty, the Python
+      # service falls back to inline execution — heat compute still
+      # happens, just on the request thread.
+      env {
+        name  = "INTERNAL_HEAT_HANDLER_URL"
+        value = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/ingest/heat"
+      }
+
+      # ── Matview-refresh + artefact-rebuild (event-driven post-ingest) ──
+      # Same chicken-and-egg as INTERNAL_HEAT_HANDLER_URL: api_public_url
+      # is unknown until the first apply. Empty values short-circuit the
+      # enqueue helpers in app/services/cloud_tasks.py; the
+      # threading.Timer fallback in ingest.py still fires locally.
+      env {
+        name  = "CLOUD_TASKS_MATVIEW_QUEUE"
+        value = google_cloud_tasks_queue.matview_refresh.name
+      }
+      env {
+        name  = "INTERNAL_MATVIEW_HANDLER_URL"
+        value = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/matview/refresh"
+      }
+      env {
+        name  = "CLOUD_TASKS_ARTEFACT_QUEUE"
+        value = google_cloud_tasks_queue.artefact_rebuild.name
+      }
+      env {
+        name  = "INTERNAL_ARTEFACT_HANDLER_URL"
+        value = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/artefacts/rebuild"
+      }
+
+      # ── Strava push webhooks (PR W1+W2) ───────────────────────────
+      # Public POST /integrations/strava/webhook enqueues here; the
+      # worker fetches activity + ingests. Same chicken-and-egg
+      # pattern as the other INTERNAL_*_HANDLER_URL vars — api_public_url
+      # is unknown on the first apply.
+      env {
+        name  = "CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE"
+        value = google_cloud_tasks_queue.strava_webhook.name
+      }
+      env {
+        name  = "INTERNAL_STRAVA_WEBHOOK_HANDLER_URL"
+        value = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/strava/webhook-event"
+      }
+
+      # ── Heatmap export build (PRD #391 Phase 3) ───────────────────
+      # /export/heatmap/request POST enqueues here; the worker
+      # (POST /internal/export/build/{id}) builds + uploads to GCS.
+      # Without these env vars, enqueue_export_build silently falls
+      # through to inline-run inside the request handler — the 202
+      # "queued" response would lie. See cloud_tasks.py::enqueue_export_build
+      # + _is_enabled_for_queue. Same chicken-and-egg as the other
+      # INTERNAL_*_HANDLER_URL vars: api_public_url is unknown on the
+      # first apply.
+      env {
+        name  = "CLOUD_TASKS_EXPORT_QUEUE"
+        value = google_cloud_tasks_queue.export_build.name
+      }
+      env {
+        name  = "INTERNAL_EXPORT_BUILD_HANDLER_URL"
+        value = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/export/build"
+      }
+      # Shared secret used to verify Strava's handshake GET. The
+      # subscription bootstrap CLI reads the SAME secret to register
+      # at Strava's side, so both sides agree.
+      env {
+        name = "STRAVA_WEBHOOK_VERIFY_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.strava_webhook_verify_token.secret_id
+            version = "latest"
+          }
+        }
+      }
+      # Subscription-id allow-list — second-line defence in the worker
+      # (`internal_strava_webhook.py:72-80`). After bootstrapping the
+      # push subscription (`python -m app.cli.strava_subscribe create`),
+      # set TF_VAR_strava_webhook_subscription_id to the returned id so
+      # the worker can reject crafted POSTs that pass the owner_id check
+      # but came from a different subscription. Empty string keeps the
+      # current behaviour (allow all subscription_ids — required for the
+      # first apply where the id doesn't exist yet).
+      env {
+        name  = "STRAVA_WEBHOOK_SUBSCRIPTION_ID"
+        value = var.strava_webhook_subscription_id
+      }
+
+      # OIDC audience for the daily Strava health-check Cloud Scheduler.
+      # See `app/api/internal_strava_health.py`.
+      env {
+        name  = "INTERNAL_STRAVA_HEALTH_HANDLER_URL"
+        value = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/strava/health-check"
+      }
+
+      env {
+        name  = "HEATMAP_ARTEFACTS_BUCKET"
+        value = google_storage_bucket.heatmap_artefacts.name
+      }
+
+      # Public canonical heatmap-export bucket (Phase 1+2 of PRD #391).
+      # When this is set, `/export/heatmap.pmtiles` 302s to
+      # `https://storage.googleapis.com/{bucket}/heatmap-display.pmtiles`,
+      # and the build_pmtiles job uploads its output to the same path
+      # atomically (.tmp → rewrite). Without it the redirect falls back
+      # to the relative `/heatmap-display.pmtiles` (404 in prod).
+      #
+      # See: backend/app/api/export.py::_canonical_pmtiles_url and
+      # backend/app/jobs/build_pmtiles.py::_upload_to_export_bucket.
+      env {
+        name  = "HEATMAP_GCS_BUCKET"
+        value = google_storage_bucket.heatmap.name
+      }
+
+      # ── Production ingest tuning (May 2026 audit) ────────────────────
+      # OSM segment cache: in-memory, ~5 MB per cached tile-set. With
+      # the 4 GiB Cloud Run instance we could fit 200 (the default
+      # post-audit), but db-f1-micro upstream chokes on the parallel
+      # tile loads when the cache thrashes. 50 is the safe sweet spot
+      # for prod; revisit when we upsize Cloud SQL.
+      env {
+        name  = "OSM_GRID_CACHE_MAX"
+        value = "50"
+      }
+
+      # SKIP_OSM_FETCH=true: production must not call Overpass — it's
+      # rate-limited and slow. The PBF import populates osm_road_edges;
+      # any tile not in there should silently fall back to grid-snap,
+      # not stall on a 5–15 s Overpass round-trip.
+      env {
+        name  = "SKIP_OSM_FETCH"
+        value = "true"
+      }
+
+      # OVERPASS_ENABLED=false: the second Overpass kill-switch (overpass.py
+      # / graph_tiles.py / ingest.py all honour it; ABSENT defaults to TRUE →
+      # live Overpass calls to foreign tiles = massive ingest slowdown). Set
+      # here for SOURCE HONESTY only — terraform is NOT applied in prod (its
+      # state holds deleted resources → any `apply` recreates them). The LIVE
+      # services get this via scripts/deploy-prod.sh's --env-vars-file, and
+      # the JOBS get it via that script's per-job --update-env-vars assertion
+      # (jobs run the api image but the env-file only reaches the two
+      # services, so job env is asserted separately). 2026-07-20: the drain
+      # job ran with OVERPASS_ENABLED absent→true (audit gap #6).
+      env {
+        name  = "OVERPASS_ENABLED"
+        value = "false"
+      }
+
+      volume_mounts {
+        name       = "data-gcs"
+        mount_path = "/data"
+      }
+
+      ports {
+        container_port = 8787
+      }
+
+      startup_probe {
+        http_get {
+          path = "/healthz"
+          port = 8787
+        }
+        initial_delay_seconds = 2
+        period_seconds        = 5
+        failure_threshold     = 24
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/healthz"
+          port = 8787
+        }
+        timeout_seconds   = 30
+        period_seconds    = 60
+        failure_threshold = 10 # bg-load takes ~200s, needs room
+      }
+    }
+
+    volumes {
+      name = "data-gcs"
+      gcs {
+        bucket    = google_storage_bucket.data.name
+        read_only = true
+      }
+    }
+
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.main.connection_name]
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    project = "common-trails"
+  }
+}
+
+# Allow public access to API (authentication handled by the app)
+resource "google_cloud_run_v2_service_iam_member" "api_public" {
+  name     = google_cloud_run_v2_service.api.name
+  location = var.region
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+# tasks_invoker SA also has run.invoker — used for the OIDC-authenticated
+# /internal/* calls. The endpoints themselves verify the OIDC token's
+# audience + signer email, so the duplication with allUsers is fine.
+resource "google_cloud_run_v2_service_iam_member" "api_tasks_invoker" {
+  name     = google_cloud_run_v2_service.api.name
+  location = var.region
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.tasks_invoker.email}"
+}
+
+# ── Cloud Tasks Queue (heat-compute) ─────────────────────────────────────────
+# The synchronous /gpx/upload path stores the activity row, then enqueues a
+# task here. The task target is the API service's /internal/ingest/heat
+# endpoint, signed with an OIDC token by tasks_invoker.
+#
+# Retry config:
+#   - max_attempts: 5 — heat-edge UPSERT is idempotent, retries are safe.
+#   - min/max backoff: 30 s → 5 min — DB hiccup recovery + back-pressure.
+#   - max_doublings: 4 — 30s, 1m, 2m, 4m, 5m (capped).
+#
+# Rate config:
+#   - max_dispatches_per_second: 10 — well under db-f1-micro's CPU budget.
+#   - max_concurrent_dispatches: 5 — single Cloud Run instance + Cloud SQL
+#     micro tier can't sustain more without piling up.
+resource "google_cloud_tasks_queue" "heat_compute" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-heat-compute-${var.env}"
+  location   = var.region
+
+  rate_limits {
+    max_dispatches_per_second = 10
+    max_concurrent_dispatches = 5
+  }
+
+  retry_config {
+    max_attempts  = 5
+    min_backoff   = "30s"
+    max_backoff   = "300s"
+    max_doublings = 4
+  }
+}
+
+# ── Cloud Tasks Queue (matview-refresh) ──────────────────────────────────────
+# Triggered ~10 s after the last heat-compute task finishes. Const task name
+# "matview-refresh" so a burst of ingests collapses to ONE refresh. See
+# docs/migration-runbook.md § "Heatmap artefact freshness — event-driven, by
+# design".
+#
+# max_concurrent_dispatches=1 — REFRESH MATERIALIZED VIEW CONCURRENTLY
+# serializes anyway; queueing more than one is wasted compute.
+resource "google_cloud_tasks_queue" "matview_refresh" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-matview-refresh-${var.env}"
+  location   = var.region
+
+  rate_limits {
+    max_dispatches_per_second = 1
+    max_concurrent_dispatches = 1
+  }
+
+  retry_config {
+    max_attempts  = 3
+    min_backoff   = "30s"
+    max_backoff   = "300s"
+    max_doublings = 2
+  }
+}
+
+# ── Cloud Tasks Queue (artefact-rebuild) ─────────────────────────────────────
+# Triggered ~5 min after the last heat-compute task finishes. Const task
+# name "artefact-rebuild" so 50 uploads in 5 min = 1 rebuild. Builds PMTiles
+# and uploads to gs://${heatmap_artefacts_bucket}.
+#
+# max_concurrent_dispatches=1 — PMTiles build needs ~500 MB RAM peak; one
+# at a time is enough at 3-friend scale.
+resource "google_cloud_tasks_queue" "artefact_rebuild" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-artefact-rebuild-${var.env}"
+  location   = var.region
+
+  rate_limits {
+    max_dispatches_per_second = 1
+    max_concurrent_dispatches = 1
+  }
+
+  retry_config {
+    max_attempts  = 3
+    min_backoff   = "60s"
+    max_backoff   = "600s"
+    max_doublings = 2
+  }
+}
+
+# ── Cloud Tasks Queue (strava webhook events) ────────────────────────────────
+# Each Strava push event (activity create/update/delete, athlete deauthorize)
+# enqueued here. The public `/integrations/strava/webhook` endpoint ACKs in
+# <100 ms; the heavy work (Strava fetch + ingest) runs from this queue's
+# worker with proper retry semantics.
+#
+# Rate config:
+#   - max_dispatches_per_second: 1 — Strava's per-app rate limit is
+#     100 req / 15 min ≈ 0.11 req/s. We dispatch one task at a time so
+#     the worker's outbound Strava calls don't pile up. If we later add
+#     a global Strava-call throttler, we can bump this.
+#   - max_concurrent_dispatches: 1 — same reasoning. One ingest at a
+#     time keeps the db-f1-micro pool footprint predictable.
+#
+# Retry config:
+#   - max_attempts: 5 — enough for transient 5xx / token refresh
+#     hiccups. Strava 429 carries Retry-After which the worker honors.
+#   - max_backoff: 600s — 10 min ceiling so we don't sit on a queue
+#     entry forever during a Strava outage.
+resource "google_cloud_tasks_queue" "strava_webhook" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-strava-webhook-${var.env}"
+  location   = var.region
+
+  rate_limits {
+    max_dispatches_per_second = 1
+    max_concurrent_dispatches = 1
+  }
+
+  retry_config {
+    max_attempts  = 5
+    min_backoff   = "30s"
+    max_backoff   = "600s"
+    max_doublings = 4
+  }
+}
+
+# ── Cloud Tasks Queue (heatmap export build — PRD #391 Phase 3) ──────────────
+# /export/heatmap/request POST enqueues here; the worker
+# (POST /internal/export/build/{id}) builds the requested format
+# (GeoJSON/MBTiles/KML/KMZ) and uploads to gs://${heatmap_bucket}/archive/{id}/.
+#
+# Rate config:
+#   - max_dispatches_per_second: 5 — exports are heavy (tippecanoe, KML
+#     serialization), throttle to keep the api service responsive for
+#     interactive requests.
+#   - max_concurrent_dispatches: 3 — with the 15-min Cloud Run timeout
+#     and single-instance api, three concurrent builds is the cap.
+#
+# Retry config:
+#   - max_attempts: 3 — uploads are idempotent (overwriting the same
+#     archive/{id}/{format}.{ext}) AND the worker takes a
+#     SELECT FOR UPDATE SKIP LOCKED on the export_requests row before
+#     flipping to 'running', so a retry is safe even mid-build.
+#   - min/max backoff: 30s → 5min — gives transient PG/GCS hiccups time
+#     to clear.
+resource "google_cloud_tasks_queue" "export_build" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-export-build-${var.env}"
+  location   = var.region
+
+  rate_limits {
+    max_dispatches_per_second = 5
+    max_concurrent_dispatches = 3
+  }
+
+  retry_config {
+    max_attempts  = 3
+    min_backoff   = "30s"
+    max_backoff   = "300s"
+    max_doublings = 2
+  }
+}
+
+
+# ── Strava webhook verify token (Secret Manager) ─────────────────────────────
+# Shared secret used during the Strava push-subscription handshake. Strava
+# GETs our callback URL with `hub.verify_token`; we compare against this
+# value. Generate once with `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+# and add a version via `gcloud secrets versions add strava-webhook-verify-token
+# --data-file=-` BEFORE running `python -m app.cli.strava_subscribe create`.
+resource "google_secret_manager_secret" "strava_webhook_verify_token" {
+  depends_on = [google_project_service.apis]
+  secret_id  = "strava-webhook-verify-token"
+  replication {
+    auto {}
+  }
+  labels = { env = var.env }
+}
+
+# ── GCS bucket for heatmap artefacts (PMTiles, future .fgraph) ───────────────
+# Cloud Run /internal/artefacts/rebuild handler uploads heatmap-display.pmtiles
+# here with Cache-Control: public, max-age=300. Cloud CDN sits in front
+# (configured separately) so most reads never hit the bucket.
+resource "google_storage_bucket" "heatmap_artefacts" {
+  depends_on                  = [google_project_service.apis]
+  name                        = "${var.project_id}-heatmap-artefacts-${var.env}"
+  location                    = var.region
+  uniform_bucket_level_access = true
+
+  versioning {
+    enabled = false
+  }
+
+  lifecycle_rule {
+    condition {
+      age = 30 # days — auto-cleanup of older PMTiles overwrites
+    }
+    action {
+      type = "Delete"
+    }
+  }
+}
+
+# Public read for the served heatmap-display.pmtiles. We can't use
+# uniform bucket access + per-object ACLs, so the bucket is read-public
+# AT THE BUCKET LEVEL. Don't store anything sensitive here. The actual
+# PMTiles content is already ODbL-licensed and intentionally public.
+resource "google_storage_bucket_iam_member" "heatmap_artefacts_public_read" {
+  bucket = google_storage_bucket.heatmap_artefacts.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# Let the api-prod service write to this bucket (rebuild + upload path).
+resource "google_storage_bucket_iam_member" "heatmap_artefacts_api_writer" {
+  bucket = google_storage_bucket.heatmap_artefacts.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+# ── Public heatmap-export bucket (Phase 1 — PRD #391) ────────────────────────
+# Separate bucket from heatmap_artefacts so we can publish a stable
+# canonical export URL (storage.googleapis.com/common-trails-heatmap-${env}/…)
+# documented under /export/heatmap. The build_pmtiles CLI job uploads
+# heatmap-display.pmtiles here with Cache-Control: public, max-age=86400.
+# CORS allows GET from any origin so the browser can stream the PMTiles
+# via HTTP Range requests when third-party viewers consume it.
+#
+# Phase 3 (TBD) will write versioned archive snapshots under
+# archive/<date>-heatmap-display.pmtiles; the lifecycle rule below deletes
+# those after 90 days. The mutable `heatmap-display.pmtiles` at the root
+# is never auto-deleted.
+resource "google_storage_bucket" "heatmap" {
+  depends_on                  = [google_project_service.apis]
+  name                        = "common-trails-heatmap-${var.env}"
+  location                    = var.region
+  force_destroy               = false
+  uniform_bucket_level_access = true
+
+  cors {
+    origin          = ["*"]
+    method          = ["GET", "HEAD"]
+    response_header = ["*"]
+    max_age_seconds = 3600
+  }
+
+  lifecycle_rule {
+    condition {
+      age            = 90
+      matches_prefix = ["archive/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Pinned-snapshot retention (PRD #391 Phase 3). The build job uploads
+  # `heatmap-display-v{N}.pmtiles` per day in addition to the mutable
+  # name. Keeping 365 days = ~3.6 GB at 10 MB/snapshot; well below the
+  # bucket cost budget. The matches_prefix uses "heatmap-display-v" so
+  # the mutable file `heatmap-display.pmtiles` and the pointer JSON
+  # `heatmap-display.json` are NOT touched.
+  lifecycle_rule {
+    condition {
+      age            = 365
+      matches_prefix = ["heatmap-display-v"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "heatmap-export"
+  }
+}
+
+# Public read for the export bucket. The content is ODbL-licensed and
+# intentionally public — same posture as the heatmap_artefacts bucket.
+resource "google_storage_bucket_iam_member" "heatmap_public_read" {
+  bucket = google_storage_bucket.heatmap.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# Let the jobs SA upload PMTiles to this bucket (build_pmtiles Cloud Run
+# Job final step). Scoped to the bucket only — never project-level.
+resource "google_storage_bucket_iam_member" "heatmap_jobs_writer" {
+  bucket = google_storage_bucket.heatmap.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.jobs.email}"
+}
+
+# Also let the api SA write — the /internal/artefacts/rebuild handler
+# (called by Cloud Tasks after every ingest burst) can publish here too,
+# alongside the existing heatmap_artefacts bucket. Both buckets stay in
+# sync so consumers of the canonical /export/heatmap URL never see stale
+# data.
+resource "google_storage_bucket_iam_member" "heatmap_api_writer" {
+  bucket = google_storage_bucket.heatmap.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.api.email}"
+}
+
+# ── Cloud Run Jobs ────────────────────────────────────────────────────────────
+#
+# ⚠️ NOT the full job inventory — and terraform is NOT the SSOT here.
+# Terraform is never applied in prod (its state still references DELETED old
+# resources → any `apply` recreates them). Some load-bearing jobs are created +
+# maintained OUT-OF-BAND by scripts/deploy-prod.sh and are NOT modelled below:
+#   • common-trails-ingest-pending-archives-prod (archive drain, signed-URL flow)
+#   • common-trails-build-pmtiles-prod           (heatmap-display.pmtiles rebuild)
+#   • common-trails-worker-prod SERVICE          (heavy /internal/* handlers)
+# scripts/deploy-prod.sh is the SSOT for their image AND their env (it asserts
+# OVERPASS_ENABLED=false + the archive-drain env via per-job --update-env-vars —
+# audit gap #6). Do NOT try to fully model those jobs here.
+
+# ── OSM PBF import — reusable for any Geofabrik region ────────────────────────
+#
+# Replaces the cloud-sql-proxy-from-laptop import that was glacially slow
+# (~330 ways/sec on 2026-05-15 — Occitanie ETA 6 h, full south France
+# ~30 h). This job runs INSIDE GCP with a db-internal connection (no
+# cloud-sql-proxy hop) and uses the streaming + COPY-FROM-STDIN code
+# path landed in PR #248 + #251. Expected throughput: 4-10k ways/sec
+# = whole-France ~30-60 min.
+#
+# Parameterized by REGION env var: any key in REGIONS map of
+# ``backend/app/cli/import_osm_roads.py`` (occitanie / paca / ara /
+# auvergne / france / corse / cataluna / aragon / etc.) OR a path to
+# a pre-downloaded PBF on local filesystem. The job downloads from
+# Geofabrik on first run; subsequent runs skip if recent.
+#
+# Run:
+#   gcloud run jobs execute common-trails-import-osm-prod \\
+#     --region=europe-west1 \\
+#     --args=occitanie
+#
+# Or via the make target ``prod-import-osm-job REGION=occitanie``.
+#
+# Memory: 2Gi headroom for the streaming buffer (50k segments × ~200 B
+# = 10 MB, plus pyosmium index + TSV staging — well under 2Gi). Timeout
+# 2h covers whole-France worst case.
+resource "google_cloud_run_v2_job" "import_osm" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-import-osm-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 1       # Each region imports ~7 M ways — retry once on transient failure
+      timeout         = "7200s" # 2 h covers whole-France with streaming + COPY
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "2"   # PBF parse is single-threaded but CPU-heavy
+            memory = "2Gi" # bounded buffer; not the original 16 GB OOM
+          }
+        }
+
+        # REGION is overridable per invocation via --args
+        # (e.g. ``gcloud run jobs execute … --args=paca``).
+        # The CLI accepts a region name from REGIONS map OR a PBF path.
+        command = ["python", "-m", "app.cli.import_osm_roads"]
+        args    = ["occitanie"] # default — override via --args
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name  = "DATA_DIR"
+          value = "/tmp" # Cloud Run gen2 only allows /tmp as writable
+        }
+
+        # HGT tiles baked into the image at /app/data/dem (read-only).
+        # ``local_dem.py`` defaults to ``${DATA_DIR}/dem`` which would
+        # point at /tmp/dem (empty); pin it to the baked location.
+        env {
+          name  = "DEM_DIR"
+          value = "/app/data/dem"
+        }
+
+        # Streaming pool sizing — the OSM import does many small COPY
+        # transactions, each holding a connection briefly. Smaller pool
+        # than the API service since this is a single-threaded job.
+        env {
+          name  = "DB_POOL_SIZE"
+          value = "2"
+        }
+        env {
+          name  = "DB_MAX_OVERFLOW"
+          value = "2"
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "osm-import"
+  }
+}
+
+# ── group_edges_osm Cloud Run Job ─────────────────────────────────────────────
+#
+# Runs ``python -m app.cli.group_edges_osm`` in europe-west1 (same region as
+# Cloud SQL) instead of via cloud-sql-proxy from a developer laptop. The
+# script does ~1-3M per-row UPDATEs against heat_edges; over the proxy each
+# round-trip is ~30-50ms (laptop → GCP → DB → back). In-region the RTT is
+# ~0.5-2ms, expected 10-30× speedup. On 2026-05-16 a proxy run took
+# 7+ hours; this should finish in <30 min.
+#
+# Usage:
+#   gcloud run jobs execute common-trails-group-edges-osm-prod \
+#       --region=europe-west1 --wait
+#
+# Or via the make target ``prod-group-edges-osm-job``.
+#
+# Memory: 2 GiB headroom for the in-memory rows list (the initial SELECT
+# fetchall returns potentially millions of small dicts; ~200 B each =
+# ~200-400 MB at the high end, plus Python overhead). CPU 2 — script is
+# I/O bound after the initial fetch.
+resource "google_cloud_run_v2_job" "group_edges_osm" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-group-edges-osm-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 1
+      timeout         = "3600s" # 1 h is generous given <30 min expected runtime
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "2"
+            memory = "2Gi"
+          }
+        }
+
+        command = ["python", "-m", "app.cli.group_edges_osm"]
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # Smaller pool than the API service — the script holds one connection
+        # for the whole run.
+        env {
+          name  = "DB_POOL_SIZE"
+          value = "2"
+        }
+        env {
+          name  = "DB_MAX_OVERFLOW"
+          value = "2"
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "heat-edges-grouping"
+  }
+}
+
+resource "google_cloud_run_v2_job" "import_strava" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-import-strava-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 2
+      timeout         = "7200s" # 2 h — matches resync_strava. Friends-beta users with 5000+ activities easily exceed 60 min after Strava's rate limiter (100 req / 15 min per app). The stale-RUNNING cutoff in integrations_strava.py (5400 s / 90 min) sits below this wall, so a healthy long-running job is never killed by the next /import_all poll. PR D of the strava-tough-review audit (Sev-2 #4).
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "1"     # I/O bound but needs CPU for GPX parsing
+            memory = "512Mi" # gen2 requires min 512Mi
+          }
+        }
+
+        # Use the bootstrap entrypoint instead of import_strava directly.
+        # The entrypoint catches module-import-time crashes and updates
+        # the import_jobs row to status=FAILED before exiting, so a
+        # boot-time crash (like the 2026-05-26 JWT_SECRET incident)
+        # doesn't leave a zombie RUNNING row blocking the per-user lock.
+        command = ["python", "-m", "app.jobs.import_strava_entrypoint"]
+
+        # JWT_SECRET is required at module-import time by app/api/auth.py
+        # (top-level `raise RuntimeError("JWT_SECRET must be set...")`
+        # when ENV=production). The Job container transitively imports
+        # auth when loading `app.jobs.import_strava`, so without this
+        # env the process exits before doing any work — observed live
+        # 2026-05-26 06:20Z, 3 retries all crashed. The api Service has
+        # had this env all along (line 514); the Jobs were missing it.
+        # Hotfixed via `gcloud run jobs update` to unblock Paul's
+        # friends-beta re-import; this codifies the fix so the next
+        # `terraform apply` doesn't wipe the gcloud-side change.
+        env {
+          name = "JWT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.jwt_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "STRAVA_CLIENT_ID"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.strava_client_id.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "STRAVA_CLIENT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.strava_client_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "STRAVA_TOKEN_ENC_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.strava_token_enc_key.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # Sentry exception capture. Without this the job runs blind —
+        # the 8 `except Exception:` blocks in this workflow swallow
+        # errors silently (audit 2026-05-25). Same DSN as the api
+        # service so the project view stays unified.
+        env {
+          name  = "SENTRY_DSN"
+          value = var.sentry_dsn
+        }
+
+        env {
+          name  = "ENV"
+          value = "production"
+        }
+
+        # Bulk-import tuning (May 2026 audit). See api service for
+        # full rationale; these are needed for the import + resync jobs
+        # that do high-volume heat_edges UPSERTs.
+        #
+        # OSM_GRID_CACHE_MAX=0: disable the per-tile-set grid cache for
+        # the import job specifically (2026-05-27 OOM postmortem). The
+        # cache stores rebuilt spatial grids that reference segments
+        # already in the per-tile segment cache below — disabling it
+        # means the grid is rebuilt fresh each call (CPU-only over
+        # already-loaded segments, sub-second) and we save ~500 MB
+        # on a re-import of 1000+ activities scattered across France.
+        # The API service keeps the cache on (its 4 GiB instance + high
+        # route overlap between users makes it worthwhile there).
+        env {
+          name  = "OSM_GRID_CACHE_MAX"
+          value = "0"
+        }
+        # OSM_TILE_CACHE_MAX=10: tighten the tile segment LRU. Default
+        # 50 tiles ≈ 200 MB with France-wide OSM data; 10 is enough for
+        # the spatial locality of one in-flight activity at a time and
+        # keeps total cache footprint < 50 MB.
+        env {
+          name  = "OSM_TILE_CACHE_MAX"
+          value = "10"
+        }
+        env {
+          name  = "SKIP_OSM_FETCH"
+          value = "true"
+        }
+        env {
+          name  = "SKIP_MATVIEW_REFRESH"
+          value = "true"
+        }
+        env {
+          name  = "SKIP_CANONICAL_MERGE"
+          value = "true"
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "import"
+  }
+}
+
+# ── Monthly Strava Resync Job ─────────────────────────────────────────────────
+
+resource "google_cloud_run_v2_job" "resync_strava" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-resync-strava-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 0       # Advisory lock prevents concurrent runs
+      timeout         = "7200s" # 2 hours (batches of 5 users × 60s delays)
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "512Mi"
+          }
+        }
+
+        # Same bootstrap pattern as import_strava: wraps the heavy
+        # imports + main() in a try/except so module-import-time crashes
+        # (the JWT_SECRET-class) get captured + logged + Sentry-reported
+        # before container exit. Resync has no per-job DB row to mark
+        # FAILED (it processes all accounts), so the wrapper just logs
+        # cleanly and exits.
+        command = ["python", "-m", "app.jobs.resync_strava_entrypoint"]
+
+        # JWT_SECRET — see rationale on the import_strava Job above.
+        # Same bug class: module-import-time check in app/api/auth.py
+        # crashes the Job before it can do any work.
+        env {
+          name = "JWT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.jwt_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name  = "BATCH_SIZE"
+          value = "5"
+        }
+
+        env {
+          name  = "BATCH_DELAY_SECONDS"
+          value = "60"
+        }
+
+        # Lower per-user page cap to keep total OSM segment + heat_edges
+        # cache footprint inside the 512 MiB job budget. The 2026-05-31
+        # post-cleanup resync OOM'd at 512 MiB AND at 2 GiB on the
+        # default 5 pages × 100 = 500 activities per user — the spatial
+        # matcher's per-tile OSM cache grows unbounded as new tiles are
+        # touched. 2 pages × 100 = 200 activities per user fits
+        # comfortably and the monthly cron picks up the rest over time.
+        env {
+          name  = "MAX_PAGES_PER_USER"
+          value = "2"
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "STRAVA_CLIENT_ID"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.strava_client_id.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "STRAVA_CLIENT_SECRET"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.strava_client_secret.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        env {
+          name = "STRAVA_TOKEN_ENC_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.strava_token_enc_key.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        # Sentry exception capture — see import_strava job for rationale.
+        # Without this, monthly resync failures (broken refresh tokens,
+        # rate-limit walls, etc.) go unreported until someone notices
+        # users with stale data.
+        env {
+          name  = "SENTRY_DSN"
+          value = var.sentry_dsn
+        }
+
+        env {
+          name  = "ENV"
+          value = "production"
+        }
+
+        # Bulk-import tuning (May 2026 audit). Same flags as the
+        # import_strava job — resync also does heavy heat_edges UPSERTs
+        # when ingesting newly-discovered activities.
+        env {
+          name  = "OSM_GRID_CACHE_MAX"
+          value = "50"
+        }
+        env {
+          name  = "SKIP_OSM_FETCH"
+          value = "true"
+        }
+        env {
+          name  = "SKIP_MATVIEW_REFRESH"
+          value = "true"
+        }
+        env {
+          name  = "SKIP_CANONICAL_MERGE"
+          value = "true"
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "resync"
+  }
+}
+
+# ── Edge Clustering Migration Job (one-time) ─────────────────────────────────
+# Merges near-duplicate heat_edges created before ingestion-time clustering was
+# added. New data is clustered automatically during ingestion (_find_canonical_edge
+# in ingest.py). Run this job ONCE after deploy, then safe to delete.
+
+resource "google_cloud_run_v2_job" "migrate_edge_clustering" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-migrate-edge-clustering-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 0       # one-time migration, don't auto-retry
+      timeout         = "3600s" # 1 hour max
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "1Gi" # loads all edges in memory for union-find
+          }
+        }
+
+        command = ["python", "-m", "app.cli.migrate_edge_clustering"]
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "migration"
+  }
+}
+
+# ── Heatmap Rebuild Job ──────────────────────────────────────────────────────
+# Truncates and rebuilds all heatmap tables from activities.
+# Run after deploying changes to edge computation logic.
+#   gcloud run jobs execute common-trails-rebuild-heatmap-prod --region europe-west1
+
+resource "google_cloud_run_v2_job" "rebuild_heatmap" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-rebuild-heatmap-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 0
+      timeout         = "3600s" # 1 hour max
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "2"
+            memory = "2Gi"
+          }
+        }
+
+        command = ["python", "-m", "app.jobs.rebuild_heatmap"]
+
+        env {
+          name  = "HEATMAP_WORKERS"
+          value = "4"
+        }
+
+        env {
+          name  = "SKIP_OSM_FETCH"
+          value = "true"
+        }
+
+        env {
+          name  = "TRUNCATE_FIRST"
+          value = "true"
+        }
+
+        # Publish the freshly-rebuilt heat tiles + graph data to the GCS-backed
+        # CDN cache (gs://${var.frontend_bucket_name}/api-cache/). Without this
+        # the rebuild only refreshes the DB — the CDN keeps serving stale
+        # data, so users only see new heatmap tiles after the next manual
+        # PUBLISH_CACHE=true run or until CDN TTL expires (see
+        # cache_writer.publish_heatmap_cache).
+        env {
+          name  = "PUBLISH_CACHE"
+          value = "true"
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "rebuild"
+  }
+}
+
+# ── Recompute elevation gain Cloud Run Job ──────────────────────────────────
+#
+# After PR #259 introduced Strava-style smoothing (rolling median window=11
+# + 3 m noise threshold) in `gpx._smoothed_elevation_gain`, existing
+# activity rows still carry the OLD inflated D+ values computed via naive
+# monotonic summation. This job re-runs the smoothing in place — Crouzet
+# invariant preserved: only `elevation_gain_m` is rewritten, coords and
+# geometry are untouched.
+#
+# Run manually after a backend deploy that changes the smoothing function:
+#   gcloud run jobs execute common-trails-recompute-elevation-gain-prod --region europe-west1
+#
+# Idempotent: the smoothing is deterministic; running twice produces the
+# same value.
+resource "google_cloud_run_v2_job" "recompute_elevation_gain" {
+  depends_on = [google_project_service.apis]
+  name       = "common-trails-recompute-elevation-gain-${var.env}"
+  location   = var.region
+
+  template {
+    template {
+      service_account = google_service_account.jobs.email
+      max_retries     = 0
+      timeout         = "3600s" # 1 hour max — backfill over active activity set
+      # is single-threaded, ~5-15 min for a few k activities.
+
+      containers {
+        image = var.api_image
+
+        resources {
+          limits = {
+            cpu    = "1"
+            memory = "1Gi" # CPU-bound, low memory — coords are streamed per row.
+          }
+        }
+
+        command = ["python", "-m", "app.cli.recompute_elevation_gain"]
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.database_url.secret_id
+              version = "latest"
+            }
+          }
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+      }
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance {
+          instances = [google_sql_database_instance.main.connection_name]
+        }
+      }
+    }
+  }
+
+  labels = {
+    env     = var.env
+    purpose = "backfill"
+  }
+}
+
+# ── Weekly Strava resync cron — RE-ADDED 2026-07-10 (sync-longevity fix) ─────
+#
+# History: the monthly resync scheduler was DECOMMISSIONED 2026-05-26 in
+# favour of push webhooks (PR #341). Webhooks deliver new activities
+# instantly, BUT they are lossy: an event dropped during a Cloud Run cold
+# start (min-instances=0 — costed-and-rejected) or a transient 5xx is gone
+# forever, and the OLD cursor-based resync (`after=last_synced_at`) could
+# never recover it because a newer activity had already advanced the cursor
+# past the gap. That silent-permanent-loss is the opposite of the
+# StatsHunter benchmark (connect once → fresh stats for years).
+#
+# The resync Job is now a TRAILING-WINDOW reconciliation (see
+# `app/jobs/resync_strava.py`: `after = now - RESYNC_WINDOW_DAYS`), which
+# re-scans the recent window every run so a dropped activity is recovered
+# regardless of chronology (ingest dedup absorbs the ones we already have).
+# Weekly (not monthly) keeps the recovery latency well inside the 45-day
+# window; the advisory lock still prevents overlap with webhooks, and the
+# per-user OAuth-refresh advisory lock prevents refresh-token races.
+#
+# ⚠️ APPLIED VIA gcloud IN THIS ERA — infra is PAUSED (landing plan
+# 2026-06-18): do NOT `terraform apply` (the state references the DELETED
+# prod DB and would recreate it). This resource is committed as CODE so it
+# lands automatically when infra is reactivated; until then ops creates it
+# by hand once the resync Job + api are deployed, e.g.:
+#
+#   gcloud scheduler jobs create http strava-resync-weekly-prod \
+#     --location=<region> --schedule="0 4 * * 1" --time-zone="Europe/Paris" \
+#     --uri="https://run.googleapis.com/v2/projects/<proj>/locations/<region>/jobs/common-trails-resync-strava-prod:run" \
+#     --http-method=POST \
+#     --oauth-service-account-email=<tasks_invoker SA email>
+#   # and grant run.invoker on the job to that SA (google_cloud_run_v2_job_iam_member below).
+#
+# See [[project_strava_webhook_architecture]] + the sync-longevity PR body.
+
+# tasks_invoker SA needs run.invoker on the resync Job so the scheduler
+# below (and manual ops triggers) can launch it via the Run Admin API.
+resource "google_cloud_run_v2_job_iam_member" "resync_strava_invoker" {
+  name     = google_cloud_run_v2_job.resync_strava.name
+  location = var.region
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.tasks_invoker.email}"
+}
+
+resource "google_cloud_scheduler_job" "strava_resync_weekly" {
+  depends_on = [google_project_service.apis]
+  name       = "strava-resync-weekly-${var.env}"
+  region     = var.region
+  schedule   = "0 4 * * 1" # Every Monday 04:00 Paris (off-peak, off webhook traffic)
+  time_zone  = "Europe/Paris"
+
+  # Triggers the resync Cloud Run Job via the Run Admin v2 `:run` API.
+  # Unlike the health-check scheduler (which POSTs an /internal/* endpoint
+  # with an OIDC token), the Run Admin API is a Google API and requires an
+  # OAUTH access token with the cloud-platform scope — hence `oauth_token`,
+  # not `oidc_token`. `google_cloud_run_v2_job.resync_strava.id` is the
+  # full `projects/…/locations/…/jobs/…` path.
+  http_target {
+    uri         = "https://run.googleapis.com/v2/${google_cloud_run_v2_job.resync_strava.id}:run"
+    http_method = "POST"
+    oauth_token {
+      service_account_email = google_service_account.tasks_invoker.email
+      scope                 = "https://www.googleapis.com/auth/cloud-platform"
+    }
+  }
+}
+
+# ── Daily Strava-workflow health-check ───────────────────────────────────────
+#
+# Runs cheap SQL checks via the api service:
+#   - Zombie ImportJob rows (RUNNING > 3 h with no progress)
+#   - Webhook subscription liveness (no Strava activity in 30 days = bad)
+#   - Strava accounts with sync_failures > 5 AND no recent successful sync
+#
+# Findings → Sentry warnings → Sentry's UI alert rules → notification.
+# This is the "no alerts" gap from the 2026-05-26 review — closing it with
+# the cheapest useful instrumentation rather than a full Cloud Monitoring
+# policy stack.
+resource "google_cloud_scheduler_job" "strava_health_check_daily" {
+  depends_on = [google_project_service.apis]
+  name       = "strava-health-check-daily-${var.env}"
+  region     = var.region
+  schedule   = "0 9 * * *" # Every day at 09:00 Paris
+  time_zone  = "Europe/Paris"
+
+  # uri AND audience must use the SAME string as the
+  # INTERNAL_STRAVA_HEALTH_HANDLER_URL env var on the api service (~L771
+  # above) — the receiver compares the OIDC `aud` claim against the env
+  # var byte-for-byte. Hardcoding `.uri` here while the env var derives
+  # from `var.api_public_url` is the bug that caused the 2026-06-04 401
+  # loop: scheduler signed audience=https://...run.app/internal/strava/
+  # health-check, env var was https://chemins-communs.fr/internal/strava/
+  # health-check, mismatch → 401.
+  http_target {
+    uri         = "${var.api_public_url}/internal/strava/health-check"
+    http_method = "POST"
+    oidc_token {
+      service_account_email = google_service_account.tasks_invoker.email
+      audience              = "${var.api_public_url}/internal/strava/health-check"
+    }
+  }
+}
+

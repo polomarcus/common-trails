@@ -1,0 +1,10 @@
+# TEMPORARY — throwaway override for isolated test run in this worktree.
+# Hard-replaces the ports list (via !override) so nothing binds host ports
+# and it never collides with the main stack. NOT committed. Delete after use.
+services:
+  db:
+    ports: !override []
+  backend:
+    ports: !override []
+  frontend:
+    ports: !override []

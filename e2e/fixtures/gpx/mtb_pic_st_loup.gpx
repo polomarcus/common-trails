@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Pic Saint-Loup VTT</name>
+    <time>2026-01-10T08:00:00Z</time>
+  </metadata>
+  <trk>
+    <name>Pic Saint-Loup VTT</name>
+    <type>mountain_biking</type>
+    <trkseg>
+      <trkpt lat="43.7800" lon="3.8150"><ele>200</ele></trkpt>
+      <trkpt lat="43.7820" lon="3.8170"><ele>220</ele></trkpt>
+      <trkpt lat="43.7850" lon="3.8190"><ele>260</ele></trkpt>
+      <trkpt lat="43.7880" lon="3.8200"><ele>310</ele></trkpt>
+      <trkpt lat="43.7910" lon="3.8210"><ele>380</ele></trkpt>
+      <trkpt lat="43.7940" lon="3.8220"><ele>450</ele></trkpt>
+      <trkpt lat="43.7960" lon="3.8230"><ele>510</ele></trkpt>
+      <trkpt lat="43.7980" lon="3.8240"><ele>570</ele></trkpt>
+      <trkpt lat="43.7990" lon="3.8250"><ele>620</ele></trkpt>
+      <trkpt lat="43.8000" lon="3.8260"><ele>658</ele></trkpt>
+      <trkpt lat="43.7990" lon="3.8280"><ele>620</ele></trkpt>
+      <trkpt lat="43.7960" lon="3.8300"><ele>540</ele></trkpt>
+      <trkpt lat="43.7930" lon="3.8320"><ele>440</ele></trkpt>
+      <trkpt lat="43.7900" lon="3.8330"><ele>360</ele></trkpt>
+      <trkpt lat="43.7860" lon="3.8340"><ele>280</ele></trkpt>
+      <trkpt lat="43.7830" lon="3.8330"><ele>230</ele></trkpt>
+      <trkpt lat="43.7800" lon="3.8310"><ele>200</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

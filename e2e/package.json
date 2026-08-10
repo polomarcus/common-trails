@@ -1,0 +1,18 @@
+{
+  "name": "common-trails-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.51.1",
+    "typescript": "5.5.2"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^2.0.4",
+    "pbf": "^4.0.1"
+  }
+}

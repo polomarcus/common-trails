@@ -1,0 +1,38 @@
+{
+  "name": "common-trails-frontend",
+  "version": "0.62.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "export": "next build",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sentry/react": "^8.0.0",
+    "@types/jszip": "^3.4.0",
+    "jszip": "^3.10.1",
+    "maplibre-gl": "4.3.2",
+    "next": "16.1.6",
+    "pmtiles": "^4.4.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.51.1",
+    "@types/node": "20.14.2",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "@vitest/ui": "^4.1.4",
+    "esbuild": "^0.24.2",
+    "jsdom": "^29.0.2",
+    "typescript": "5.5.2",
+    "vitest": "^4.1.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

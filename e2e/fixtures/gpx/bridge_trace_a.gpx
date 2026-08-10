@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Bridge Test Trace A — west segment</name>
+    <time>2026-02-01T08:00:00Z</time>
+  </metadata>
+  <trk>
+    <name>Bridge Test Trace A</name>
+    <type>gravel_cycling</type>
+    <trkseg>
+      <!-- West→East along a road at lat ~43.620 -->
+      <trkpt lat="43.6200" lon="3.9000"><ele>50</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9020"><ele>52</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9040"><ele>54</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9060"><ele>56</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9080"><ele>58</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9100"><ele>60</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9120"><ele>62</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9140"><ele>64</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9160"><ele>66</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9180"><ele>68</ele></trkpt>
+      <trkpt lat="43.6200" lon="3.9200"><ele>70</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

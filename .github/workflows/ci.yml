@@ -1,0 +1,268 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check
+          src: backend
+
+  backend-test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    # The image build (incl. the slow DEM-tile bake) + data load + ~5 min pytest
+    # lands at ~12-14 min on a COLD docker cache. 12 then 18 both proved too
+    # tight: cold-cache runner variance repeatedly pushed the job past the ceiling
+    # and it got cancelled-on-timeout with ZERO failing tests (the recurring flake
+    # on #508/#517/#526/#535 — a green re-run always followed, wasting a full
+    # cycle each merge). 25 gives real headroom over the ~14 min worst case seen;
+    # warm-cache runs still finish in ~10 min so this only ever bites the flake.
+    timeout-minutes: 25
+
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
+      TEST_MODE: "true"
+      ENABLE_STRAVA_INTEGRATION: "true"
+      JWT_SECRET: "ci-test-secret"
+      POSTGRES_DB: "common_trails"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Docker image
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-image.tar
+          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'backend/pyproject.toml') }}
+
+      - name: Load cached Docker image
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/docker-image.tar
+
+      - name: Start docker compose (backend + db)
+        run: |
+          START=$(date +%s)
+          docker compose -f docker-compose.backend.yml up --build -d
+          echo "::notice::Docker build+start: $(($(date +%s) - START))s"
+        env:
+          TEST_MODE: "true"
+          ENABLE_STRAVA_INTEGRATION: "true"
+          JWT_SECRET: "ci-test-secret"
+          DOCKER_BUILDKIT: "1"
+          COMPOSE_DOCKER_CLI_BUILD: "1"
+
+      - name: Save Docker image for cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save $(docker compose -f docker-compose.backend.yml images -q backend) -o /tmp/docker-image.tar
+
+      - name: Wait for API /healthz
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8787/healthz > /dev/null 2>&1; then
+              echo "API is up!"
+              break
+            fi
+            echo "  attempt $i/30..."
+            sleep 3
+          done
+          curl -sf http://localhost:8787/healthz || (echo "API did not start" && exit 1)
+
+      - name: Wait for data loading
+        run: |
+          for i in $(seq 1 60); do
+            DONE=$(curl -sf http://localhost:8787/startup-status 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('done', False))" 2>/dev/null || echo "False")
+            if [ "$DONE" = "True" ]; then echo "Data loaded!"; break; fi
+            echo "  attempt $i/60..."
+            sleep 2
+          done
+
+      - name: Run backend tests
+        run: |
+          START=$(date +%s)
+          docker compose -f docker-compose.backend.yml exec -T backend pytest --tb=short -q -m "not slow"
+          echo "::notice::Backend tests: $(($(date +%s) - START))s"
+
+      - name: Dump backend logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.backend.yml logs backend --tail=100
+
+      - name: Stop docker compose
+        if: always()
+        run: docker compose -f docker-compose.backend.yml down -v
+
+  e2e-test:
+    name: E2E tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # E2E is informational — too flaky on shared CI runners (Playwright stdout
+    # OOM, UI timing, real-data-dependent tests). Keeps signal visible in PR
+    # view but doesn't block merge. Lint + Backend are the required checks.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
+      TEST_MODE: "true"
+      ENABLE_STRAVA_INTEGRATION: "true"
+      API_URL: "http://localhost:8787"
+      BASE_URL: "http://localhost:3787"
+      NEXT_PUBLIC_API_URL: "http://localhost:8787"
+      NEXT_PUBLIC_MAP_OFFLINE: "true"
+      JWT_SECRET: "ci-test-secret"
+      POSTGRES_DB: "common_trails"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Backend (needed for E2E API calls) ─────────────────────────────
+      - name: Cache Docker image
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-image.tar
+          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'backend/pyproject.toml') }}
+
+      - name: Load cached Docker image
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/docker-image.tar
+
+      - name: Start docker compose (backend + db)
+        run: |
+          docker compose -f docker-compose.backend.yml up --build -d
+        env:
+          TEST_MODE: "true"
+          ENABLE_STRAVA_INTEGRATION: "true"
+          JWT_SECRET: "ci-test-secret"
+          DOCKER_BUILDKIT: "1"
+          COMPOSE_DOCKER_CLI_BUILD: "1"
+
+      - name: Save Docker image for cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save $(docker compose -f docker-compose.backend.yml images -q backend) -o /tmp/docker-image.tar
+
+      # ── Frontend build (parallel with Docker startup) ──────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: "http://localhost:8787"
+          NEXT_PUBLIC_MAP_OFFLINE: "true"
+
+      # ── Wait for backend ───────────────────────────────────────────────
+      - name: Wait for API /healthz
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8787/healthz > /dev/null 2>&1; then
+              echo "API is up!"
+              break
+            fi
+            echo "  attempt $i/30..."
+            sleep 3
+          done
+          curl -sf http://localhost:8787/healthz || (echo "API did not start" && exit 1)
+
+      - name: Wait for data loading
+        run: |
+          for i in $(seq 1 60); do
+            DONE=$(curl -sf http://localhost:8787/startup-status 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('done', False))" 2>/dev/null || echo "False")
+            if [ "$DONE" = "True" ]; then echo "Data loaded!"; break; fi
+            echo "  attempt $i/60..."
+            sleep 2
+          done
+
+      # ── Start frontend server ──────────────────────────────────────────
+      - name: Start frontend server
+        run: |
+          python3 serve.py out 3787 &
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3787 > /dev/null 2>&1; then
+              echo "Frontend is up!"
+              break
+            fi
+            sleep 3
+          done
+          curl -sf http://localhost:3787 || (echo "Frontend did not start" && exit 1)
+        working-directory: frontend
+
+      # ── Playwright ─────────────────────────────────────────────────────
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright deps
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+        working-directory: e2e
+
+      - name: Run Playwright tests (shard ${{ matrix.shard }}/2)
+        run: |
+          START=$(date +%s)
+          # Do NOT pass --reporter here: the CLI flag OVERRIDES the config's
+          # reporter list, and a bare `--reporter=list` suppressed the `html`
+          # reporter so `playwright-report/` was never written — which is why
+          # the "Upload Playwright report" step logged "No files were found"
+          # on every red run and failures were undiagnosable. The config
+          # (`[['list'], ['html', { open: 'never' }]]`) already prints the
+          # list output to stdout AND emits the HTML report for the artifact.
+          npx playwright test --shard=${{ matrix.shard }}/2
+          echo "::notice::Playwright tests shard ${{ matrix.shard }}: $(($(date +%s) - START))s"
+        working-directory: e2e
+        env:
+          API_URL: "http://localhost:8787"
+          BASE_URL: "http://localhost:3787"
+          CI: "true"
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Dump backend logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.backend.yml logs backend --tail=100
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-shard-${{ matrix.shard }}
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      - name: Stop docker compose
+        if: always()
+        run: docker compose -f docker-compose.backend.yml down -v

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Bridge Test Trace C — east continuation (GPS offset ~40m south)</name>
+    <time>2026-02-03T10:00:00Z</time>
+  </metadata>
+  <trk>
+    <name>Bridge Test Trace C</name>
+    <type>gravel_cycling</type>
+    <trkseg>
+      <!-- East continuation at lat ~43.6196 (≈44m south of trace A at lon overlap) -->
+      <!-- Overlaps with trace B at lon 3.9320-3.9360, then continues east -->
+      <trkpt lat="43.6196" lon="3.9320"><ele>82</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9340"><ele>84</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9360"><ele>86</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9380"><ele>88</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9400"><ele>90</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9420"><ele>92</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9440"><ele>94</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9460"><ele>96</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9480"><ele>98</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9500"><ele>100</ele></trkpt>
+      <trkpt lat="43.6196" lon="3.9520"><ele>102</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

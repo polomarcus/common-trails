@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Camargue Off-road</name>
+    <time>2026-02-08T06:30:00Z</time>
+  </metadata>
+  <trk>
+    <name>Camargue Off-road</name>
+    <type>gravel_cycling</type>
+    <trkseg>
+      <!-- Start: Aigues-Mortes -->
+      <trkpt lat="43.5650" lon="4.1900"><ele>2</ele></trkpt>
+      <trkpt lat="43.5580" lon="4.1950"><ele>2</ele></trkpt>
+      <trkpt lat="43.5500" lon="4.2050"><ele>1</ele></trkpt>
+      <trkpt lat="43.5420" lon="4.2200"><ele>1</ele></trkpt>
+      <trkpt lat="43.5350" lon="4.2400"><ele>1</ele></trkpt>
+      <trkpt lat="43.5280" lon="4.2600"><ele>0</ele></trkpt>
+      <!-- Salin-de-Giraud direction -->
+      <trkpt lat="43.5200" lon="4.2800"><ele>0</ele></trkpt>
+      <trkpt lat="43.5150" lon="4.3100"><ele>0</ele></trkpt>
+      <trkpt lat="43.5120" lon="4.3400"><ele>1</ele></trkpt>
+      <!-- Return loop through marshes -->
+      <trkpt lat="43.5200" lon="4.3200"><ele>1</ele></trkpt>
+      <trkpt lat="43.5350" lon="4.2900"><ele>1</ele></trkpt>
+      <trkpt lat="43.5500" lon="4.2600"><ele>2</ele></trkpt>
+      <trkpt lat="43.5600" lon="4.2300"><ele>2</ele></trkpt>
+      <trkpt lat="43.5650" lon="4.1900"><ele>2</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

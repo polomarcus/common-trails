@@ -1,0 +1,5 @@
+# Transient prod-deploy build output (frontend static export copied here at
+# deploy time — see scripts/deploy-prod.sh). Keep only the placeholder so the
+# dir exists; never track the built assets (a `git add -A` once swept 233 in).
+static-frontend/*
+!static-frontend/.gitkeep

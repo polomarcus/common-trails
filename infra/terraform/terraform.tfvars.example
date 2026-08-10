@@ -1,0 +1,20 @@
+# ── Required ─────────────────────────────────────────────────────────────────
+project_id           = "my-gcp-project-id"
+api_image            = "europe-west1-docker.pkg.dev/my-project/common-trails/api:latest"
+frontend_bucket_name = "my-project-common-trails-frontend"
+
+# ── Optional (with defaults) ────────────────────────────────────────────────
+# region               = "europe-west1"
+# env                  = "prod"
+# db_tier              = "db-f1-micro"
+# heatmap_k_anonymity  = 5
+# enable_backups       = true
+# cdn_domain           = ""
+
+# ── Sentry (optional) ─────────────────────────────────────────────────────
+# sentry_dsn           = "https://xxx@xxx.ingest.sentry.io/yyy"
+
+# ── Monitoring (optional) ───────────────────────────────────────────────────
+# alert_email          = "alerts@example.com"
+# monthly_budget_amount = 20
+# billing_account_id   = "XXXXXX-XXXXXX-XXXXXX"

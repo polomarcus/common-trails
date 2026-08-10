@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Gorges de l'Hérault VTT</name>
+    <time>2026-02-01T08:45:00Z</time>
+  </metadata>
+  <trk>
+    <name>Gorges de l'Hérault VTT</name>
+    <type>mountain_biking</type>
+    <trkseg>
+      <!-- Start: Saint-Guilhem-le-Désert -->
+      <trkpt lat="43.7320" lon="3.5530"><ele>90</ele></trkpt>
+      <trkpt lat="43.7340" lon="3.5490"><ele>110</ele></trkpt>
+      <trkpt lat="43.7370" lon="3.5440"><ele>145</ele></trkpt>
+      <trkpt lat="43.7410" lon="3.5400"><ele>190</ele></trkpt>
+      <trkpt lat="43.7450" lon="3.5360"><ele>240</ele></trkpt>
+      <trkpt lat="43.7490" lon="3.5310"><ele>295</ele></trkpt>
+      <trkpt lat="43.7520" lon="3.5270"><ele>340</ele></trkpt>
+      <trkpt lat="43.7550" lon="3.5230"><ele>390</ele></trkpt>
+      <!-- Gorge descent -->
+      <trkpt lat="43.7530" lon="3.5180"><ele>320</ele></trkpt>
+      <trkpt lat="43.7500" lon="3.5140"><ele>250</ele></trkpt>
+      <trkpt lat="43.7460" lon="3.5120"><ele>180</ele></trkpt>
+      <trkpt lat="43.7420" lon="3.5100"><ele>130</ele></trkpt>
+      <trkpt lat="43.7380" lon="3.5150"><ele>105</ele></trkpt>
+      <trkpt lat="43.7350" lon="3.5200"><ele>95</ele></trkpt>
+      <trkpt lat="43.7320" lon="3.5260"><ele>90</ele></trkpt>
+      <trkpt lat="43.7320" lon="3.5350"><ele>88</ele></trkpt>
+      <trkpt lat="43.7320" lon="3.5530"><ele>90</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

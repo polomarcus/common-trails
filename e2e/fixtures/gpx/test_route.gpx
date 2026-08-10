@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Test Route Lyon</name>
+    <trkseg>
+      <trkpt lat="45.7500" lon="4.8300"><ele>180</ele></trkpt>
+      <trkpt lat="45.7510" lon="4.8320"><ele>182</ele></trkpt>
+      <trkpt lat="45.7520" lon="4.8340"><ele>185</ele></trkpt>
+      <trkpt lat="45.7530" lon="4.8360"><ele>183</ele></trkpt>
+      <trkpt lat="45.7540" lon="4.8380"><ele>181</ele></trkpt>
+      <trkpt lat="45.7550" lon="4.8400"><ele>179</ele></trkpt>
+      <trkpt lat="45.7560" lon="4.8420"><ele>178</ele></trkpt>
+      <trkpt lat="45.7570" lon="4.8440"><ele>180</ele></trkpt>
+      <trkpt lat="45.7580" lon="4.8460"><ele>182</ele></trkpt>
+      <trkpt lat="45.7590" lon="4.8480"><ele>185</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

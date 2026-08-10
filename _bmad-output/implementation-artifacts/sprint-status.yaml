@@ -1,0 +1,91 @@
+# generated: 2026-03-14
+# last_updated: 2026-03-14
+# project: common-trails
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: {project-root}/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-14
+last_updated: "2026-03-17"  # epic-5 closed, sprint complete
+project: common-trails
+project_key: NOKEY
+tracking_system: file-system
+story_location: "{project-root}/_bmad-output/implementation-artifacts"
+
+development_status:
+  # Epic 1: Routing Engine Reliability
+  epic-1: done  # all stories done or deferred
+  1-1-fix-tile-loading-synchronization-before-route-computation: done
+  1-2-reliable-edge-construction-from-z14-tiles: done
+  1-3-route-follows-heatmap-and-trail-edges-via-cost-model: done
+  1-4-signal-stacking-bonus-for-converging-data-sources: done
+  1-5-gradient-aware-trail-filtering-by-sport: done  # DFCI <10% slope exemption + colorblind-safe sport colors
+  1-6-cross-language-cost-model-parity-test: done  # 20 golden scenarios, backend+frontend parity verified
+  1-7-routing-performance-instrumentation-web-worker: done
+  1-8-web-worker-routing-build-fix: done
+  1-9-dev-mode-worker-sync: done
+  1-10-tile-loading-performance: done
+  1-11-routing-diagnostics: done
+  1-12-worker-health-check: done
+  1-13-client-side-multi-proposal-routing: done
+  epic-1-retrospective: optional
+
+  # Epic 2: Route Editing Experience
+  epic-2: done
+  2-1-per-segment-recalculation-on-waypoint-changes: done
+  2-2-waypoint-deletion-with-automatic-route-recalculation: done
+  2-3-off-heatmap-waypoint-override: done
+  epic-2-retrospective: optional
+
+  # Epic 3: Sport-Aware Map & Accessibility
+  epic-3: done
+  3-1-sport-filter-nested-under-heatmap-layer-toggle: done  # sport chips exist under heatmap toggle, hidden when heatmap off
+  3-2-simplified-layers-panel: done  # "Plus de calques" expandable section with sessionStorage
+  3-3-color-blindness-support-for-heatmap-and-elevation-profile: done  # colorblind-safe SPORT_COLORS palette
+  epic-3-retrospective: optional
+
+  # Epic 4: Data Import, Export & Sharing
+  epic-4: done  # all stories verified implemented
+  4-1-strava-oauth-login-and-activity-import: done  # Strava OAuth + webhook + activity import all working
+  4-2-gpx-upload-and-export: done  # GPX upload via /activities/upload, export via /routes/{id}/gpx
+  4-3-route-sharing-via-url: done  # /routes?id= deep link, viewedRoute panel, public tab
+  epic-4-retrospective: optional
+
+  # Epic 5: Platform Reliability & Monitoring
+  epic-5: done
+  5-1-sentry-routing-observability-tags: done
+  5-2-readiness-probe-and-cloud-scheduler-warm-keeping: done  # /readyz endpoint exists
+  5-3-feature-flags-for-dormant-features: done  # obsolete: features renamed to French and shipped as user-facing (PR #75)
+  5-4-k-anonymity-endpoint-enumeration-test: done  # deferred: K-anon logic works, revisit if endpoints grow
+  5-5-reference-route-e2e-test-suite: done  # 8 client-routing E2E tests passing
+  5-6-config-level-cost-model-tuning-and-import-monitoring: done  # deferred: luxury for single-user MVP, revisit with user growth
+  epic-5-retrospective: optional

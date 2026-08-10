@@ -1,0 +1,130 @@
+services:
+  db:
+    image: postgis/postgis:17-3.6-alpine
+    platform: linux/amd64
+    # Default /dev/shm is 64MB which is too small for parallel queries on 7M+
+    # heat_edges rows — they need ~16MB per worker for sort+hash, exhausts shm.
+    # Symptom: psycopg2.errors.DiskFull on /heatmap/summary, /readyz, etc.
+    shm_size: 1g
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-common_trails}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    command: >
+      postgres
+        -c jit=off
+        -c shared_buffers=256MB
+        -c work_mem=8MB
+        -c effective_cache_size=1GB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5487:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # Peak memory ~6GB during startup (activities + DFCI + trails + enrichment)
+    # No memory limit in dev — let the OS manage it
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-common_trails}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-10080}
+      HEATMAP_K_ANONYMITY: ${HEATMAP_K_ANONYMITY:-1}
+      TEST_MODE: ${TEST_MODE:-true}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      ROUTING_EXTERNAL: ${ROUTING_EXTERNAL:-false}
+      SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
+      SKIP_OSM_ENRICHMENT: ${SKIP_OSM_ENRICHMENT:-true}
+      ENABLE_STRAVA_INTEGRATION: ${ENABLE_STRAVA_INTEGRATION:-true}
+      ENABLE_GARMIN_INTEGRATION: ${ENABLE_GARMIN_INTEGRATION:-true}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3787}
+      # Heatmap export (PRD #391). In prod set HEATMAP_GCS_BUCKET to the
+      # bucket name; the /export/heatmap.pmtiles redirect 302s to GCS.
+      # In dev we redirect to the frontend's static export so the
+      # download flow actually works locally (without this the 302
+      # resolves against the backend origin and 404s).
+      HEATMAP_GCS_BUCKET: ${HEATMAP_GCS_BUCKET:-}
+      HEATMAP_DEV_PMTILES_URL: ${HEATMAP_DEV_PMTILES_URL:-http://localhost:3787/heatmap-display.pmtiles}
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:8787/integrations/strava/callback}
+      GARMIN_CLIENT_ID: ${GARMIN_CLIENT_ID:-}
+      GARMIN_CLIENT_SECRET: ${GARMIN_CLIENT_SECRET:-}
+      GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-http://localhost:8787/integrations/garmin/callback}
+      DEM_PROVIDER: ${DEM_PROVIDER:-open-meteo}
+      OVERPASS_ENABLED: ${OVERPASS_ENABLED:-false}
+      # Tile generation concurrency cap — each tile uses 100-500MB peak memory.
+      # In prod with 2GB container, set to 2-4. In dev with no limit, can be higher.
+      TILE_GEN_CONCURRENCY: ${TILE_GEN_CONCURRENCY:-4}
+      RATELIMIT_ENABLED: ${RATELIMIT_ENABLED:-false}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      PYTHONHASHSEED: "0"
+      DATA_DIR: /data
+      GPX_BACKUP_BUCKET: ${GPX_BACKUP_BUCKET:-/data/gpx-backup}
+    ports:
+      - "8787:8787"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - backend-data:/data
+      # Repo scripts, read-only — lets the deploy-contract test
+      # (tests/test_deploy_split_contract.py) read scripts/deploy-prod.sh,
+      # which lives OUTSIDE the ./backend build context. Mounted at /scripts
+      # (a parent of /app/tests) so the test's walk-up path resolution finds it.
+      - ./scripts:/scripts:ro
+      # Local Strava export — for re-ingest tests via
+      # `python -m scripts.import_strava_export /strava-export`.
+      # Read-only so accidental writes can't corrupt the source.
+      - ./data/strava-export:/strava-export:ro
+      # Auto-PMTiles deploy: backend writes the rebuilt PMTiles
+      # IN-PLACE to the same host file the frontend bind-mounts. The
+      # backend's job code uses truncate-and-write (open ``r+b`` →
+      # ``truncate(0)`` → ``write``) so the inode the frontend
+      # container latched onto at start is preserved — the new bytes
+      # appear in /app/out/heatmap-display.pmtiles instantly without
+      # a frontend restart. See docs/migration-runbook.md § PMTiles.
+      - ./frontend/public:/frontend-public
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8787}
+      NEXT_PUBLIC_MAP_STYLE_URL: ${MAP_STYLE_URL:-}
+      NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+    ports:
+      - "3787:3787"
+    depends_on:
+      - backend
+    # Bind-mount the heatmap PMTiles file from host so a local rebuild
+    # picks up without rebuilding the frontend image. ALWAYS rebuild
+    # via ``make pmtiles`` (or its inline equivalent) — that target
+    # truncates-and-writes the host file IN PLACE, preserving the inode
+    # the container's bind mount latched onto at startup. Using
+    # ``docker compose cp`` instead replaces the inode and the
+    # container keeps serving the OLD file (cost us hours in May 2026 —
+    # see docs/migration-runbook.md § PMTiles + Makefile target ``make
+    # pmtiles``). PMTiles is in .gitignore — the file must exist on the
+    # host before ``docker compose up`` or this mount will fail.
+    volumes:
+      - ./frontend/public/heatmap-display.pmtiles:/app/out/heatmap-display.pmtiles:ro
+
+volumes:
+  pgdata:
+  backend-data:

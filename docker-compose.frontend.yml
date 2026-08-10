@@ -1,0 +1,10 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: ${API_URL:-http://localhost:8787}
+      NEXT_PUBLIC_MAP_STYLE_URL: ${MAP_STYLE_URL:-}
+    ports:
+      - "3787:3787"

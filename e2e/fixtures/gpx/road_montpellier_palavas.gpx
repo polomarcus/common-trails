@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Montpellier–Palavas Route</name>
+    <time>2026-01-20T07:30:00Z</time>
+  </metadata>
+  <trk>
+    <name>Montpellier–Palavas Route</name>
+    <type>cycling</type>
+    <trkseg>
+      <!-- Start: Montpellier centre -->
+      <trkpt lat="43.6100" lon="3.8760"><ele>40</ele></trkpt>
+      <trkpt lat="43.6050" lon="3.8750"><ele>38</ele></trkpt>
+      <trkpt lat="43.6000" lon="3.8740"><ele>35</ele></trkpt>
+      <trkpt lat="43.5950" lon="3.8730"><ele>32</ele></trkpt>
+      <trkpt lat="43.5900" lon="3.8720"><ele>28</ele></trkpt>
+      <trkpt lat="43.5850" lon="3.8710"><ele>24</ele></trkpt>
+      <trkpt lat="43.5800" lon="3.8700"><ele>20</ele></trkpt>
+      <trkpt lat="43.5750" lon="3.8690"><ele>16</ele></trkpt>
+      <trkpt lat="43.5700" lon="3.8680"><ele>12</ele></trkpt>
+      <trkpt lat="43.5650" lon="3.8670"><ele>9</ele></trkpt>
+      <trkpt lat="43.5600" lon="3.8660"><ele>6</ele></trkpt>
+      <!-- Bridge to Palavas: dense points to avoid graph disconnection -->
+      <trkpt lat="43.5560" lon="3.8700"><ele>5</ele></trkpt>
+      <trkpt lat="43.5520" lon="3.8750"><ele>4</ele></trkpt>
+      <trkpt lat="43.5480" lon="3.8800"><ele>3</ele></trkpt>
+      <trkpt lat="43.5440" lon="3.8860"><ele>3</ele></trkpt>
+      <trkpt lat="43.5400" lon="3.8920"><ele>3</ele></trkpt>
+      <trkpt lat="43.5360" lon="3.8980"><ele>2</ele></trkpt>
+      <trkpt lat="43.5330" lon="3.9050"><ele>2</ele></trkpt>
+      <trkpt lat="43.5310" lon="3.9120"><ele>2</ele></trkpt>
+      <trkpt lat="43.5300" lon="3.9200"><ele>2</ele></trkpt>
+      <!-- Palavas-les-Flots coast -->
+      <trkpt lat="43.5310" lon="3.9280"><ele>2</ele></trkpt>
+      <trkpt lat="43.5300" lon="3.9300"><ele>1</ele></trkpt>
+      <!-- Return via Carnon -->
+      <trkpt lat="43.5400" lon="3.9200"><ele>3</ele></trkpt>
+      <trkpt lat="43.5500" lon="3.9100"><ele>4</ele></trkpt>
+      <trkpt lat="43.5600" lon="3.9000"><ele>7</ele></trkpt>
+      <trkpt lat="43.5700" lon="3.8900"><ele>10</ele></trkpt>
+      <trkpt lat="43.5800" lon="3.8850"><ele>16</ele></trkpt>
+      <trkpt lat="43.5900" lon="3.8800"><ele>22</ele></trkpt>
+      <trkpt lat="43.6000" lon="3.8780"><ele>30</ele></trkpt>
+      <trkpt lat="43.6100" lon="3.8760"><ele>40</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

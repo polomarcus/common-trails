@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "common-trails-backend"
+version = "0.64.0"
+description = "CHEMINS COMMUNS — Backend API"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic[email]>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "python-jose[cryptography]>=3.3.0",
+    "bcrypt>=4.0.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13.1",
+    "psycopg2-binary>=2.9.9",
+    "geoalchemy2>=0.15.0",
+    "gpxpy>=1.6.2",
+    # `defusedxml` hardens the stdlib `xml.etree.ElementTree` that gpxpy
+    # uses under the hood — Python's docs explicitly warn that stdlib
+    # XML is DTD-vulnerable (billion-laughs entity expansion). Loaded
+    # via `defusedxml.defuse_stdlib()` at the top of services/gpx.py
+    # BEFORE gpxpy imports. Audit 2026-05-29 GPX-S2.3.
+    "defusedxml>=0.7.1",
+    "fitparse>=1.2.0",
+    "shapely>=2.0.4",
+    "sentry-sdk[fastapi]>=2.0.0",
+    "slowapi>=0.1.9",
+    "osmium>=4.0.0",
+    "google-cloud-storage>=2.18.0",  # GPX backup to GCS (gpx_backup.py)
+    "google-cloud-tasks>=2.16.0",    # Async heat compute (cloud_tasks.py)
+    "google-auth>=2.30.0",           # OIDC verification on /internal/* (internal_ingest.py)
+    "Pillow>=10.0.0",                # PNG og-card rendering (app/api/share.py)
+    "cryptography>=42.0.0",          # Fernet at-rest encryption (services/secrets.py)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "pytest-xdist>=3.5.0",
+    "httpx>=0.27.0",
+    "anyio>=4.4.0",
+    "pyproj>=3.6.0",
+    "ruff>=0.9.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "golden: end-to-end ingestion goldens that need the local occitanie OSM PBF in osm_road_edges; auto-skipped when absent (CI has no PBF). Run locally.",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line too long — not strict, 120 is a guide
+    "E402",   # module-level import not at top — FastAPI deferred router imports
+    "B008",   # function call in default arg — FastAPI Depends() pattern
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]

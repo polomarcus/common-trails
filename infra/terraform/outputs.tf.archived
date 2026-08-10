@@ -1,0 +1,76 @@
+output "api_url" {
+  description = "Cloud Run API service URL"
+  value       = google_cloud_run_v2_service.api.uri
+}
+
+output "frontend_url" {
+  description = "Frontend static website URL (Cloud Storage or CDN)"
+  value = var.cdn_domain != "" ? "https://${var.cdn_domain}" : (
+    "https://storage.googleapis.com/${var.frontend_bucket_name}/index.html"
+  )
+}
+
+output "uploads_bucket" {
+  description = "Cloud Storage bucket for user uploads (GPX, ZIP)"
+  value       = google_storage_bucket.uploads.name
+}
+
+output "data_bucket" {
+  description = "Cloud Storage bucket for routing data (DFCI cache, DEM tiles)"
+  value       = google_storage_bucket.data.name
+}
+
+output "cloudsql_connection_name" {
+  description = "Cloud SQL connection name (for Cloud SQL Proxy or Cloud Run connection)"
+  value       = google_sql_database_instance.main.connection_name
+}
+
+output "artifact_registry_repo" {
+  description = "Artifact Registry repository URL"
+  value       = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.docker.repository_id}"
+}
+
+output "api_service_account" {
+  description = "Service account email for the API Cloud Run service"
+  value       = google_service_account.api.email
+}
+
+output "jobs_service_account" {
+  description = "Service account email for Cloud Run Jobs"
+  value       = google_service_account.jobs.email
+}
+
+output "cdn_backend_bucket" {
+  description = "Cloud CDN backend bucket name"
+  value       = google_compute_backend_bucket.frontend_cdn.name
+}
+
+output "monitoring_dashboard_url" {
+  description = "Google Cloud Monitoring dashboard URL"
+  value       = "https://console.cloud.google.com/monitoring/dashboards/builder/${google_monitoring_dashboard.main.id}?project=${var.project_id}"
+}
+
+output "heat_compute_queue" {
+  description = "Cloud Tasks queue name for async heat-edge computation"
+  value       = google_cloud_tasks_queue.heat_compute.name
+}
+
+output "tasks_invoker_service_account" {
+  description = "SA Cloud Tasks signs OIDC tokens as when calling /internal/* on the API"
+  value       = google_service_account.tasks_invoker.email
+}
+
+output "internal_heat_handler_url" {
+  description = "Effective INTERNAL_HEAT_HANDLER_URL (empty until var.api_public_url is set after the first apply)"
+  value       = var.api_public_url == "" ? "" : "${var.api_public_url}/internal/ingest/heat"
+}
+
+output "heatmap_export_bucket" {
+  description = "Public GCS bucket where the canonical heatmap export (PMTiles) lives (PRD #391, Phase 1)"
+  value       = google_storage_bucket.heatmap.name
+}
+
+output "heatmap_export_url" {
+  description = "Public URL of the canonical heatmap-display.pmtiles export"
+  value       = "https://storage.googleapis.com/${google_storage_bucket.heatmap.name}/heatmap-display.pmtiles"
+}

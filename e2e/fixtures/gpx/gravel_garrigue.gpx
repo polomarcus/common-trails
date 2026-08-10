@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="CHEMINS COMMUNS test fixture"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Garrigue Gravel Loop</name>
+    <time>2026-01-15T09:00:00Z</time>
+  </metadata>
+  <trk>
+    <name>Garrigue Gravel Loop</name>
+    <type>gravel_cycling</type>
+    <trkseg>
+      <trkpt lat="43.6900" lon="3.8500"><ele>120</ele></trkpt>
+      <trkpt lat="43.6950" lon="3.8600"><ele>135</ele></trkpt>
+      <trkpt lat="43.7000" lon="3.8700"><ele>150</ele></trkpt>
+      <trkpt lat="43.7050" lon="3.8750"><ele>165</ele></trkpt>
+      <trkpt lat="43.7100" lon="3.8800"><ele>180</ele></trkpt>
+      <trkpt lat="43.7150" lon="3.8780"><ele>190</ele></trkpt>
+      <trkpt lat="43.7180" lon="3.8730"><ele>195</ele></trkpt>
+      <trkpt lat="43.7160" lon="3.8650"><ele>185</ele></trkpt>
+      <trkpt lat="43.7120" lon="3.8580"><ele>170</ele></trkpt>
+      <trkpt lat="43.7070" lon="3.8520"><ele>155</ele></trkpt>
+      <trkpt lat="43.7010" lon="3.8480"><ele>140</ele></trkpt>
+      <trkpt lat="43.6950" lon="3.8460"><ele>128</ele></trkpt>
+      <trkpt lat="43.6900" lon="3.8500"><ele>120</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

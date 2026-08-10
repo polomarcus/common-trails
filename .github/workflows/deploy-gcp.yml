@@ -1,0 +1,157 @@
+name: Deploy to GCP (prod CD)
+
+# Continuous deployment to production.
+#
+# On every push to main (and on manual dispatch): build the frontend into the
+# backend image, push it, then hand off to the SINGLE SOURCE OF TRUTH deploy
+# script `scripts/deploy-prod.sh`, which deploys BOTH Cloud Run services (the
+# light 512Mi public WEB + the scale-to-zero 2Gi WORKER that owns the heavy
+# /internal Cloud Tasks handlers) AND syncs EVERY job image with the
+# authoritative env set. The split is entirely inside deploy-prod.sh — this
+# workflow just builds+pushes one image and invokes the script.
+#
+# Deliberately does NOT run terraform: the terraform state still holds deleted
+# resources, so any `apply` would recreate them (the €65/mo trap). Prod is
+# gcloud-deployed only. See project_landing_plan_2026_06_18 / deploy-prod.sh.
+#
+# Repo secrets used: GCP_SA_KEY, GCP_PROJECT_ID, GCP_REGION, ARTIFACT_REGISTRY_REPO.
+
+# GATED to MANUAL dispatch only (2026-08-07). Previously `push: branches:[main]`
+# auto-deployed prod on EVERY merge — which contradicts CLAUDE.md ("never deploy
+# to prod without Paul's go") and would silently re-deploy the moment the GitHub
+# Actions quota returns. Prod deploys are now an explicit action: trigger this
+# workflow from the Actions tab (or keep using scripts/deploy-prod.sh locally).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag to deploy (default: git sha)'
+        required: false
+
+# Never run two prod deploys at once; don't cancel one already in flight.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & Deploy (gcloud, no terraform)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ secrets.GCP_REGION || 'europe-west1' }}
+      ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO || 'europe-west1-docker.pkg.dev/common-trails/common-trails' }}
+      IMAGE_TAG: ${{ github.event.inputs.tag || github.sha }}
+      # Required by deploy-prod.sh (set -u guard, line ~76). The live value is
+      # 349136; NEVER pass '' (empty = allow-all subscriptions, a security
+      # downgrade). Secret already exists in the repo.
+      STRAVA_WEBHOOK_SUBSCRIPTION_ID: ${{ secrets.STRAVA_WEBHOOK_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify GCP authentication
+        run: |
+          gcloud config set project "${GCP_PROJECT_ID}"
+          echo "Project: $(gcloud config get-value project)"
+          echo "Account: $(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null || echo 'service-account via ADC')"
+
+      # ── Build the frontend static export INTO the backend image context ──
+      # There is a single Cloud Run service; the Next.js static export is baked
+      # into the API image at backend/static-frontend and served by it.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'  # match ci.yml + the node:22 lockfile (CLAUDE.md)
+
+      - name: Build frontend into backend context
+        run: |
+          cd frontend && npm ci
+          # NEXT_PUBLIC_HEATMAP_URL is baked into the static export at build
+          # time: the map's PMTiles resolver (getPmtilesUrl) AND the home stats
+          # sibling-fetch (fetchCommunityStats reads stats.json next to the
+          # pmtiles) both read it — see frontend/lib/cdn-cache.ts. Empty → the
+          # map falls off the static GCS heatmap and home stats need a
+          # host-gated workaround (#465). Value = the public heatmap bucket's
+          # pmtiles file.
+          NEXT_PUBLIC_API_URL="" \
+          NEXT_PUBLIC_HEATMAP_URL="https://tiles.chemins-communs.fr/heatmap-display.pmtiles" \
+          NEXT_TELEMETRY_DISABLED=1 npm run build
+          rm -rf ../backend/static-frontend
+          cp -r out ../backend/static-frontend
+          echo "frontend -> backend/static-frontend ($(du -sh ../backend/static-frontend | cut -f1))"
+
+      # ── Build & push the API image (amd64 for Cloud Run) ──
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image (frontend baked in)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.ARTIFACT_REGISTRY_REPO }}/api:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+
+      # ── Deploy via the SSOT: service + ALL job images + authoritative env ──
+      # deploy-prod.sh replaces the whole env set (‑‑env-vars-file) and syncs
+      # every Cloud Run Job to this tag — preventing the dropped-env (#445) and
+      # stale-job-image (bigint=text) regressions the old hand-rolled steps hit.
+      # NO terraform.
+      - name: Deploy (scripts/deploy-prod.sh)
+        run: DEPLOY_YES=1 bash scripts/deploy-prod.sh "${IMAGE_TAG}"
+
+      # Turn a bad revision into a RED CD instead of a silent bad deploy.
+      - name: Post-deploy healthcheck
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://chemins-communs.fr/api/health/live || echo 000)
+            if [ "$code" = "200" ]; then echo "health OK ($code)"; exit 0; fi
+            echo "attempt $i: $code — retrying"; sleep 5
+          done
+          echo "post-deploy healthcheck FAILED (service not returning 200)"; exit 1
+
+      # The WORKER (scale-to-zero 2Gi) owns the heavy /internal Cloud Tasks
+      # handlers (heat-compute, artefact-rebuild, Strava webhook). A broken
+      # worker deploy (wrong image / crash / no DB) would otherwise be SILENT
+      # until a task failed. Red the CD instead. URL = WORKER_RUN_URL in
+      # deploy-prod.sh. Hit /readyz (NOT the SPA catch-all /health/live, which
+      # 200s on any booted container): /readyz is a real route that verifies DB
+      # connectivity via cloudsql + returns the heat_edges_agg count — a
+      # MEANINGFUL "worker booted AND can reach the DB" signal, exactly what
+      # /internal/ingest/heat + artefact-rebuild need. Retry loop tolerates the
+      # ~40s scale-to-zero cold start (worker /readyz measured ~6.5s warm).
+      - name: Post-deploy healthcheck (worker)
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" https://common-trails-worker-prod-301616827398.europe-west1.run.app/readyz || echo 000)
+            if [ "$code" = "200" ]; then echo "worker ready OK ($code)"; exit 0; fi
+            echo "attempt $i: $code — retrying"; sleep 5
+          done
+          echo "worker post-deploy healthcheck FAILED (worker /readyz not returning 200)"; exit 1
+
+      - name: Deployment summary
+        run: |
+          echo "=== DEPLOYMENT COMPLETE ==="
+          echo "Image tag : ${IMAGE_TAG}"
+          echo "Web       : common-trails-api-prod    (512Mi, public)"
+          echo "Worker    : common-trails-worker-prod (2Gi, scale-to-zero, /internal/*)"
+          echo "Jobs      : all synced to this image"
+          echo "URL       : https://chemins-communs.fr"
+          echo "==========================="

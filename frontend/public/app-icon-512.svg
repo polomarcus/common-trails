@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#1a4731"/>
+  <!-- Main mountain -->
+  <polygon points="256,56 456,420 56,420" fill="#2d6a4f"/>
+  <!-- Secondary peak (left) -->
+  <polygon points="120,216 256,420 8,420" fill="#1a4731" opacity="0.7"/>
+  <!-- Snow cap -->
+  <polygon points="256,56 296,184 216,184" fill="#f8faf8"/>
+  <!-- Route line (red accent) -->
+  <polyline points="88,420 152,324 216,356 256,292 312,324 420,420" stroke="#e63946" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.85"/>
+</svg>

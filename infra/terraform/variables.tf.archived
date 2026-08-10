@@ -1,0 +1,124 @@
+variable "project_id" {
+  description = "GCP project ID"
+  type        = string
+}
+
+variable "region" {
+  description = "GCP region for Cloud Run and Cloud SQL"
+  type        = string
+  default     = "europe-west1"
+}
+
+variable "env" {
+  description = "Environment name (prod, staging, dev)"
+  type        = string
+  default     = "prod"
+}
+
+variable "db_tier" {
+  description = <<-EOT
+    Cloud SQL instance tier.
+    Cost reference (europe-west1, March 2026):
+      db-f1-micro  — 0.6 GB RAM, shared vCPU  ~$7/month  (dev/staging)
+      db-g1-small  — 1.7 GB RAM, shared vCPU  ~$25/month (light prod)
+      db-custom-1-3840 — 1 vCPU, 3.75 GB     ~$50/month (prod with PostGIS load)
+    PostGIS works on db-f1-micro for ≤50 users.
+  EOT
+  type        = string
+  default     = "db-f1-micro"
+}
+
+variable "api_image" {
+  description = "Full Docker image tag for the backend API (e.g. europe-west1-docker.pkg.dev/my-project/common-trails/api:v1.0.0)"
+  type        = string
+}
+
+variable "frontend_bucket_name" {
+  description = "GCS bucket name for static frontend (must be globally unique)"
+  type        = string
+}
+
+variable "cdn_domain" {
+  description = "Optional custom domain for Cloud CDN. Leave empty to use default GCS URL."
+  type        = string
+  default     = ""
+}
+
+variable "frontend_url" {
+  description = <<-EOT
+    Public origin of the frontend. Used by the API for server-side
+    redirects (Strava OAuth callback → /strava?status=connected, etc.).
+    If unset on the Cloud Run service, the API falls back to the
+    `http://localhost:3787` development default (see
+    `backend/app/config.py:9`) — which then breaks every Strava connect
+    attempt in prod. Codified here so a `terraform apply` can't drift
+    the value away again.
+  EOT
+  type        = string
+  default     = "https://chemins-communs.fr"
+}
+
+variable "heatmap_k_anonymity" {
+  description = "Minimum user count for heatmap cell to be public (K-anonymity)"
+  type        = number
+  default     = 2
+}
+
+variable "enable_backups" {
+  description = "Enable daily Cloud SQL backups (disable for dev/staging to save ~$2/month)"
+  type        = bool
+  default     = true
+}
+
+variable "sentry_dsn" {
+  description = "Sentry DSN for error tracking. Leave empty to disable."
+  type        = string
+  default     = ""
+}
+
+variable "alert_email" {
+  description = "Email address for monitoring alerts. Leave empty to disable alerting."
+  type        = string
+  default     = ""
+}
+
+variable "monthly_budget_amount" {
+  description = "Monthly budget alert threshold in USD"
+  type        = number
+  default     = 20
+}
+
+variable "billing_account_id" {
+  description = "GCP billing account ID for budget alerts (format: XXXXXX-XXXXXX-XXXXXX). Leave empty to skip budget creation."
+  type        = string
+  default     = ""
+}
+
+variable "api_public_url" {
+  description = <<-EOT
+    Public HTTPS URL of the API Cloud Run service (no trailing slash).
+    Used to set INTERNAL_HEAT_HANDLER_URL — Cloud Tasks needs an absolute
+    URL it can sign OIDC tokens for. The API service can't reference its
+    own auto-assigned .uri attribute (that would be a self-cycle), so on
+    the very first apply leave this empty: heat compute falls back to
+    inline execution, terraform_apply prints `api_public_url` in outputs,
+    you copy it into a tfvars / TF_VAR_api_public_url, and re-apply to
+    flip Cloud Tasks on. Subsequent applies are idempotent.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "strava_webhook_subscription_id" {
+  description = <<-EOT
+    Numeric Strava push-subscription id returned by
+    `python -m app.cli.strava_subscribe create`. The worker uses it as a
+    second-line allow-list against crafted POSTs that pass the owner_id
+    check but came from a different subscription. Leave empty on first
+    apply (the subscription doesn't exist yet); after bootstrapping,
+    set via `TF_VAR_strava_webhook_subscription_id` and re-apply.
+    Same chicken-and-egg pattern as api_public_url.
+  EOT
+  type        = string
+  default     = ""
+}

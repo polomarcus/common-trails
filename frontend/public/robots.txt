@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://chemins-communs.fr/sitemap.xml
