@@ -109,10 +109,12 @@ jobs:
     name: E2E tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # E2E is informational — too flaky on shared CI runners (Playwright stdout
-    # OOM, UI timing, real-data-dependent tests). Keeps signal visible in PR
-    # view but doesn't block merge. Lint + Backend are the required checks.
-    continue-on-error: true
+    # E2E is now a REQUIRED gate (2026-08-10). The suite was pruned to
+    # live-feature specs — frozen social (trips/collections/github) deleted,
+    # pre-pivot routing/MVT-display specs removed or quarantined (test.describe.skip
+    # + TODO), core-auth reworked to the magic-link flow. It now runs fast and
+    # green; latency/perf, prod-data and mouse-drag tests self-skip on CI.
+    continue-on-error: false
     strategy:
       fail-fast: false
       matrix:

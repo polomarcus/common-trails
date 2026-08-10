@@ -39,33 +39,26 @@ async function registerAndLogin(apiContext: Awaited<ReturnType<typeof request.ne
 // ── Test 1: Register + Login ──────────────────────────────────────────────
 
 test.describe('1. Register / Login', () => {
-  test('register creates account and returns JWT', async ({ page }) => {
+  test('magic-link request sends a login email and shows confirmation', async ({ page }) => {
+    // Public auth is passwordless magic-link (the email → link flow). The
+    // legacy email+password form is dev-only and absent from the prod build,
+    // so the real user-facing signup/login path is the magic-link request.
     const email = `e2e_${Date.now()}@example.com`;
 
-    // Register via UI
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    await page.click('[data-testid="mode-register"]');
-    await page.fill('[data-testid="input-username"]', 'e2euser');
-    await page.fill('[data-testid="input-email"]', email);
-    await page.fill('[data-testid="input-password"]', 'password123');
-
+    await page.fill('[data-testid="email-login-input"]', email);
     await Promise.all([
       page.waitForResponse(
-        (r) => r.url().includes('/auth/register') && r.status() === 201,
+        (r) => r.url().includes('/auth/email/request') && r.status() === 200,
         { timeout: 10000 }
       ),
-      page.click('[data-testid="auth-submit"]'),
+      page.click('[data-testid="email-login-submit"]'),
     ]);
 
-    // After register, app redirects to /map via client-side navigation
-    await expect(page).toHaveURL(/\/map/, { timeout: 10000 });
-
-    // Verify user_id is stored in localStorage (JWT is in httpOnly cookie)
-    const userId = await page.evaluate(() => localStorage.getItem('user_id'));
-    expect(userId).toBeTruthy();
-    expect(typeof userId).toBe('string');
+    // The form is replaced by the "check your inbox" confirmation state.
+    await expect(page.locator('[data-testid="email-login-sent"]')).toBeVisible({ timeout: 10000 });
   });
 
   test('login with registered credentials returns JWT', async () => {

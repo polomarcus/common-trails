@@ -14,7 +14,10 @@ import { test, expect } from '@playwright/test';
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3787';
 
-test.describe('Heatmap initial load', () => {
+// QUARANTINED (raw-trace pivot): measures a "first-paint"/first-heatmap-tile
+// log signal that changed with the static-PMTiles display. TODO: re-instrument
+// against the raw display's paint signal, then un-skip.
+test.describe.skip('Heatmap initial load', () => {
   test.setTimeout(60000);
   // Skip in CI: requires heatmap-display.pmtiles (~10-200MB) which is built
   // from prod data via `python -m app.jobs.build_pmtiles` and not in the repo.

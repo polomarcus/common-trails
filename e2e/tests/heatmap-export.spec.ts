@@ -134,6 +134,9 @@ test.describe('Heatmap export API contract (pre-computed)', () => {
   });
 
   test('the removed on-demand endpoints are gone (404)', async () => {
+    // Current export router (backend/app/api/export.py) exposes only /heatmap,
+    // /heatmap.pmtiles and /heatmap.geojsonl. The per-bbox on-demand formats
+    // were removed in favour of the static artifacts — assert they 404.
     const apiContext = await request.newContext();
     for (const path of [
       '/export/heatmap.geojson?bbox=4.80,45.72,4.90,45.78',

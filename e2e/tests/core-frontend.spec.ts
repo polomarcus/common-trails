@@ -105,7 +105,7 @@ test.describe('6. Frontend smoke tests', () => {
 
     await expect(page.locator('text=CHEMINS COMMUNS').first()).toBeVisible();
     await expect(page.locator('[data-testid="go-to-map"]')).toBeVisible();
-    await expect(page.locator('[data-testid="auth-submit"]')).toBeVisible();
+    await expect(page.locator('[data-testid="email-login-submit"]')).toBeVisible();
   });
 
   test('map page loads with toolbar controls', async ({ page }) => {
