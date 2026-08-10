@@ -16,12 +16,13 @@ name: Deploy to GCP (prod CD)
 #
 # Repo secrets used: GCP_SA_KEY, GCP_PROJECT_ID, GCP_REGION, ARTIFACT_REGISTRY_REPO.
 
-# GATED to MANUAL dispatch only (2026-08-07). Previously `push: branches:[main]`
-# auto-deployed prod on EVERY merge — which contradicts CLAUDE.md ("never deploy
-# to prod without Paul's go") and would silently re-deploy the moment the GitHub
-# Actions quota returns. Prod deploys are now an explicit action: trigger this
-# workflow from the Actions tab (or keep using scripts/deploy-prod.sh locally).
+# CONTINUOUS DEPLOYMENT (2026-08-10, Paul's decision): deploy prod on EVERY push
+# to main (i.e. every merged PR) AND on manual dispatch. Merges are gated by the
+# required CI checks (Lint + Backend + E2E), so only green code reaches prod.
+# Manual dispatch stays available for redeploys / pinning a specific tag.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
