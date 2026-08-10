@@ -1,13 +1,39 @@
 /**
- * CHEMINS COMMUNS — E2E tests: Heatmap layer rendering at different zoom levels
+ * CHEMINS COMMUNS — E2E tests: community heatmap display wiring (/map).
  *
- * Validates that:
- * 1. MVT tiles are requested when heatmap is enabled
- * 2. Glow layer uses blurred lines (type=line, not heatmap/circle) at all zoom levels
- * 3. Detail line layer fades in at z10+ while glow fades out
- * 4. No circle/point layers pollute the map (no black dots)
- * 5. Heatmap toggle shows/hides layers correctly
- * 6. Panning at low zoom fetches new tiles promptly (no overzoom stall)
+ * Rewritten for the RAW-PMTiles display (the 2026-07/08 pivot). The community
+ * heatmap on /map is drawn from the STATIC `heatmap-display.pmtiles` binary via
+ * the `pmtiles://` protocol — NOT the pre-pivot live-MVT vector source that was
+ * source-swapped at runtime. These specs pin the CURRENT display contract from
+ * lib/init-map-layers.ts + lib/community-heatmap-layers.ts:
+ *
+ *   source `community-trails` = vector, url `pmtiles://…/heatmap-display.pmtiles`,
+ *                               minzoom 6 / maxzoom 14 (communityTrailsSourceSpec)
+ *   layer  `community-trails-heat`   = heatmap over source-layer `heat_points`
+ *   layer  `community-trails-line`   = line    over source-layer `trails` (z9+)
+ *   layer  `community-trails-arrows` = symbol  over source-layer `trails`
+ *   layer  `community-trails-hit`    = line    over source-layer `trails`
+ *   (NO circle/points layer, NO `community-trails-glow` — both were removed)
+ *
+ * HERMETIC: assert the DISPLAY IS WIRED (source/layer specs via
+ * `__mapInstance.getStyle()`) — never rendered pixels or artifact size.
+ *
+ * ⚠️ Build-env branch (mirrors home-hero-pmtiles.spec): the community source is
+ * only added when a PMTiles URL RESOLVES. In a production build (`next build`,
+ * which is what the CI E2E gate runs) the same-origin dev fallback is compiled
+ * out, so with `NEXT_PUBLIC_HEATMAP_URL` UNSET the source is deliberately
+ * OMITTED (env-url.ts refuses to point it at the SPA origin). So each browser
+ * test branches:
+ *   - source PRESENT (a build with NEXT_PUBLIC_HEATMAP_URL set, or prod)
+ *     → assert the full source/layer contract;
+ *   - source ABSENT (the CI-default build)
+ *     → assert it degrades correctly: NO community-* layers leak, and NO source
+ *       ever streams the live MVT endpoint (the load-bearing doctrine pin).
+ * Either way the specs are green + meaningful.
+ *
+ * The `Heatmap MVT backend` describe below is UNCHANGED — the live
+ * `/heatmap/tiles/**.mvt` endpoint is still the DB-backed FALLBACK and is tested
+ * directly against the backend.
  */
 import { test, expect, request } from '@playwright/test';
 
@@ -15,365 +41,231 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:3787';
 const API_URL = process.env.API_URL || 'http://localhost:8787';
 
 // The app registers `tile-cache-sw.js` (skipWaiting + clients.claim) which
-// serves `/heatmap/tiles/**` stale-while-revalidate. Service-worker-mediated
-// fetches BYPASS Playwright's page.route — with the SW active, the tile
-// interception below is nondeterministic (works only until the SW claims
-// the page). Block SW registration so every request is routable.
+// serves heatmap requests stale-while-revalidate. Service-worker-mediated
+// fetches BYPASS Playwright's page-level request observation. Block SW
+// registration so every PMTiles range GET is observable + routable.
 test.use({ serviceWorkers: 'block' });
 
-// Return empty graph tiles — routing is not under test here.
-test.beforeEach(async ({ page }) => {
-  await page.route('**/routing/graph/**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ v: 1, edges: [] }),
-    });
-  });
-});
+// ── Types + helpers ────────────────────────────────────────────────────────────
 
-// ── Env-independent MVT interception helpers ────────────────────────────────
-//
-// The /map page loads the STATIC `heatmap-display.pmtiles` as its PRIMARY
-// heatmap source (init-map-layers.ts:175 — `pmtiles://<origin>/heatmap-
-// display.pmtiles`; the pmtiles:// protocol resolves to plain HTTP(S)
-// range requests against that same URL). When the binary is present
-// (local dev), NO `/heatmap/tiles/**.mvt` request ever fires — the old
-// interception-based specs false-failed locally and only "passed" in CI
-// because the whole describe was skipped there.
-//
-// To make the specs deterministic in BOTH envs:
-//   1. Block every fetch of the PMTiles binary (`**/heatmap-display.
-//      pmtiles*` — covers the protocol's underlying header/range GETs),
-//      so the static path is guaranteed absent, exactly like a CI build.
-//   2. Re-point the `community-trails` source at the live MVT endpoint.
-//      The app has NO automatic pmtiles→MVT fallback wired on /map today;
-//      the live endpoint is its documented fallback and the app itself
-//      swaps the source tiles at runtime (map/page.tsx:3004 `setTiles`).
-//      We drive that same seam through `window.__mapInstance`, keeping
-//      the app's own zoom contract (minzoom 6 / maxzoom 14).
-//   3. Fulfill the MVT requests with an empty protobuf — hermetic, no
-//      DB dependency — and assert on the requested z/x/y.
-const MVT_TILE_RE = /\/heatmap\/tiles\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.mvt/;
-
-/** Abort all fetches of the static PMTiles binary; returns a hit counter. */
-async function blockPmtiles(page: import('@playwright/test').Page): Promise<{ count: number }> {
-  const counter = { count: 0 };
-  await page.route('**/heatmap-display.pmtiles*', async (route) => {
-    counter.count += 1;
-    await route.abort();
-  });
-  return counter;
+interface LayerInfo {
+  id: string;
+  type: string;
+  source: string | null;
+  sourceLayer: string | null;
+  minzoom: number | null;
+}
+interface Wiring {
+  present: boolean;
+  source: { type: string; url: string | null; tiles: string[] | null; minzoom: number | null; maxzoom: number | null } | null;
+  community: LayerInfo[];
+  allSourceUrls: string[];
 }
 
-/** Fulfill MVT tile requests with an empty protobuf, collecting URLs. */
-async function interceptMvtTiles(page: import('@playwright/test').Page): Promise<string[]> {
-  const urls: string[] = [];
-  await page.route(MVT_TILE_RE, async (route) => {
-    urls.push(route.request().url());
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/x-protobuf',
-      body: Buffer.alloc(0),
-    });
-  });
-  return urls;
-}
-
-/** Open /map at the given zoom and enable the heatmap layer via Calques. */
-async function openMapWithHeatmap(page: import('@playwright/test').Page, zoom: number): Promise<void> {
+/** Open /map at the given zoom; wait for the live map handle to be exposed. */
+async function openMap(page: import('@playwright/test').Page, zoom: number): Promise<void> {
+  await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
   await page.goto(`${BASE_URL}/map?lat=43.6&lon=3.87&zoom=${zoom}`);
   await page.waitForLoadState('domcontentloaded');
-  await expect(page.locator('[data-testid="map-layers-btn"]')).toBeVisible({ timeout: 15000 });
+  // __mapInstance is set in app/map/page.tsx; initMapLayers (which adds the
+  // community source, if it resolves) runs SYNCHRONOUSLY right after — so once
+  // __mapInstance exists, source presence is already deterministic.
+  await page.waitForFunction(() => !!(window as unknown as { __mapInstance?: unknown }).__mapInstance, undefined, {
+    timeout: 30000,
+  });
+}
 
-  await page.getByRole('button', { name: 'Calques' }).click();
-  const heatmapToggle = page.locator('[data-testid="toggle-heatmap"]');
-  await expect(heatmapToggle).toBeVisible();
-  const isChecked = await heatmapToggle.isChecked().catch(() => false);
-  if (!isChecked) {
-    await heatmapToggle.click();
+/** Snapshot the community source + layers from the live style. */
+async function readWiring(page: import('@playwright/test').Page): Promise<Wiring> {
+  return page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const m = (window as any).__mapInstance;
+    const style = m.getStyle();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const src = (style.sources || {})['community-trails'] as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const community = (style.layers || [])
+      .filter((l: any) => typeof l.id === 'string' && l.id.startsWith('community-trails-'))
+      .map((l: any) => ({
+        id: l.id,
+        type: l.type,
+        source: l.source ?? null,
+        sourceLayer: l['source-layer'] ?? null,
+        minzoom: l.minzoom ?? null,
+      }));
+    return {
+      present: !!src,
+      source: src
+        ? { type: src.type, url: src.url ?? null, tiles: src.tiles ?? null, minzoom: src.minzoom ?? null, maxzoom: src.maxzoom ?? null }
+        : null,
+      community,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      allSourceUrls: Object.values(style.sources || {}).flatMap((s: any) =>
+        [s.url, ...(s.tiles || [])].filter(Boolean),
+      ),
+    };
+  });
+}
+
+/** The load-bearing doctrine pin: NO source may stream the live MVT endpoint. */
+function assertNoLiveMvtSource(w: Wiring): void {
+  for (const u of w.allSourceUrls) {
+    expect(u, 'no map source may stream the live /heatmap/tiles/ MVT endpoint').not.toContain('/heatmap/tiles/');
   }
-  // Close dropdown
-  await page.locator('body').click({ position: { x: 0, y: 0 } });
 }
 
-/**
- * Re-point the community-trails source at the live MVT endpoint (the
- * app's fallback seam — same runtime source swap the app performs at
- * map/page.tsx:3004). Re-adds the source with the app's own zoom
- * contract (minzoom 6 / maxzoom 14 from init-map-layers.ts) and
- * re-attaches the existing layers with their current visibility.
- */
-async function switchHeatmapSourceToLiveMvt(page: import('@playwright/test').Page): Promise<void> {
-  await page.waitForFunction(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const m = (window as any).__mapInstance;
-    return !!m?.getSource?.('community-trails')
-      && m.getLayer?.('community-trails-line') != null;
-  }, undefined, { timeout: 20000 });
+// ── The static-PMTiles source + layer wiring ───────────────────────────────────
 
-  await page.evaluate((mvtTemplate) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const m = (window as any).__mapInstance;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const layers = (m.getStyle()?.layers || []).filter((l: any) => l.source === 'community-trails');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const l of layers) m.removeLayer(l.id);
-    m.removeSource('community-trails');
-    m.addSource('community-trails', {
-      type: 'vector',
-      tiles: [mvtTemplate],
-      minzoom: 6,
-      maxzoom: 14,
+test.describe('Community heatmap — static PMTiles source + layers', () => {
+  test.setTimeout(60000);
+
+  test('community-trails, when built, is a pmtiles vector source with the code zoom contract', async ({ page }) => {
+    await openMap(page, 12);
+    const w = await readWiring(page);
+    assertNoLiveMvtSource(w);
+
+    if (!w.present) {
+      // Prod build + NEXT_PUBLIC_HEATMAP_URL unset (the CI-default): the source is
+      // deliberately OMITTED (env-url.ts refuses the SPA origin) → no community layers.
+      console.log('[heatmap-layers] community source omitted (NEXT_PUBLIC_HEATMAP_URL unset) — asserting graceful skip');
+      expect(w.community, 'no community layers when the source is skipped').toEqual([]);
+      return;
+    }
+
+    // communityTrailsSourceSpec(): { type:'vector', url:'pmtiles://…', minzoom:6, maxzoom:14 }
+    expect(w.source!.type).toBe('vector');
+    expect(w.source!.url, 'must be the pmtiles:// protocol URL').toMatch(/^pmtiles:\/\//);
+    expect(w.source!.url).toContain('/heatmap-display.pmtiles');
+    expect(w.source!.minzoom).toBe(6);
+    expect(w.source!.maxzoom).toBe(14);
+    // It must NOT be a runtime-swapped live-MVT vector source (pre-pivot path).
+    expect(w.source!.tiles, 'source must use `url`, not raw MVT `tiles`').toBeFalsy();
+  });
+
+  test('the community layers, when built, have the correct types + source-layers', async ({ page }) => {
+    await openMap(page, 12);
+    const w = await readWiring(page);
+    assertNoLiveMvtSource(w);
+    test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
+
+    const byId = Object.fromEntries(w.community.map((l) => [l.id, l]));
+
+    // ② density heatmap (PRIMARY visual) over the weighted `heat_points` points.
+    expect(byId['community-trails-heat']?.type).toBe('heatmap');
+    expect(byId['community-trails-heat']?.sourceLayer).toBe('heat_points');
+
+    // ② crisp core line over `trails`, street-zoom floor LINE_CRISP_MINZOOM=9.
+    expect(byId['community-trails-line']?.type).toBe('line');
+    expect(byId['community-trails-line']?.sourceLayer).toBe('trails');
+    expect(byId['community-trails-line']?.minzoom).toBe(9);
+
+    // ② direction arrows (one-way mtb/gravel) — symbol over `trails`.
+    expect(byId['community-trails-arrows']?.type).toBe('symbol');
+    expect(byId['community-trails-arrows']?.sourceLayer).toBe('trails');
+
+    // ②a transparent hit layer for explore-mode clicks — line over `trails`.
+    expect(byId['community-trails-hit']?.type).toBe('line');
+    expect(byId['community-trails-hit']?.sourceLayer).toBe('trails');
+
+    // Every community layer binds the community-trails source.
+    for (const l of w.community) expect(l.source).toBe('community-trails');
+  });
+
+  test('exactly one density heatmap layer; no circle/points and no removed glow', async ({ page }) => {
+    await openMap(page, 12);
+    const w = await readWiring(page);
+    test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
+
+    // The Strava-style density field is a single maplibre `heatmap` layer.
+    expect(w.community.filter((l) => l.type === 'heatmap').length).toBe(1);
+    // No circle 'points' layer (the pre-pivot black-dots bug); the code adds none.
+    expect(w.community.some((l) => l.type === 'circle')).toBe(false);
+    expect(w.community.some((l) => l.id === 'community-trails-points')).toBe(false);
+    // The wide blurred glow line layer was REMOVED (it was the pâté driver).
+    expect(w.community.some((l) => l.id === 'community-trails-glow')).toBe(false);
+  });
+
+  test('the app requests the static PMTiles binary (never the live MVT endpoint)', async ({ page }) => {
+    const pmtilesRequests: string[] = [];
+    const mvtRequests: string[] = [];
+    page.on('request', (req) => {
+      const u = req.url();
+      if (u.includes('heatmap-display.pmtiles')) pmtilesRequests.push(u);
+      if (u.includes('/heatmap/tiles/')) mvtRequests.push(u);
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const l of layers) m.addLayer(l);
-  }, `${API_URL}/heatmap/tiles/road/{z}/{x}/{y}.mvt`);
-}
 
-/**
- * Wait for MVT tile requests to arrive, nudging the map when needed.
- * After the source swap MapLibre registers the covering tiles but the
- * worker-side fetches can stay pending until the next real transform
- * update (observed reliably in headless: tileCount=8, 0 network
- * requests until a zoom jiggle). The nudge oscillates ±0.01 zoom —
- * the INTEGER tile zoom never changes, so the z-assertions stay exact.
- */
-async function waitForMvtRequests(
-  page: import('@playwright/test').Page,
-  urls: string[],
-  timeoutMs = 15000,
-): Promise<void> {
-  const start = Date.now();
-  let sign = 1;
-  while (urls.length === 0 && Date.now() - start < timeoutMs) {
-    await page.evaluate((s) => {
+    // Heatmap defaults ON (useLayerToggles) → visible layers → the pmtiles
+    // header/directory/tile range GETs fire without any interaction.
+    await openMap(page, 12);
+    const w = await readWiring(page);
+
+    // Doctrine pin holds in BOTH branches: /map never streams the live MVT
+    // endpoint (which would run per-visitor DB queries on db-f1-micro).
+    if (!w.present) {
+      await page.waitForTimeout(1000);
+      expect(mvtRequests, 'no live MVT fetch even when the static source is skipped').toEqual([]);
+      expect(pmtilesRequests, 'nothing to fetch when the source is skipped').toEqual([]);
+      return;
+    }
+
+    // Nudge the map to guarantee the covering-tile fetches are dispatched.
+    for (let i = 0; i < 20 && pmtilesRequests.length === 0; i++) {
+      await page.evaluate((s) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const m = (window as any).__mapInstance;
+        m.setZoom(m.getZoom() + 0.01 * s);
+        m.triggerRepaint();
+      }, i % 2 === 0 ? 1 : -1);
+      await page.waitForTimeout(300);
+    }
+    expect(pmtilesRequests.length, 'app must fetch the static heatmap-display.pmtiles').toBeGreaterThan(0);
+    expect(mvtRequests, 'the /map display must not stream the live MVT endpoint').toEqual([]);
+  });
+});
+
+// ── Heatmap toggle: the real Calques UI drives layer visibility ─────────────────
+
+test.describe('Community heatmap — toggle wiring (Calques)', () => {
+  test.setTimeout(60000);
+
+  test('disabling then re-enabling the heatmap flips the density + line visibility', async ({ page }) => {
+    await openMap(page, 12);
+    const w = await readWiring(page);
+    test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
+
+    // Heatmap defaults ON: useMapLayerSync sets the layers visible on mount.
+    await page.waitForFunction(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = (window as any).__mapInstance;
-      m.setZoom(m.getZoom() + 0.01 * s);
-      m.triggerRepaint();
-    }, sign);
-    sign = -sign;
-    await page.waitForTimeout(500);
-  }
-  expect(urls.length, `no /heatmap/tiles/**.mvt request within ${timeoutMs}ms`).toBeGreaterThan(0);
-  // Let the remaining covering-tile requests of the batch land too.
-  await page.waitForTimeout(500);
-}
+      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'visible';
+    }, undefined, { timeout: 15000 });
 
-function parseTileZooms(urls: string[]): number[] {
-  return urls
-    .map((url) => url.match(MVT_TILE_RE))
-    .filter((m): m is RegExpMatchArray => m !== null)
-    .map((m) => parseInt(m[1], 10));
-}
+    // Open Calques and UNCHECK the heatmap toggle (the checkbox starts checked).
+    await page.getByTestId('map-layers-btn').click();
+    const toggle = page.getByTestId('toggle-heatmap');
+    await expect(toggle).toBeVisible();
+    await toggle.click(); // disable
 
-// These specs are hermetic (pmtiles blocked, MVT fulfilled inline) so they
-// run in BOTH local and CI environments. Only the toggle test below keeps
-// a CI skip (mouse-drag on the canvas hangs in CI offline mode).
-// QUARANTINED (raw-trace pivot): this pins the PRE-pivot live-MVT source-swap
-// flow (blockPmtiles → repoint community-trails at /heatmap/tiles). The display
-// moved to static PMTiles + a raster pyramid, so the __mapInstance source/layer
-// contract asserted here no longer holds. TODO: rewrite against the raw-PMTiles
-// display path, then un-skip. The backend-tile describe below still runs.
-test.describe.skip('Heatmap MVT tile loading', () => {
-  test('requests MVT tiles when heatmap layer is enabled (pmtiles blocked → live MVT fallback)', async ({ page }) => {
-    const pmtilesBlocked = await blockPmtiles(page);
-    const tileRequests = await interceptMvtTiles(page);
-
-    // Navigate to map at z10 (Montpellier area) and enable heatmap
-    await openMapWithHeatmap(page, 10);
-    await switchHeatmapSourceToLiveMvt(page);
-
-    // MVT tile requests must arrive against the live endpoint
-    await waitForMvtRequests(page, tileRequests);
-
-    // The static PMTiles path must have been attempted AND blocked —
-    // pins the URL pattern of the pmtiles:// protocol's HTTP fetches.
-    expect(pmtilesBlocked.count).toBeGreaterThan(0);
-
-    // At z10 the source (maxzoom=14) must serve native z10 tiles
-    const zooms = parseTileZooms(tileRequests);
-    expect(zooms.length).toBeGreaterThan(0);
-    expect(zooms.filter((z) => z === 10).length).toBeGreaterThan(0);
-  });
-
-  test('requests z14 tiles at high zoom', async ({ page }) => {
-    await blockPmtiles(page);
-    const tileRequests = await interceptMvtTiles(page);
-
-    await openMapWithHeatmap(page, 14);
-    await switchHeatmapSourceToLiveMvt(page);
-
-    await waitForMvtRequests(page, tileRequests);
-
-    // At z14, tiles should be z14 (source maxzoom=14)
-    const zooms = parseTileZooms(tileRequests);
-    expect(zooms.length).toBeGreaterThan(0);
-    expect(zooms.filter((z) => z === 14).length).toBeGreaterThan(0);
-  });
-
-  // This test uses mouse.move on map canvas which hangs in CI offline mode
-  test('heatmap toggle hides and shows layers', async ({ page }, testInfo) => {
-    if (process.env.CI) { testInfo.skip(); return; }
-    await page.route('**/heatmap/tiles/**/*.mvt', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/x-protobuf',
-        body: Buffer.alloc(0),
-      });
-    });
-
-    await page.goto(`${BASE_URL}/map?lat=43.6&lon=3.87&zoom=12`);
-    await page.waitForLoadState('domcontentloaded');
-    await expect(page.locator('[data-testid="map-layers-btn"]')).toBeVisible({ timeout: 15000 });
-
-    // Open Calques dropdown and enable heatmap
-    await page.getByRole('button', { name: 'Calques' }).click();
-    const heatmapToggle = page.locator('[data-testid="toggle-heatmap"]');
-    await expect(heatmapToggle).toBeVisible();
-
-    // Enable if not already
-    const wasChecked = await heatmapToggle.isChecked().catch(() => false);
-    if (!wasChecked) {
-      await heatmapToggle.click();
-    }
-
-    // Verify the toggle is now checked/on
-    // (toggle may be a checkbox, switch, or custom element — verify it's active)
-    await page.locator('body').click({ position: { x: 0, y: 0 } });
-    await page.waitForTimeout(500);
-
-    // Now disable heatmap
-    await page.getByRole('button', { name: 'Calques' }).click();
-    await heatmapToggle.click();
-    await page.locator('body').click({ position: { x: 0, y: 0 } });
-
-    // After disabling, new tile requests should stop
-    const requestsAfterDisable: string[] = [];
-    await page.route('**/heatmap/tiles/**/*.mvt', async (route) => {
-      requestsAfterDisable.push(route.request().url());
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/x-protobuf',
-        body: Buffer.alloc(0),
-      });
-    });
-
-    // Pan the map — no new heatmap tile requests expected
-    await page.mouse.move(400, 300);
-    await page.mouse.down();
-    await page.mouse.move(500, 350, { steps: 5 });
-    await page.mouse.up();
-    await page.waitForTimeout(1000);
-
-    // Tiles may or may not be requested (MapLibre caches), but layer should be hidden
-    // Re-enable and verify toggle still works
-    await page.getByRole('button', { name: 'Calques' }).click();
-    await heatmapToggle.click();
-    await page.locator('body').click({ position: { x: 0, y: 0 } });
-    // Should function without errors (no crash)
-    await page.waitForTimeout(500);
-  });
-
-  test('z10 tiles are native (not overzoomed from z11+)', async ({ page }) => {
-    await blockPmtiles(page);
-    const tileRequests = await interceptMvtTiles(page);
-
-    // Navigate at z10 — should request z10 tiles natively
-    await openMapWithHeatmap(page, 10);
-    await switchHeatmapSourceToLiveMvt(page);
-
-    await waitForMvtRequests(page, tileRequests);
-
-    const tileZooms = parseTileZooms(tileRequests);
-    expect(tileZooms.length).toBeGreaterThan(0);
-    // All requested tiles should be z10 — NOT z11+ overzoomed down
-    // (source minzoom=6, so MapLibre should request native z10 tiles)
-    const nonZ10 = tileZooms.filter(z => z > 10);
-    expect(nonZ10.length).toBe(0);
-  });
-});
-
-// QUARANTINED (raw-trace pivot): asserts the pre-pivot community-trails
-// glow/line layer internals. TODO: rewrite for the raw-PMTiles layer set.
-test.describe.skip('Heatmap layer types — no circles, no heatmap kernel', () => {
-  test.skip(!!process.env.CI, 'Flaky in CI — heatmap UI toggle dependency');
-
-  test('glow layer is type=line with blur (not heatmap or circle)', async ({ page }) => {
-    await page.route('**/heatmap/tiles/**/*.mvt', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/x-protobuf', body: Buffer.alloc(0) });
-    });
-
-    await page.goto(`${BASE_URL}/map?lat=43.6&lon=3.87&zoom=8`);
-    await page.waitForLoadState('domcontentloaded');
-    await expect(page.locator('[data-testid="map-layers-btn"]')).toBeVisible({ timeout: 15000 });
-
-    // Enable heatmap
-    await page.getByRole('button', { name: 'Calques' }).click();
-    const heatmapToggle = page.locator('[data-testid="toggle-heatmap"]');
-    const isChecked = await heatmapToggle.isChecked().catch(() => false);
-    if (!isChecked) await heatmapToggle.click();
-    await page.locator('body').click({ position: { x: 0, y: 0 } });
-    await page.waitForTimeout(500);
-
-    // Query MapLibre for layer types via globally exposed map instance
-    const layerInfo = await page.evaluate(() => {
+    // useMapLayerSync fades opacity then sets visibility:none after ~320ms.
+    await page.waitForFunction(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = (window as any).__mapInstance;
-      if (!m) return { error: 'no map ref' };
+      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'none'
+        && m.getLayoutProperty('community-trails-line', 'visibility') === 'none';
+    }, undefined, { timeout: 5000 });
 
-      const layers = m.getStyle()?.layers || [];
-      const glowLayer = layers.find((l: any) => l.id === 'community-trails-glow');
-      const lineLayer = layers.find((l: any) => l.id === 'community-trails-line');
-      const pointsLayer = layers.find((l: any) => l.id === 'community-trails-points');
-      const heatmapLayers = layers.filter((l: any) => l.type === 'heatmap');
-
-      return {
-        glowType: glowLayer?.type ?? null,
-        glowSourceLayer: glowLayer?.['source-layer'] ?? null,
-        glowHasBlur: glowLayer?.paint?.['line-blur'] != null,
-        lineType: lineLayer?.type ?? null,
-        lineSourceLayer: lineLayer?.['source-layer'] ?? null,
-        pointsLayerExists: pointsLayer != null,
-        heatmapTypeCount: heatmapLayers.length,
-      };
-    });
-
-    // Glow must be a line layer (not heatmap or circle)
-    if (layerInfo && !('error' in layerInfo)) {
-      expect(layerInfo.glowType).toBe('line');
-      expect(layerInfo.glowSourceLayer).toBe('trails');
-      expect(layerInfo.glowHasBlur).toBe(true);
-      // Detail layer must also be line
-      expect(layerInfo.lineType).toBe('line');
-      expect(layerInfo.lineSourceLayer).toBe('trails');
-      // No circle points layer (caused black dots)
-      expect(layerInfo.pointsLayerExists).toBe(false);
-      // No heatmap-type layers (slow GPU kernel)
-      expect(layerInfo.heatmapTypeCount).toBe(0);
-    }
-  });
-
-  test('no community-trails-points circle layer exists at any zoom', async ({ page }) => {
-    await page.route('**/heatmap/tiles/**/*.mvt', async (route) => {
-      await route.fulfill({ status: 200, contentType: 'application/x-protobuf', body: Buffer.alloc(0) });
-    });
-
-    for (const zoom of [8, 10, 12, 14]) {
-      await page.goto(`${BASE_URL}/map?lat=43.6&lon=3.87&zoom=${zoom}`);
-      await page.waitForLoadState('domcontentloaded');
-      await expect(page.locator('[data-testid="map-layers-btn"]')).toBeVisible({ timeout: 15000 });
-
-      const hasPointsLayer = await page.evaluate(() => {
-        const m = (window as any).__mapInstance;
-        if (!m) return false;
-        return m.getStyle()?.layers?.some((l: any) => l.id === 'community-trails-points') ?? false;
-      });
-
-      expect(hasPointsLayer).toBe(false);
-    }
+    // Re-enable → both layers visible again.
+    await toggle.click(); // enable
+    await page.waitForFunction(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const m = (window as any).__mapInstance;
+      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'visible'
+        && m.getLayoutProperty('community-trails-line', 'visibility') === 'visible';
+    }, undefined, { timeout: 5000 });
   });
 });
+
+// ── Live MVT endpoint (unchanged — still the DB-backed FALLBACK) ────────────────
 
 test.describe('Heatmap MVT backend', () => {
   test('z10 tile returns valid protobuf', async () => {
@@ -418,7 +310,7 @@ test.describe('Heatmap MVT backend', () => {
   });
 });
 
-// ── Performance tests: heatmap tiles during map movement ─────────────────────
+// ── Performance tests: heatmap tiles from the backend ───────────────────────────
 
 test.describe('Heatmap tile performance', () => {
   test.skip(!!process.env.CI, 'Flaky in CI — measures wall-clock latency on shared runners');
@@ -467,72 +359,5 @@ test.describe('Heatmap tile performance', () => {
     expect(batchMs).toBeLessThan(2000);
     console.log(`[perf] 8 parallel z12 tiles: ${batchMs}ms`);
     await apiContext.dispose();
-  });
-
-  // This test uses mouse.move on map canvas which hangs in CI offline mode
-  test('heatmap tiles load within 2s during map pan', async ({ page }, testInfo) => {
-    if (process.env.CI) { testInfo.skip(); return; }
-    const tileTimings: { url: string; start: number; end: number }[] = [];
-    const testStart = Date.now();
-
-    // Intercept tile requests to measure timing (pass through to real backend)
-    page.on('request', (req) => {
-      if (req.url().includes('/heatmap/tiles/')) {
-        tileTimings.push({ url: req.url(), start: Date.now() - testStart, end: 0 });
-      }
-    });
-    page.on('response', (resp) => {
-      if (resp.url().includes('/heatmap/tiles/')) {
-        const entry = tileTimings.find(t => t.url === resp.url() && t.end === 0);
-        if (entry) entry.end = Date.now() - testStart;
-      }
-    });
-
-    // Navigate to area with heatmap data (gravel near Montpellier, z12)
-    await page.goto(`${BASE_URL}/map?lat=43.62&lon=3.88&zoom=12`);
-    await page.waitForLoadState('domcontentloaded');
-    await expect(page.locator('[data-testid="map-layers-btn"]')).toBeVisible({ timeout: 15000 });
-
-    // Enable heatmap
-    await page.getByRole('button', { name: 'Calques' }).click();
-    const heatmapToggle = page.locator('[data-testid="toggle-heatmap"]');
-    const isChecked = await heatmapToggle.isChecked().catch(() => false);
-    if (!isChecked) {
-      await heatmapToggle.click();
-    }
-    await page.locator('body').click({ position: { x: 0, y: 0 } });
-
-    // Wait for initial tiles to load
-    await page.waitForTimeout(3000);
-    const initialTileCount = tileTimings.length;
-
-    // Pan the map (simulate user dragging east)
-    const panStart = Date.now() - testStart;
-    await page.mouse.move(600, 400);
-    await page.mouse.down();
-    await page.mouse.move(200, 400, { steps: 10 });
-    await page.mouse.up();
-
-    // Wait for new tiles triggered by pan
-    await page.waitForTimeout(3000);
-    const newTiles = tileTimings.slice(initialTileCount);
-
-    if (newTiles.length > 0) {
-      const completedTiles = newTiles.filter(t => t.end > 0);
-      const maxLatency = Math.max(...completedTiles.map(t => t.end - t.start));
-      const avgLatency = completedTiles.reduce((sum, t) => sum + (t.end - t.start), 0) / completedTiles.length;
-      const lastTileEnd = Math.max(...completedTiles.map(t => t.end));
-      const totalPanToComplete = lastTileEnd - panStart;
-
-      console.log(`[perf] pan tiles: ${newTiles.length} requested, ${completedTiles.length} completed`);
-      console.log(`[perf] latency: avg=${Math.round(avgLatency)}ms, max=${maxLatency}ms`);
-      console.log(`[perf] time from pan to last tile: ${totalPanToComplete}ms`);
-
-      // All tiles should complete within 5s of pan (includes browser overhead + cold cache)
-      expect(totalPanToComplete).toBeLessThan(5000);
-      // Individual tile latency should be under 1s
-      expect(maxLatency).toBeLessThan(1000);
-    }
-    // Even if no new tiles (small pan), test should pass
   });
 });
