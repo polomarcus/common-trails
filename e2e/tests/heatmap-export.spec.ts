@@ -133,12 +133,10 @@ test.describe('Heatmap export API contract (pre-computed)', () => {
     await apiContext.dispose();
   });
 
-  test('the on-demand bbox export endpoints are live (200)', async () => {
-    // NOTE (2026-08): an earlier iteration asserted these were REMOVED (404).
-    // They are in fact live + functional — the on-demand aggregated exports
-    // are a supported feature alongside the static geojsonl artifact. If they
-    // are ever meant to be retired in favour of the static artifact, that is a
-    // separate backend decision; this pins their real current contract.
+  test('the removed on-demand endpoints are gone (404)', async () => {
+    // Current export router (backend/app/api/export.py) exposes only /heatmap,
+    // /heatmap.pmtiles and /heatmap.geojsonl. The per-bbox on-demand formats
+    // were removed in favour of the static artifacts — assert they 404.
     const apiContext = await request.newContext();
     for (const path of [
       '/export/heatmap.geojson?bbox=4.80,45.72,4.90,45.78',
@@ -147,7 +145,7 @@ test.describe('Heatmap export API contract (pre-computed)', () => {
       '/export/heatmap.kml?bbox=4.80,45.72,4.90,45.78',
     ]) {
       const resp = await apiContext.get(`${API_URL}${path}`, { maxRedirects: 0 });
-      expect(resp.status(), `${path} should respond`).toBe(200);
+      expect(resp.status(), `${path} should be gone`).toBe(404);
     }
     await apiContext.dispose();
   });
