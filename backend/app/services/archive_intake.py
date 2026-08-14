@@ -388,9 +388,12 @@ def read_planned_member(
     opened inner zips (FIFO eviction) so we don't re-read a multi-MB inner zip
     once per member.
     """
-    if "!" not in name:
+    inner_name, sep, member = name.partition("!")
+    # Only a genuine '<inner.zip>!<member>' composite (what iter_zip_members
+    # emits for Garmin nested zips) is treated as nested — a FLAT member whose
+    # own filename happens to contain '!' still reads straight from the outer zip.
+    if not sep or not inner_name.lower().endswith(".zip"):
         return zf.read(name)
-    inner_name, member = name.split("!", 1)
     zin = inner_cache.get(inner_name)
     if zin is None:
         if len(inner_cache) >= _INNER_ZIP_CACHE_MAX:

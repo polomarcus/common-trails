@@ -89,6 +89,15 @@ def test_read_planned_member_flat_member_unchanged():
     assert b"road_biking" in raw
 
 
+def test_read_planned_member_flat_name_with_bang_reads_from_outer():
+    """A FLAT member whose own filename contains '!' must still read from the
+    outer archive — only a '<inner.zip>!<member>' composite is nested."""
+    archive = _zip_of({"activities/ride!2.gpx": _mk_gpx("Bang")})
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        raw = archive_intake.read_planned_member(zf, "activities/ride!2.gpx", {})
+    assert b"road_biking" in raw
+
+
 def test_gpx_size_cap_accepts_real_garmin_exports():
     """A real single Garmin ride (the reported activite_bug.gpx) was 15.6 MB and
     413'd at the old 10 MB cap. The byte cap must accommodate real long rides —
