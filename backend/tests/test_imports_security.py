@@ -28,6 +28,7 @@ import pytest
 # Match the constants on the parser side. If those change, this file
 # should fail loudly so we notice the contract drift.
 from app.services.gpx import (
+    MAX_GPX_SIZE,
     MAX_ZIP_MEMBER_UNCOMPRESSED,
     MAX_ZIP_MEMBERS,
     MAX_ZIP_TOTAL_UNCOMPRESSED,
@@ -303,12 +304,12 @@ def test_zip_with_dense_member_reports_per_file_error(client, auth_headers):
 # single-file branch (`.gpx` and `.fit`) previously called the parser
 # on whatever fits under 50 MB — letting a 40 MB GPX allocate
 # hundreds of MB of parser state BEFORE the coord-cap fired. The fix
-# adds a 10 MB per-file cap matching `/gpx/upload`'s constant.
+# adds a MAX_GPX_SIZE per-file cap matching `/gpx/upload`'s constant.
 
 
 def test_imports_files_single_gpx_rejects_over_max_size(client, auth_headers, monkeypatch):
-    """A single .gpx larger than MAX_GPX_SIZE (10 MB) must 413 BEFORE
-    parse — the post-parse coord cap is too late on a 40 MB file.
+    """A single .gpx larger than MAX_GPX_SIZE must 413 BEFORE parse —
+    the post-parse coord cap is too late on a huge file.
 
     Spy on `parse_gpx` to verify it's never called. PR #354 review
     S2 — the previous 413-only assertion would pass even if a future
@@ -325,7 +326,8 @@ def test_imports_files_single_gpx_rejects_over_max_size(client, auth_headers, mo
 
     monkeypatch.setattr("app.services.gpx.parse_gpx", _spy_parse_gpx)
 
-    padding = b"<!-- " + b"x" * (12 * 1024 * 1024) + b" -->\n"
+    # Just over the single-file cap (relative, so this stays valid at any cap).
+    padding = b"<!-- " + b"x" * (MAX_GPX_SIZE + 1) + b" -->\n"
     fat_gpx = VALID_GPX.replace(b"<gpx", padding + b"<gpx", 1)
     resp = client.post(
         "/imports/files",
@@ -354,7 +356,7 @@ def test_imports_files_single_fit_rejects_over_max_size(client, auth_headers, mo
 
     monkeypatch.setattr("app.services.fit_parser.parse_fit", _spy_parse_fit)
 
-    fat_fit = b"\x00" * (12 * 1024 * 1024)
+    fat_fit = b"\x00" * (MAX_GPX_SIZE + 1)  # just over the single-file cap
     resp = client.post(
         "/imports/files",
         headers=auth_headers,

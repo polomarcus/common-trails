@@ -46,6 +46,19 @@ const SPORTS = [
   { key: 'running', icon: '🏃' },
 ] as const;
 
+/** Turn a FastAPI error body into a human line (string detail, pydantic
+ *  validation array, or a bare status) so the user learns WHY an upload failed. */
+function describeApiError(detail: unknown, status: number): string {
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => (d && typeof d === 'object' && 'msg' in d ? String((d as { msg: unknown }).msg) : String(d)))
+      .filter(Boolean);
+    if (msgs.length) return msgs.join(', ');
+  }
+  return `HTTP ${status}`;
+}
+
 export default function ContributionDropzone() {
   const { t, locale } = useI18n();
   const [sport, setSport] = useState('mtb');
@@ -101,6 +114,9 @@ export default function ContributionDropzone() {
     setFilesBusy(true);
     setFilesMsg(t('strava.importingFiles', { count: files.length }));
     let imported = 0, skipped = 0, failed = 0;
+    // Collect a human reason per rejected file so the user learns WHY (too
+    // large, parse error, …) instead of a bare "N failed" count.
+    const failures: string[] = [];
     // ODbL consent audit trail (gap #7): the first request carries the exact
     // consent wording + version; the backend records ONE contribution_consents
     // row and returns its id, which every subsequent request reuses.
@@ -123,16 +139,25 @@ export default function ContributionDropzone() {
         const resp = await fetch(`${API_URL}/imports/files`, {
           method: 'POST', credentials: 'include', body: formData,
         });
-        const data = await resp.json();
+        let data: { imported?: number; skipped?: number; consent_id?: string; detail?: unknown } | null = null;
+        try { data = await resp.json(); } catch { /* error bodies may not be JSON */ }
         if (resp.ok) {
-          imported += data.imported ?? 0; skipped += data.skipped ?? 0;
-          if (data.consent_id) consentId = data.consent_id;
+          imported += data?.imported ?? 0; skipped += data?.skipped ?? 0;
+          if (data?.consent_id) consentId = data.consent_id;
+        } else {
+          failed++;
+          failures.push(`${files[i].name} — ${describeApiError(data?.detail, resp.status)}`);
         }
-        else failed++;
-      } catch { failed++; }
+      } catch (e) {
+        failed++;
+        failures.push(`${files[i].name} — ${e instanceof Error ? e.message : t('strava.archive.failed')}`);
+      }
       setFilesMsg(t('strava.importProgress', { current: i + 1, total: files.length }));
     }
     setFilesMsg(buildUploadSummary({ imported, skipped, failed }, t));
+    // Surface the actual per-file reasons (too large, parse error, …) so a
+    // failed upload is never a silent "N failed" with no explanation.
+    if (failures.length) setErrMsg(failures.join('\n'));
     setFilesBusy(false);
   };
 
@@ -389,7 +414,7 @@ export default function ContributionDropzone() {
       )}
 
       {errMsg && (
-        <p data-testid="hero-upload-error" style={{ color: '#ff8a80', fontSize: 12, margin: '10px 0 0', fontWeight: 500 }}>
+        <p data-testid="hero-upload-error" style={{ color: '#ff8a80', fontSize: 12, margin: '10px 0 0', fontWeight: 500, whiteSpace: 'pre-line' }}>
           ✗ {errMsg}
         </p>
       )}
