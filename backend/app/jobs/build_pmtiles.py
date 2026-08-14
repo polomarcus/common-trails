@@ -633,7 +633,15 @@ def _upload_to_export_bucket(pmtiles_path: str) -> None:
                 _db.close()
         except Exception:  # noqa: BLE001 — pointer best-effort
             pass
-        pointer["k_anonymity"] = int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
+        # Report the ACTUAL gate the render used. In raw mode that is
+        # min_users() (HEATMAP_MIN_USERS) — NOT the legacy matched-era
+        # HEATMAP_K_ANONYMITY, which is unset in prod and defaulted this field
+        # to a misleading "2" while the render was really K=1 all along.
+        from app.services.raw_trace_display import min_users, raw_display_enabled
+        pointer["k_anonymity"] = (
+            min_users() if raw_display_enabled()
+            else int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
+        )
 
         # Atomic write: .tmp → rewrite() into the canonical pointer name
         # so a mid-flight discovery request never reads a torn JSON
