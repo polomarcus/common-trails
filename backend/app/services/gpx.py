@@ -593,7 +593,9 @@ MAX_ZIP_MEMBERS = int(os.environ.get("MAX_ZIP_MEMBERS", "20000"))
 MAX_ZIP_TOTAL_UNCOMPRESSED = int(
     os.environ.get("MAX_ZIP_TOTAL_UNCOMPRESSED", str(4 * 1024 * 1024 * 1024))
 )  # 4 GB
-MAX_ZIP_MEMBER_UNCOMPRESSED = 10 * 1024 * 1024  # 10 MB (matches MAX_GPX_SIZE)
+MAX_ZIP_MEMBER_UNCOMPRESSED = int(
+    os.environ.get("MAX_GPX_SIZE_BYTES", str(25 * 1024 * 1024))
+)  # 25 MB (matches MAX_GPX_SIZE)
 
 # Single-file GPX caps. These live here (the parser layer) rather than
 # in the HTTP handler because every entry point that calls `parse_gpx`
@@ -602,8 +604,12 @@ MAX_ZIP_MEMBER_UNCOMPRESSED = 10 * 1024 * 1024  # 10 MB (matches MAX_GPX_SIZE)
 # wrong layer order (CLI → API) AND pulled the FastAPI router into
 # any caller; the CLI bulk-import Cloud Run Job had no reason to.
 # Audit 2026-05-27 PR #347 review S2.
-MAX_GPX_SIZE = 10 * 1024 * 1024  # 10 MB
-MAX_GPX_COORDS = 100_000  # dense-coord DoS defence (<10 MB can still pack 5M+ points)
+# 25 MB (was 10 MB — real Garmin exports of a single long ride routinely run
+# 12-20 MB thanks to 1 s sampling + fat TrackPointExtension; 10 MB 413'd them).
+# Safely under Cloud Run's 32 MiB request-body cap; the 100k coord cap below is
+# the actual dense-coordinate DoS defence, independent of byte size.
+MAX_GPX_SIZE = int(os.environ.get("MAX_GPX_SIZE_BYTES", str(25 * 1024 * 1024)))
+MAX_GPX_COORDS = 100_000  # dense-coord DoS defence (a small GPX can still pack 5M+ points)
 
 
 class ZipBombError(ValueError):
