@@ -113,7 +113,9 @@ class TestTotalUncompressedCapIngestibleOnly:
         from app.services import archive_intake
         from app.services import gpx as gpx_service
         assert gpx_service.MAX_ZIP_TOTAL_UNCOMPRESSED >= archive_intake.MAX_ARCHIVE_BYTES
-        assert gpx_service.MAX_ZIP_MEMBER_UNCOMPRESSED == 10 * 1024 * 1024  # NOT relaxed
+        # The per-member cap tracks the single-file cap (both from MAX_GPX_SIZE_BYTES,
+        # 25 MB default — raised from 10 MB so real long Garmin rides aren't 413'd).
+        assert gpx_service.MAX_ZIP_MEMBER_UNCOMPRESSED == gpx_service.MAX_GPX_SIZE
 
 
 # ── Gap 2: recovery paths ────────────────────────────────────────────────────

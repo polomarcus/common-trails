@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useI18n } from '@/lib/i18n';
@@ -80,6 +81,15 @@ export default function MapToolbar(props: MapToolbarProps) {
     setShowExportModal,
     activitiesCount, mapInstance, dateLocale,
   } = props;
+
+  // Read auth AFTER mount, not during render. Calling getToken() (reads
+  // localStorage) in the JSX below made the account button render differently
+  // on the client (logged in) than in the static-export build (logged out) →
+  // a hydration text mismatch that crashed /map with React #418 for any
+  // logged-in visitor. Null on first paint matches the build; the effect
+  // updates it post-hydration.
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  useEffect(() => { setAuthToken(getToken()); }, []);
 
   return (
     <nav
@@ -483,10 +493,10 @@ export default function MapToolbar(props: MapToolbarProps) {
             gap: 5,
           }}
         >
-          👤 {!getToken() ? t('map.account.createOrLogin') : stravaName ? t('map.account.accountOf', { name: stravaName.split(' ')[0] }) : userEmail || t('map.menuButton')}
+          👤 {!authToken ? t('map.account.createOrLogin') : stravaName ? t('map.account.accountOf', { name: stravaName.split(' ')[0] }) : userEmail || t('map.menuButton')}
         </button>
 
-        {showUserMenu && getToken() && (
+        {showUserMenu && authToken && (
           <>
             {/* Backdrop to close menu */}
             <div
