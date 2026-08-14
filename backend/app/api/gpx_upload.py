@@ -119,7 +119,10 @@ async def gpx_upload(
 
     content = await file.read()
     if len(content) > MAX_GPX_SIZE:
-        raise HTTPException(status_code=413, detail="GPX file too large (max 10 MB)")
+        raise HTTPException(
+            status_code=413,
+            detail=f"GPX file too large (max {MAX_GPX_SIZE // (1024 * 1024)} MB)",
+        )
 
     filename = (file.filename or "").lower()
     if not filename.endswith(".gpx"):

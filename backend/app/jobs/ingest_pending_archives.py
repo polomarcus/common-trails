@@ -728,6 +728,8 @@ def drain_pending_archives(
                 # bytes one at a time. Pacing is between INGESTS (the heavy DB
                 # work) — the PASS-1 scan is cheap and never hits the DB.
                 first = True
+                # Opened Garmin inner zips, reused across members (bounded).
+                inner_cache: dict = {}
                 for idx, (name, resolved_sport, _key) in enumerate(plan):
                     if pace_seconds > 0 and not first:
                         time.sleep(pace_seconds)
@@ -743,7 +745,9 @@ def drain_pending_archives(
                             counts["imported"], counts["skipped"], counts["failed"],
                         )
                     try:
-                        raw = zf.read(name)
+                        # Resolve nested-zip composite names (Garmin 'Export All'
+                        # packs .fit into inner zips → '<inner.zip>!<member>').
+                        raw = archive_intake.read_planned_member(zf, name, inner_cache)
                         outcome, _aid, _err = _ingest_member_bytes(
                             db,
                             user_id=arch["user_id"],
@@ -760,6 +764,7 @@ def drain_pending_archives(
                         counts["failed"] += 1
                         sentry_sdk.capture_exception(exc)
                         log.error("archive %s member %s failed", arch["id"], name, exc_info=True)
+                archive_intake.close_inner_cache(inner_cache)
             # End-of-archive: ONE deduplicated agg recompute, BEFORE the
             # terminal transition so status='done' implies a fresh aggregate.
             _recompute_heat_agg_batched(touched_ways)
