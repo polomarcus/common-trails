@@ -414,22 +414,34 @@ def _pmtiles_version_id(pmtiles_bytes: bytes | None = None) -> str:
     return f"v{epoch_hour}-{content_hash}"
 
 
+# Per-sport calques (raster-<sport>/): one XYZ pyramid per sport so a gpx.studio
+# overlay can show just gravel / mtb / road / … The set + expansion MIRRORS the
+# frontend chips (app/page.tsx SPORT_PILLS / communityHeatSportFilter) via the
+# backend SSOT config.expand_sport — offroad → mtb+offroad+gravel. The combined
+# all-sports pyramid stays at the bare ``raster/`` prefix (unchanged URL).
+_CALQUE_SPORTS = ("road", "gravel", "mtb", "running", "offroad")
+
+
 def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
-    """Best-effort: render a raster XYZ tile pyramid from the raw-display
-    geojsonl and publish ``raster/{z}/{x}/{y}.png`` + ``raster/tiles.json`` to
-    the public heatmap bucket, so gpx.studio / VisuGPX (and any Leaflet/OL
-    client) can add the community heatmap as a custom overlay ("calque") via
-    one URL.
+    """Best-effort: render raster XYZ tile pyramids from the raw-display geojsonl
+    and publish them to the public heatmap bucket so gpx.studio / VisuGPX (any
+    Leaflet/OL client) can add the community heatmap as a custom overlay
+    ("calque") via one URL:
+
+    - ``raster/{z}/{x}/{y}.png`` + ``raster/tiles.json`` — ALL sports (unchanged).
+    - ``raster-<sport>/{z}/{x}/{y}.png`` + ``raster-<sport>/tiles.json`` — one per
+      sport in ``_CALQUE_SPORTS`` (env ``HEATMAP_RASTER_PER_SPORT``, default on),
+      so the overlay can be filtered by sport (there's no way to filter a raster
+      client-side — the filtering must be baked into separate tilesets).
 
     Env-gated on ``HEATMAP_RASTER_PYRAMID=true`` (default off → nothing changes)
     + ``HEATMAP_GCS_BUCKET``. Never raises — a raster hiccup must not break the
     PMTiles build. Zoom range via ``HEATMAP_RASTER_MIN/MAX_ZOOM`` (default 6-14).
-    Written to the ``raster/`` prefix (overwrite in place), then STALE tiles are
-    PURGED: after the build, every ``.png`` under ``raster/`` that was NOT written
-    this run is deleted, so a tile left behind by a now-deleted / below-K trace
-    can't linger publicly (the GDPR + K-flip correctness the mutable-overwrite
-    approach previously lacked). Purge is gated on a real build (features>0) so a
-    transient empty corpus never wipes the whole calque.
+    Each prefix is overwrite-in-place, then STALE tiles are PURGED per prefix:
+    every ``.png`` under it NOT written this run is deleted, so a tile left behind
+    by a now-deleted / below-K trace can't linger publicly (GDPR + K-flip). Purge
+    is gated on a real build (features>0) so a transient empty corpus never wipes
+    a calque.
     """
     if os.environ.get("HEATMAP_RASTER_PYRAMID", "false").strip().lower() != "true":
         return
@@ -443,6 +455,9 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         log.warning("google-cloud-storage not installed; cannot publish raster pyramid")
         return
     try:
+        from collections.abc import Collection
+
+        from app.config import expand_sport
         from app.services.heatmap_raster_pyramid import (
             DEFAULT_MAX_ZOOM,
             DEFAULT_MIN_ZOOM,
@@ -455,58 +470,63 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         client = storage.Client()
         bucket = client.bucket(bucket_name)
 
-        written_keys: set[str] = set()
+        def _render_prefix(prefix: str, sport_filter: Collection[str] | None) -> None:
+            """Render one pyramid to ``<prefix>/`` (+ tiles.json + stale-purge)."""
+            written_keys: set[str] = set()
 
-        def _upload_png(z: int, x: int, y: int, png: bytes) -> None:
-            key = f"raster/{z}/{x}/{y}.png"
-            blob = bucket.blob(key)
-            # Stable-named MUTABLE artifact (same URL, new bytes each rebuild) —
-            # keep the cache short so a rebuild reaches consumers promptly.
-            blob.cache_control = "public, max-age=3600"
-            blob.upload_from_string(png, content_type="image/png")
-            written_keys.add(key)
+            def _upload_png(z: int, x: int, y: int, png: bytes) -> None:
+                key = f"{prefix}/{z}/{x}/{y}.png"
+                blob = bucket.blob(key)
+                # Stable-named MUTABLE artifact (same URL, new bytes each rebuild)
+                # — keep the cache short so a rebuild reaches consumers promptly.
+                blob.cache_control = "public, max-age=3600"
+                blob.upload_from_string(png, content_type="image/png")
+                written_keys.add(key)
 
-        t = time.time()
-        stats = build_raster_pyramid(
-            geojson_path, upload_png=_upload_png, min_zoom=min_zoom, max_zoom=max_zoom,
-        )
-        purged = 0
-        if stats.get("bounds"):
-            tiles_url = (
-                f"{_public_base_url(bucket_name)}/raster/{{z}}/{{x}}/{{y}}.png"
+            t = time.time()
+            stats = build_raster_pyramid(
+                geojson_path, upload_png=_upload_png,
+                min_zoom=min_zoom, max_zoom=max_zoom, sport_filter=sport_filter,
             )
-            tj = build_tilejson(
-                tiles_url=tiles_url, min_zoom=min_zoom, max_zoom=max_zoom,
-                bounds=tuple(stats["bounds"]),
-                attribution=(
-                    '© <a href="https://chemins-communs.fr">CHEMINS COMMUNS</a> '
-                    "contributors — ODbL 1.0"
-                ),
-            )
-            tj_blob = bucket.blob("raster/tiles.json")
-            # Stable-named MUTABLE artifact — short cache so rebuilds are seen.
-            tj_blob.cache_control = "no-store"
-            tj_blob.upload_from_string(json.dumps(tj), content_type="application/json")
+            purged = 0
+            if stats.get("bounds"):
+                tiles_url = f"{_public_base_url(bucket_name)}/{prefix}/{{z}}/{{x}}/{{y}}.png"
+                tj = build_tilejson(
+                    tiles_url=tiles_url, min_zoom=min_zoom, max_zoom=max_zoom,
+                    bounds=tuple(stats["bounds"]),
+                    attribution=(
+                        '© <a href="https://chemins-communs.fr">CHEMINS COMMUNS</a> '
+                        "contributors — ODbL 1.0"
+                    ),
+                )
+                tj_blob = bucket.blob(f"{prefix}/tiles.json")
+                tj_blob.cache_control = "no-store"
+                tj_blob.upload_from_string(json.dumps(tj), content_type="application/json")
 
-            # PURGE stale tiles (GDPR + K-flip): a tile occupied ONLY by a now-
-            # deleted / below-K trace is NOT re-rendered this build, so its old
-            # PNG would linger PUBLICLY on the calque forever (a solo desire line's
-            # tiles are all unique → the whole deleted trace stays visible). List
-            # the raster/ prefix and delete every .png NOT written this build
-            # (tiles.json is kept). Gated on a real build (bounds set ⇒ features>0)
-            # so a transient empty corpus can NEVER wipe the whole calque.
-            for blob in bucket.list_blobs(prefix="raster/"):
-                if blob.name.endswith(".png") and blob.name not in written_keys:
-                    try:
-                        blob.delete()
-                        purged += 1
-                    except Exception:  # pragma: no cover - best-effort per-tile
-                        pass
-        log.info(
-            "raster pyramid: %d tiles (z%d-%d, %d features), %d stale purged, in %.0fs → gs://%s/raster/",
-            stats.get("tiles", 0), min_zoom, max_zoom, stats.get("features", 0),
-            purged, time.time() - t, bucket_name,
-        )
+                # PURGE stale tiles for THIS prefix (GDPR + K-flip): a tile
+                # occupied ONLY by a now-deleted / below-K trace is not re-rendered
+                # this build, so its old PNG would linger publicly forever. Delete
+                # every .png under the prefix NOT written this run (tiles.json kept).
+                # ``prefix + "/"`` so ``raster/`` never lists ``raster-road/``.
+                for blob in bucket.list_blobs(prefix=f"{prefix}/"):
+                    if blob.name.endswith(".png") and blob.name not in written_keys:
+                        try:
+                            blob.delete()
+                            purged += 1
+                        except Exception:  # pragma: no cover - best-effort per-tile
+                            pass
+            log.info(
+                "raster pyramid: %d tiles (z%d-%d, %d features), %d stale purged, in %.0fs → gs://%s/%s/",
+                stats.get("tiles", 0), min_zoom, max_zoom, stats.get("features", 0),
+                purged, time.time() - t, bucket_name, prefix,
+            )
+
+        # Combined all-sports calque (unchanged URL).
+        _render_prefix("raster", None)
+        # Per-sport calques.
+        if os.environ.get("HEATMAP_RASTER_PER_SPORT", "true").strip().lower() == "true":
+            for sport in _CALQUE_SPORTS:
+                _render_prefix(f"raster-{sport}", set(expand_sport(sport)))
     except Exception:
         log.warning("raster pyramid build/upload failed (best-effort)", exc_info=True)
 

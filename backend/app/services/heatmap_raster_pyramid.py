@@ -23,7 +23,7 @@ import json
 import logging
 import math
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 
 from shapely.geometry import LineString
 
@@ -139,9 +139,17 @@ def build_raster_pyramid(
     upload_png: Callable[[int, int, int, bytes], None],
     min_zoom: int = DEFAULT_MIN_ZOOM,
     max_zoom: int = DEFAULT_MAX_ZOOM,
+    sport_filter: Collection[str] | None = None,
 ) -> dict:
     """Render an XYZ PNG pyramid from a raw-display GeoJSONL and push each
     non-empty tile via ``upload_png(z, x, y, png_bytes)``.
+
+    ``sport_filter`` (a set of raw sport ids, already ``expand_sport``-ed by the
+    caller): when given, only features whose ``properties.sport`` is IN the set
+    are rendered — this drives the per-sport calques (``raster-<sport>/``) so a
+    gpx.studio overlay can show just gravel / mtb / road. ``None`` = all sports
+    (the combined ``raster/`` pyramid). The ``bounds`` in the returned stats are
+    the FILTERED features' bounds.
 
     Returns a stats dict incl. the data-derived ``bounds`` (for the TileJSON).
     Buckets popularity on ``pass_count`` (falls back to ``user_count``). Never
@@ -158,6 +166,12 @@ def build_raster_pyramid(
             continue
         geom = feat.get("geometry") or {}
         if geom.get("type") != "LineString":
+            continue
+        props = feat.get("properties") or {}
+        sport = str(props.get("sport", "all") or "all")
+        # Per-sport calque: skip features outside the requested set BEFORE they
+        # touch bounds/edges, so raster-<sport>/ + its TileJSON are sport-exact.
+        if sport_filter is not None and sport not in sport_filter:
             continue
         coords_raw = geom.get("coordinates") or []
         pts: list[tuple[float, float]] = []
@@ -178,13 +192,11 @@ def build_raster_pyramid(
                 pts = [(c[0], c[1]) for c in simp]
         except Exception:  # pragma: no cover - defensive; keep the raw pts
             pass
-        props = feat.get("properties") or {}
         # Bucket on pass_count (busy corridors burn brighter); user_count is ~1
         # everywhere at K=1. render_tile_png buckets via HeatEdge.user_count, so
         # feed pass_count there.
         pop = int(props.get("pass_count") or props.get("user_count") or 1)
-        edges.append(HeatEdge(coords=tuple(pts), user_count=pop,
-                              sport=str(props.get("sport", "all") or "all")))
+        edges.append(HeatEdge(coords=tuple(pts), user_count=pop, sport=sport))
 
     stats = {"features": len(edges), "tiles": 0, "by_zoom": {}, "bounds": None}
     if not edges:
