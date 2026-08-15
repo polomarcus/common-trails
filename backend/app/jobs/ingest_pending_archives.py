@@ -416,7 +416,7 @@ def drain_pending(
     skip_heat_computation: bool = False,
 ) -> dict:
     """Drain up to ``limit`` pending members, one at a time with ``pace_seconds``
-    between them (default: env ``DRAIN_PACE_SECONDS``, 1.0 s). Returns a
+    between them (default: env ``DRAIN_PACE_SECONDS``, 0.25 s). Returns a
     summary dict. Never raises on a single bad member.
     """
     import sentry_sdk
@@ -828,7 +828,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=50, help="Max members per run (per-member queue).")
     parser.add_argument(
         "--pace", type=float, default=None,
-        help="Seconds between members (default: env DRAIN_PACE_SECONDS, else 1.0).",
+        help="Seconds between members (default: env DRAIN_PACE_SECONDS, else 0.25).",
     )
     parser.add_argument("--archive-limit", type=int, default=5, help="Max whole archives per run.")
     args = parser.parse_args()
