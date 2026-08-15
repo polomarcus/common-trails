@@ -52,7 +52,13 @@ log = logging.getLogger(__name__)
 # Per-way chunk size for the end-of-archive heat_edges_agg recompute.
 HEAT_AGG_WAYS_PER_CHUNK = 500
 
-_DEFAULT_PACE_SECONDS = 1.0
+# Inter-member sleep, the drain's f1-micro breathing room. 1.0 s was tuned for
+# the OSM-matching era (30 s–3 min of DB work per activity). Post raw-trace pivot
+# a member ingest is a light parse + dedup-SELECT + INSERT (~10-20 ms), so 1.0 s
+# was ~99% idle sleep and made a 16k-member Garmin archive a multi-HOUR paid job.
+# 0.25 s keeps ~7% DB duty cycle (safe) while cutting drain runtime ~4×. Raise
+# via DRAIN_PACE_SECONDS if a real large drain stresses Cloud SQL.
+_DEFAULT_PACE_SECONDS = 0.25
 _DEFAULT_STATEMENT_TIMEOUT_MS = 120_000
 
 # A pending_archives row is claimed (status→'processing') then terminally
@@ -410,7 +416,7 @@ def drain_pending(
     skip_heat_computation: bool = False,
 ) -> dict:
     """Drain up to ``limit`` pending members, one at a time with ``pace_seconds``
-    between them (default: env ``DRAIN_PACE_SECONDS``, 1.0 s). Returns a
+    between them (default: env ``DRAIN_PACE_SECONDS``, 0.25 s). Returns a
     summary dict. Never raises on a single bad member.
     """
     import sentry_sdk
@@ -692,22 +698,20 @@ def drain_pending_archives(
             with archive_intake.open_archive_zip(
                 arch["storage_backend"], arch["bucket_key"]
             ) as zf:
-                # PASS 1 — walk the archive once, holding only ONE member's
-                # bytes at a time (``ZipFile.read`` is lazy — never the whole
-                # ~400 MB payload). Skipped members (oversize / out-of-scope)
-                # are counted now; ingestible ones are buffered as lightweight
-                # ``(name, sport, tile-key)`` tuples (NOT their bytes) so PASS 2
-                # can ingest them in SPATIAL-LOCALITY order and keep the OSM
-                # segment cache warm across the run. iter_zip_members enforces
-                # the zip-bomb caps on its first step, so they still trip here.
-                plan: list[tuple[str, str, int | None]] = []
+                # ONE pass — ingest each member straight from the bytes
+                # iter_zip_members already yields (holds only ONE member at a
+                # time; ``ZipFile.read`` is lazy). The pre-pivot code did TWO
+                # passes: scan → sort by spatial tile-key → re-read each member,
+                # to keep the OSM segment cache warm. That cache died with the
+                # raw-trace pivot (no matcher), so the sort was vestigial and the
+                # re-read only DOUBLED the zip I/O — worst for big nested Garmin
+                # archives, where PASS 2 re-opened every inner UploadedFiles_*.zip.
+                # One pass reads each member exactly once. Pace is between INGESTS
+                # (the heavy DB work); iter_zip_members enforces the zip-bomb caps.
+                first = True
+                ingested = 0
                 for name, raw, csv_sport in archive_intake.iter_zip_members(zf):
                     counts["members_total"] += 1
-                    if counts["members_total"] % 100 == 0:
-                        log.info(
-                            "archive %s scan: %d members walked (skipped so far=%d)",
-                            arch["id"], counts["members_total"], counts["skipped"],
-                        )
                     if csv_sport is archive_intake._OVERSIZE:
                         counts["skipped"] += 1
                         continue
@@ -718,36 +722,21 @@ def drain_pending_archives(
                     resolved_sport = (
                         csv_sport if isinstance(csv_sport, str) else arch["fallback_sport"]
                     )
-                    plan.append((name, resolved_sport, _member_spatial_key(raw, name)))
-
-                # Group nearby activities together (unknown-tile members last)
-                # so consecutive ingests reuse warm OSM tiles.
-                plan.sort(key=lambda t: _spatial_sort_key(t[2]))
-
-                # PASS 2 — ingest in locality order, re-reading each member's
-                # bytes one at a time. Pacing is between INGESTS (the heavy DB
-                # work) — the PASS-1 scan is cheap and never hits the DB.
-                first = True
-                # Opened Garmin inner zips, reused across members (bounded).
-                inner_cache: dict = {}
-                for idx, (name, resolved_sport, _key) in enumerate(plan):
                     if pace_seconds > 0 and not first:
                         time.sleep(pace_seconds)
                     first = False
-                    # Heartbeat: a real archive is 1000s of members × pacing
-                    # (hours) — without this, a long drain is a silent black
-                    # box and a timeout kill is indistinguishable from a hang.
-                    if (idx + 1) % 100 == 0:
+                    ingested += 1
+                    # Heartbeat: a real archive is 1000s of members — without
+                    # this a long drain is a silent black box and a timeout kill
+                    # is indistinguishable from a hang.
+                    if ingested % 100 == 0:
                         log.info(
-                            "archive %s progress: %d/%d ingested "
+                            "archive %s progress: %d ingested "
                             "(imported=%d skipped=%d failed=%d)",
-                            arch["id"], idx + 1, len(plan),
+                            arch["id"], ingested,
                             counts["imported"], counts["skipped"], counts["failed"],
                         )
                     try:
-                        # Resolve nested-zip composite names (Garmin 'Export All'
-                        # packs .fit into inner zips → '<inner.zip>!<member>').
-                        raw = archive_intake.read_planned_member(zf, name, inner_cache)
                         outcome, _aid, _err = _ingest_member_bytes(
                             db,
                             user_id=arch["user_id"],
@@ -764,7 +753,6 @@ def drain_pending_archives(
                         counts["failed"] += 1
                         sentry_sdk.capture_exception(exc)
                         log.error("archive %s member %s failed", arch["id"], name, exc_info=True)
-                archive_intake.close_inner_cache(inner_cache)
             # End-of-archive: ONE deduplicated agg recompute, BEFORE the
             # terminal transition so status='done' implies a fresh aggregate.
             _recompute_heat_agg_batched(touched_ways)
@@ -840,7 +828,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=50, help="Max members per run (per-member queue).")
     parser.add_argument(
         "--pace", type=float, default=None,
-        help="Seconds between members (default: env DRAIN_PACE_SECONDS, else 1.0).",
+        help="Seconds between members (default: env DRAIN_PACE_SECONDS, else 0.25).",
     )
     parser.add_argument("--archive-limit", type=int, default=5, help="Max whole archives per run.")
     args = parser.parse_args()

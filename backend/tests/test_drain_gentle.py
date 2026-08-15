@@ -358,11 +358,11 @@ class TestPacing:
 
     def test_pace_default_without_env(self, monkeypatch):
         monkeypatch.delenv("DRAIN_PACE_SECONDS", raising=False)
-        assert drain_mod._drain_pace_seconds() == 1.0
+        assert drain_mod._drain_pace_seconds() == 0.25
 
     def test_garbage_env_falls_back(self, monkeypatch):
         monkeypatch.setenv("DRAIN_PACE_SECONDS", "not-a-float")
-        assert drain_mod._drain_pace_seconds() == 1.0
+        assert drain_mod._drain_pace_seconds() == 0.25
 
 
 class TestReadyzStillHealthy:
