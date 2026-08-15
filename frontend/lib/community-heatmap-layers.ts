@@ -349,6 +349,31 @@ export function communityHeatSportFilter(sport: string): Expr | null {
   return ['in', ['get', 'sport'], ['literal', sports]];
 }
 
+/** Layer ids the sport chip filters: the density (`heat_points`) + crisp line +
+ *  invisible click-hit layer all carry `sport`. */
+export const COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS = [
+  COMMUNITY_TRAILS_HEAT_LAYER,
+  COMMUNITY_TRAILS_LINE_LAYER,
+  'community-trails-hit',
+] as const;
+
+/**
+ * Apply a sport chip to the community heatmap on a live map — SSOT so the home
+ * hero AND `/map` filter identically. `/map` never called this (its chips only
+ * updated React state, never `setFilter`) so its sport filter did nothing until
+ * 2026-08-15; home worked because `app/page.tsx` filtered inline. Extracting the
+ * one helper both call closes that drift. Safe on partial maps (the community
+ * layers are skipped when `NEXT_PUBLIC_HEATMAP_URL` is unset) — each layer is
+ * `getLayer`-guarded.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyCommunityHeatSportFilter(map: any, sport: string): void {
+  const filter = communityHeatSportFilter(sport);
+  for (const id of COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS) {
+    if (map?.getLayer?.(id)) map.setFilter(id, filter);
+  }
+}
+
 /**
  * Filter for the direction-arrow layer: STRONGLY one-way, multi-pass, mtb/gravel
  * trails only. The PRIMARY gate is the directional DOMINANCE RATIO — a weakly

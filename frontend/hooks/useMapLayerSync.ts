@@ -8,7 +8,7 @@ import { getToken } from '@/lib/auth';
 import { getTrackBbox } from '@/lib/map-utils';
 import {
   LINE_OPACITY_RAMP, GLOW_OPACITY_RAMP, LINE_WIDTH_RAMP, HEAT_OPACITY_RAMP,
-  COMMUNITY_TRAILS_HEAT_LAYER,
+  COMMUNITY_TRAILS_HEAT_LAYER, applyCommunityHeatSportFilter,
 } from '@/lib/community-heatmap-layers';
 import type { ActivityItem } from '@/lib/map-utils';
 import { buildProfileData } from '@/lib/elevation-profile';
@@ -93,6 +93,10 @@ export function useMapLayerSync(params: {
       }
       if (m.getLayer('community-trails-arrows')) m.setLayoutProperty('community-trails-arrows', 'visibility', 'visible');
       if (m.getLayer('community-trails-hit')) m.setLayoutProperty('community-trails-hit', 'visibility', 'visible');
+      // Sport chip → filter the density + line + hit layers (all carry `sport`).
+      // /map only updated `heatmapSport` state before; without this the chips
+      // never reached the map (home filtered inline in app/page.tsx). SSOT helper.
+      applyCommunityHeatSportFilter(m, heatmapSport);
       loadCommunityHeatmap(mapInstance, heatmapSport, heatmapDays);
     } else {
       // Hide: fade opacity to 0 first, then set visibility:none after transition (300ms)
