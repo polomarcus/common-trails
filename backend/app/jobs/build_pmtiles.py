@@ -523,10 +523,14 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
 
         # Combined all-sports calque (unchanged URL).
         _render_prefix("raster", None)
-        # Per-sport calques.
+        # Per-sport calques — each isolated so one sport's failure can't skip the
+        # rest of the build (the combined calque above already rendered).
         if os.environ.get("HEATMAP_RASTER_PER_SPORT", "true").strip().lower() == "true":
             for sport in _CALQUE_SPORTS:
-                _render_prefix(f"raster-{sport}", set(expand_sport(sport)))
+                try:
+                    _render_prefix(f"raster-{sport}", set(expand_sport(sport)))
+                except Exception:  # pragma: no cover - best-effort per sport
+                    log.warning("raster-%s calque failed (best-effort)", sport, exc_info=True)
     except Exception:
         log.warning("raster pyramid build/upload failed (best-effort)", exc_info=True)
 
