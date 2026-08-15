@@ -2,37 +2,47 @@
 
 **Status:** analysis + plan for review (Paul asked 2026-08-14, "optimiser les coûts serveurs" for big-`.zip` imports). Nothing here is deployed — the drain is the load-bearing ingest path, so the changes below want a reviewed PR + the `test_archive_drain_golden` guard, not an overnight prod push.
 
-## ⭐ Measured 2026-08-15 (raw mode = prod) — the pacing IS the cost
+## ⭐ Measured 2026-08-15 (raw mode = prod) — pacing AND per-member work both matter
 
-Ran the real `init → PUT → complete → drain_pending_archives` loop in
-`HEATMAP_DISPLAY_SOURCE=raw` (prod's config) against a local docker Postgres —
-new golden `backend/tests/test_archive_drain_raw_golden.py`, **no OSM substrate
-needed** (raw mode gates `_update_heat_edges` off, so the drain does zero
-map-matching):
+Two measurements against a local **docker** Postgres in `HEATMAP_DISPLAY_SOURCE=raw`
+(prod's config, **no OSM substrate** — raw mode gates `_update_heat_edges` off, so
+the drain does zero map-matching):
 
-> **500 members drained in 1.3 s = 2.5 ms/member** (parse → dedup SELECT →
-> INSERT `activities`), `pace_seconds=0`.
+1. **Tiny synthetic GPX (6 points/file):** 500 members in 1.3 s = **2.5 ms/member**.
+   This is a *floor for trivial files* and MASSIVELY under-represents real rides.
+2. **Real ride files** (600 from `data/strava-export`, thousands of points each,
+   real `.gpx`/`.fit.gz`, 146 MB uncompressed):
+   - pure work (`pace=0`): 93.9 s = **156.5 ms/member**
+   - adaptive (ratio 1.0): 192.9 s = **321.6 ms/member** (≈ 2× work — the 50 %
+     duty design: sleep ≈ the previous member's real work).
 
-This changes the plan's premise. The old warning "don't just sleep less, it moves
-the storm onto f1-micro" was sized for the **OSM-matching era** (17k–65k segment
-reloads = 30 s–3 min/activity). **That storm is gone in raw mode.** Per-member
-work is now trivial, so:
+**The earlier "pacing is the ENTIRE cost / batching is marginal / ~3.5 min"
+conclusion was WRONG** — it extrapolated from the 2.5 ms synthetic figure. On real
+rides the **per-member WORK (~156 ms of GPX parse + dedup SELECT + INSERT)
+dominates**, and the adaptive sleep is only ≈ half the wall-time. Projected to a
+16,361-member Garmin archive (**docker**, extrapolated):
 
-- **The inter-member pacing is essentially the ENTIRE cost.** At 1.0 s pace a
-  16k-member archive spends ~4.5 h asleep on top of ~40 s of real work. PR A's
-  1.0→0.25 s already cuts that to ~68 min; the honest floor is far lower.
-- **Batching DB writes (old PR B option 1) is now SECONDARY** — it would shave
-  1.3 s → ~0.5 s per 500, marginal next to the pacing.
-- ⚠️ **Caveat (Paul's, explicit): docker Postgres ≠ prod f1-micro.** 2.5 ms will
-  be larger on the weaker shared instance, and a near-zero pace over thousands of
-  light INSERTs must still be watched for `connection reset` / conn-pool pressure.
-  So the pace floor is a **prod-measured** decision, not a local one.
+| Pacing | ms/member | 16 k archive |
+|---|---|---|
+| pure work floor (irreducible without cutting work) | 156 | **~43 min** |
+| **adaptive (PR B, ratio 1.0)** | 322 | **~88 min** |
+| 0.25 s fixed (PR A) | 407 | ~111 min |
+| old 1.0 s fixed | 1157 | **~5.3 h** |
 
-**Revised recommendation:** the dominant PR B lever is **adaptive/low pacing in
-raw mode**, gated on a real prod large-drain watch (CPU / conns / resets) — NOT
-the batch-write machinery, which drops to a "nice to have". The raw golden above
-runs in CI (unlike the matched golden) and pins correctness through whatever pace
-we pick.
+So PR B's real win is **~5.3 h → ~88 min ≈ 3.6×** (docker), NOT the 77× I first
+claimed. ⚠️ **All on docker — f1-micro is weaker (CPU-bound parsing + slower DB),
+so the true prod numbers are larger and UNMEASURED.** The definitive figure needs a
+real prod replay (e.g. re-drain tester 2's retained archive after #7+#8 deploy).
+
+**Revised recommendation (corrected):**
+- **Adaptive pacing (PR B)** is still the right, safe first lever — it self-tunes
+  to the live DB (so it right-sizes itself on f1-micro), env-tunable ratio/cap.
+- **Batching DB writes is NOT "marginal" after all** — but it only helps the DB
+  slice of the ~156 ms; a lot of that work is **GPX/FIT parsing** (CPU), which
+  batching doesn't touch. Worth profiling parse-vs-DB before investing.
+- If a real prod drain is still too slow, the cheap next knob is **lowering
+  `DRAIN_PACE_RATIO`** (e.g. 0.25 → sleep ≈ 40 ms → 16 k ≈ ~53 min on docker),
+  watched against f1-micro CPU / conns / `connection reset`.
 
 ## The cost driver (measured)
 

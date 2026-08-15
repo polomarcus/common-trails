@@ -352,6 +352,7 @@ class TestStatementTimeout:
 
 
 class TestPacing:
+    """Legacy FIXED pacing helper (still the fallback when adaptive is off)."""
     def test_pace_default_comes_from_env(self, monkeypatch):
         monkeypatch.setenv("DRAIN_PACE_SECONDS", "2.5")
         assert drain_mod._drain_pace_seconds() == 2.5
@@ -363,6 +364,63 @@ class TestPacing:
     def test_garbage_env_falls_back(self, monkeypatch):
         monkeypatch.setenv("DRAIN_PACE_SECONDS", "not-a-float")
         assert drain_mod._drain_pace_seconds() == 0.25
+
+
+class TestAdaptivePacing:
+    """Adaptive pacing: mode resolution + the per-member sleep computation."""
+
+    def test_default_is_adaptive(self, monkeypatch):
+        monkeypatch.delenv("DRAIN_PACE_SECONDS", raising=False)
+        mode, value = drain_mod._resolve_pace_mode(None)
+        assert mode == "adaptive"
+        assert value == drain_mod._DEFAULT_PACE_RATIO  # 1.0
+
+    def test_explicit_pace_arg_pins_fixed(self):
+        assert drain_mod._resolve_pace_mode(0.0) == ("fixed", 0.0)
+        assert drain_mod._resolve_pace_mode(0.5) == ("fixed", 0.5)
+
+    def test_negative_pace_arg_clamped_to_zero(self):
+        assert drain_mod._resolve_pace_mode(-3.0) == ("fixed", 0.0)
+
+    def test_env_pace_seconds_pins_fixed(self, monkeypatch):
+        monkeypatch.setenv("DRAIN_PACE_SECONDS", "2.5")
+        assert drain_mod._resolve_pace_mode(None) == ("fixed", 2.5)
+
+    def test_blank_env_is_adaptive(self, monkeypatch):
+        monkeypatch.setenv("DRAIN_PACE_SECONDS", "  ")
+        assert drain_mod._resolve_pace_mode(None)[0] == "adaptive"
+
+    def test_garbage_env_falls_back_to_adaptive(self, monkeypatch):
+        monkeypatch.setenv("DRAIN_PACE_SECONDS", "not-a-float")
+        assert drain_mod._resolve_pace_mode(None)[0] == "adaptive"
+
+    def test_ratio_env_tunable(self, monkeypatch):
+        monkeypatch.setenv("DRAIN_PACE_RATIO", "2.0")
+        assert drain_mod._pace_ratio() == 2.0
+        monkeypatch.setenv("DRAIN_PACE_RATIO", "junk")
+        assert drain_mod._pace_ratio() == drain_mod._DEFAULT_PACE_RATIO
+
+    def test_cap_env_tunable(self, monkeypatch):
+        monkeypatch.setenv("DRAIN_PACE_MAX_SECONDS", "0.5")
+        assert drain_mod._pace_cap_seconds() == 0.5
+
+    def test_fixed_next_pace_ignores_work(self):
+        # fixed mode → always the pinned value, regardless of last_work_s / cap.
+        assert drain_mod._next_pace("fixed", 0.3, None, 1.0) == 0.3
+        assert drain_mod._next_pace("fixed", 0.3, 99.0, 0.1) == 0.3
+
+    def test_adaptive_first_member_no_sleep(self):
+        # No prior measurement → the first member never pre-sleeps.
+        assert drain_mod._next_pace("adaptive", 1.0, None, 1.0) == 0.0
+
+    def test_adaptive_scales_with_work_and_ratio(self):
+        # sleep = last_work × ratio.
+        assert drain_mod._next_pace("adaptive", 1.0, 0.01, 1.0) == 0.01
+        assert drain_mod._next_pace("adaptive", 2.0, 0.01, 1.0) == 0.02
+
+    def test_adaptive_capped(self):
+        # A slow/stalled ingest can't translate into an unbounded sleep.
+        assert drain_mod._next_pace("adaptive", 1.0, 5.0, 1.0) == 1.0
 
 
 class TestReadyzStillHealthy:
