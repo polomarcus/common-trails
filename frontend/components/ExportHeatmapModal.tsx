@@ -58,8 +58,11 @@ export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps)
   // one URL (no download). The XYZ TEMPLATE (…/{z}/{x}/{y}.png) is the correct
   // URL — NOT tiles.json (gpx.studio would read that as a vector source and show
   // nothing). Full tutorial + per-sport calques live at /calque.
+  // Per-sport calque (road as the default example; other sports + the tutorial
+  // at /calque). The all-sports "Tous" calque was dropped — a blended overlay
+  // isn't useful for planning; the all-sports view lives on the landing hero.
   const calqueTileUrl =
-    'https://tiles.chemins-communs.fr/raster/{z}/{x}/{y}.png';
+    'https://tiles.chemins-communs.fr/raster-road/{z}/{x}/{y}.png';
   const [calqueCopied, setCalqueCopied] = useState(false);
   const copyCalqueUrl = () => {
     navigator.clipboard?.writeText(calqueTileUrl).then(

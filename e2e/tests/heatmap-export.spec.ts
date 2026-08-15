@@ -5,8 +5,9 @@
  * offering the STATIC, pre-built community-heatmap artifacts. There is NO
  * on-demand build, NO bbox editor, NO format radios, NO async pipeline anymore:
  *
- * - **Calque** — the raster XYZ tile-template URL (`raster/{z}/{x}/{y}.png`) to
- *   copy into gpx.studio / VisuGPX (per-sport tutorial at /calque).
+ * - **Calque** — a PER-SPORT raster XYZ tile-template URL
+ *   (`raster-<sport>/{z}/{x}/{y}.png`, road by default) to copy into
+ *   gpx.studio / VisuGPX (sport picker + tutorial at /calque).
  * - **PMTiles** — `/export/heatmap.pmtiles` → 302 to the canonical GCS URL.
  * - **GeoJSONL** — `/export/heatmap.geojsonl` → 302 to the static GCS object.
  *

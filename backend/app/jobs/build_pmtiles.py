@@ -526,13 +526,21 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
                 purged, time.time() - t, bucket_name, prefix,
             )
 
-        # Combined all-sports calque (unchanged URL, full z-range).
-        _render_prefix("raster", None)
-        # Per-sport calques at a LOWER top zoom (env HEATMAP_RASTER_PER_SPORT_MAX_ZOOM,
-        # default 12): 6 full z14 pyramids per build blow the 60-min job timeout
-        # (z13/z14 are ~95% of the tiles, each an individual GCS upload). A per-sport
-        # calque is planning CONTEXT — the client overzooms z12 above that. Each
-        # sport isolated so one failure can't skip the rest (combined already ran).
+        # Combined all-sports calque — OFF by default (Paul 2026-08-15: "drop
+        # Tous, except the landing page"). The landing-page all-sports view is the
+        # VECTOR pmtiles hero (community-trails, app/page.tsx) at a wide z10, NOT
+        # this raster — so nothing needs the combined raster once the "Tous" calque
+        # export is dropped. It was also the single biggest build cost (z6-14 =
+        # ~21k tiles / ~24 min of a 46-min build). Re-enable via
+        # HEATMAP_RASTER_COMBINED=true if an all-sports XYZ overlay is ever wanted.
+        if os.environ.get("HEATMAP_RASTER_COMBINED", "false").strip().lower() == "true":
+            _render_prefix("raster", None)
+        # Per-sport calques — the community heatmap EXPORT (one XYZ overlay per
+        # sport for gpx.studio). Capped at HEATMAP_RASTER_PER_SPORT_MAX_ZOOM
+        # (default 12): the client overzooms above that; a per-sport calque is
+        # planning CONTEXT, and z13/z14 would be ~95% of the tiles (each an
+        # individual GCS upload). Each sport isolated so one failure can't skip
+        # the rest.
         if os.environ.get("HEATMAP_RASTER_PER_SPORT", "true").strip().lower() == "true":
             try:
                 per_sport_max = int(os.environ.get("HEATMAP_RASTER_PER_SPORT_MAX_ZOOM", "12"))
