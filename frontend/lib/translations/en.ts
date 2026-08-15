@@ -17,7 +17,7 @@ const en: Translations = {
   'nav.menuAriaLabel': 'Navigation menu',
   'nav.privacy': 'Privacy',
   'nav.support': 'Support',
-  'nav.overlay': 'Heatmap as an overlay',
+  'nav.overlay': 'Export the community heatmap',
 
   // ── Members-only community EXPORT gate (2026-07 posture) ───────────────────
   // The community MAP is public (anyone can view the heatmap); only the bulk
@@ -163,6 +163,7 @@ const en: Translations = {
   "home.calque.intro": "Show the whole community map underneath in gpx.studio or VisuGPX and draw your route on top — add a custom layer (raster / XYZ) with this URL:",
   "home.calque.copy": "Copy",
   "home.calque.copied": "✓ Copied",
+  "home.calque.tutorialCta": "Step-by-step guide + per-sport overlay",
   'home.trails.title': 'DFCI fire tracks · Marked trails GR / GRP / GT / PR / EuroVelo',
   'home.philosophy.title': 'Take back control of our traces',
   'home.philosophy.method': 'Methodology',

@@ -17,7 +17,7 @@ const fr: Translations = {
   'nav.menuAriaLabel': 'Menu de navigation',
   'nav.privacy': 'Confidentialité',
   'nav.support': 'Support',
-  'nav.overlay': 'La heatmap en calque',
+  'nav.overlay': 'Exporter le fond communautaire (heatmap)',
 
   // ── Members-only community EXPORT gate (2026-07 posture) ───────────────────
   // The community MAP is public (anyone can view the heatmap); only the bulk
@@ -163,6 +163,7 @@ const fr: Translations = {
   "home.calque.intro": "Affiche toute la carte communautaire en fond dans gpx.studio ou VisuGPX et trace ton itinéraire par-dessus — ajoute une couche personnalisée (raster / XYZ) avec cette URL :",
   "home.calque.copy": "Copier",
   "home.calque.copied": "✓ Copié",
+  "home.calque.tutorialCta": "Tuto pas-à-pas + calque par sport",
   'home.trails.title': 'Pistes DFCI · Sentiers balisés GR / GRP / GT / PR / EuroVelo',
   'home.philosophy.title': 'Reprendre le contrôle de nos traces',
   'home.philosophy.method': 'Méthodologie',

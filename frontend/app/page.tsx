@@ -178,7 +178,9 @@ function renderStep2Desc(desc: string, stravaLabel: string, garminLabel: string,
 // ── Calque overlay card — public discovery of the gpx.studio/VisuGPX layer ────
 function CalqueCard() {
   const { t } = useI18n();
-  const url = 'https://tiles.chemins-communs.fr/raster/tiles.json';
+  // The XYZ tile TEMPLATE — NOT tiles.json (gpx.studio reads that as a vector
+  // source and shows nothing). Full tutorial + per-sport calques at /calque.
+  const url = 'https://tiles.chemins-communs.fr/raster/{z}/{x}/{y}.png';
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard?.writeText(url).then(
@@ -212,6 +214,13 @@ function CalqueCard() {
           }}
         >{copied ? t('home.calque.copied') : t('home.calque.copy')}</button>
       </div>
+      <Link
+        href="/calque"
+        data-testid="home-calque-tutorial"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 12, fontSize: 13, fontWeight: 700, color: '#1a4731', textDecoration: 'none' }}
+      >
+        <span aria-hidden="true">🗺️</span> {t('home.calque.tutorialCta')} →
+      </Link>
     </div>
   );
 }
