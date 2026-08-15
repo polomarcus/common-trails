@@ -2,6 +2,38 @@
 
 **Status:** analysis + plan for review (Paul asked 2026-08-14, "optimiser les coûts serveurs" for big-`.zip` imports). Nothing here is deployed — the drain is the load-bearing ingest path, so the changes below want a reviewed PR + the `test_archive_drain_golden` guard, not an overnight prod push.
 
+## ⭐ Measured 2026-08-15 (raw mode = prod) — the pacing IS the cost
+
+Ran the real `init → PUT → complete → drain_pending_archives` loop in
+`HEATMAP_DISPLAY_SOURCE=raw` (prod's config) against a local docker Postgres —
+new golden `backend/tests/test_archive_drain_raw_golden.py`, **no OSM substrate
+needed** (raw mode gates `_update_heat_edges` off, so the drain does zero
+map-matching):
+
+> **500 members drained in 1.3 s = 2.5 ms/member** (parse → dedup SELECT →
+> INSERT `activities`), `pace_seconds=0`.
+
+This changes the plan's premise. The old warning "don't just sleep less, it moves
+the storm onto f1-micro" was sized for the **OSM-matching era** (17k–65k segment
+reloads = 30 s–3 min/activity). **That storm is gone in raw mode.** Per-member
+work is now trivial, so:
+
+- **The inter-member pacing is essentially the ENTIRE cost.** At 1.0 s pace a
+  16k-member archive spends ~4.5 h asleep on top of ~40 s of real work. PR A's
+  1.0→0.25 s already cuts that to ~68 min; the honest floor is far lower.
+- **Batching DB writes (old PR B option 1) is now SECONDARY** — it would shave
+  1.3 s → ~0.5 s per 500, marginal next to the pacing.
+- ⚠️ **Caveat (Paul's, explicit): docker Postgres ≠ prod f1-micro.** 2.5 ms will
+  be larger on the weaker shared instance, and a near-zero pace over thousands of
+  light INSERTs must still be watched for `connection reset` / conn-pool pressure.
+  So the pace floor is a **prod-measured** decision, not a local one.
+
+**Revised recommendation:** the dominant PR B lever is **adaptive/low pacing in
+raw mode**, gated on a real prod large-drain watch (CPU / conns / resets) — NOT
+the batch-write machinery, which drops to a "nice to have". The raw golden above
+runs in CI (unlike the matched golden) and pins correctness through whatever pace
+we pick.
+
 ## The cost driver (measured)
 
 `app.jobs.ingest_pending_archives.drain_pending_archives` processes a member archive in two passes:
