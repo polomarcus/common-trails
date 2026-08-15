@@ -365,52 +365,11 @@ _NO_CSV = object()
 _OVERSIZE = object()
 
 
-# ── PASS-2 member reader — resolves nested-zip composite names ────────────────
-# iter_zip_members emits Garmin "Export All" members as ``<inner.zip>!<member>``
-# (activities live INSIDE inner ``UploadedFiles_*.zip`` zips, not flat in the
-# outer archive). The drain's PASS 2 re-reads each planned member by name to hold
-# only one member's bytes in RAM at a time; a plain ``zf.read("<inner>!<member>")``
-# KeyErrors because that composite name is not an outer-zip entry — this was the
-# root cause of a Garmin archive draining with ~100% member failures. This reader
-# descends into the inner zip instead, memoising a few opened inner zips so a
-# multi-MB inner zip is not re-read once per member.
-_INNER_ZIP_CACHE_MAX = int(os.environ.get("ARCHIVE_INNER_ZIP_CACHE_MAX", "6"))
-
-
-def read_planned_member(
-    zf: zipfile.ZipFile, name: str, inner_cache: dict[str, zipfile.ZipFile]
-) -> bytes:
-    """Read a member's bytes, resolving one level of nested-zip composite names
-    (``<inner.zip>!<member>``, as :func:`iter_zip_members` emits for Garmin).
-
-    Flat members read straight from ``zf``. ``inner_cache`` is owned by the
-    caller for the archive's lifetime and bounded to ``_INNER_ZIP_CACHE_MAX``
-    opened inner zips (FIFO eviction) so we don't re-read a multi-MB inner zip
-    once per member.
-    """
-    inner_name, sep, member = name.partition("!")
-    # Only a genuine '<inner.zip>!<member>' composite (what iter_zip_members
-    # emits for Garmin nested zips) is treated as nested — a FLAT member whose
-    # own filename happens to contain '!' still reads straight from the outer zip.
-    if not sep or not inner_name.lower().endswith(".zip"):
-        return zf.read(name)
-    zin = inner_cache.get(inner_name)
-    if zin is None:
-        if len(inner_cache) >= _INNER_ZIP_CACHE_MAX:
-            oldest = next(iter(inner_cache))
-            with contextlib.suppress(Exception):
-                inner_cache.pop(oldest).close()
-        zin = zipfile.ZipFile(io.BytesIO(zf.read(inner_name)))
-        inner_cache[inner_name] = zin
-    return zin.read(member)
-
-
-def close_inner_cache(inner_cache: dict[str, zipfile.ZipFile]) -> None:
-    """Close every inner zip memoised by :func:`read_planned_member`."""
-    for zin in inner_cache.values():
-        with contextlib.suppress(Exception):
-            zin.close()
-    inner_cache.clear()
+# NOTE: iter_zip_members above yields Garmin "Export All" nested members
+# (``<inner.zip>!<member>``) WITH their already-read inner bytes. The drain now
+# ingests straight from those yielded bytes in a single pass, so the old
+# ``read_planned_member`` PASS-2 re-reader (which descended into inner zips a
+# second time) is gone — one read per member, no inner-zip cache.
 
 
 def enqueue_archive(

@@ -1,4 +1,4 @@
-"""perf(drain): warm OSM caches + spatial-order the archive (2026-07-20).
+"""perf(drain): OSM cache knobs + member ordering (2026-07-20, revised 2026-08-15).
 
 The drain spent ~1–2 min PER activity because the OSM matcher reloaded
 17k–65k segments from the DB per activity: the segment/grid caches were sized
@@ -7,13 +7,21 @@ for the 512 Mi web service, and the archive processed members in upload order
 
 Pinned contracts:
 
-  (a) the whole-archive drain processes members in SPATIAL-LOCALITY order —
-      two interleaved regions come out grouped, not interleaved;
+  (a) ``_order_pending_batch`` (the per-member ``pending_activities`` queue,
+      ``drain_pending``) clusters a batch by SPATIAL-LOCALITY — its
+      ``_member_spatial_key`` / ``_spatial_sort_key`` helpers group two
+      interleaved regions rather than interleaving them;
   (b) with a warm segment cache, matching two activities over the SAME tiles
       loads segments from the DB ONCE (not once per activity);
   (c) the three OSM-cache caps are read from the environment at use time, so
       the 8 Gi drain job can size them up without touching the code defaults
       (which must stay safe for the 512 Mi web service).
+
+⚠️ The WHOLE-ARCHIVE drain (``drain_pending_archives``) no longer spatial-sorts:
+the raw-trace pivot removed the OSM matcher, so there is no segment cache to keep
+warm, and the sort forced a second I/O pass over the zip (re-opening every inner
+Garmin ``UploadedFiles_*.zip``). It now ingests in ONE pass, in iteration order
+(``TestArchiveIterationOrder`` below). The spatial helpers survive only for (a).
 
 DB-free: everything is driven through monkeypatched seams, so these run in the
 scratch venv without Postgres AND under the normal suite.
@@ -86,10 +94,12 @@ def _interleaved_archive() -> bytes:
     return buf.getvalue()
 
 
-class TestArchiveSpatialOrder:
-    def test_members_are_grouped_by_region(self, monkeypatch):
-        """(a) an interleaved 2-region archive is INGESTED grouped by region —
-        never region-hopping — so the segment cache stays warm."""
+class TestArchiveIterationOrder:
+    def test_every_member_ingested_once_in_iteration_order(self, monkeypatch):
+        """The one-pass archive drain ingests EVERY member exactly once, in the
+        order ``iter_zip_members`` yields them (zip order) — NO spatial re-sort,
+        NO re-read. Pins the post-pivot contract: the interleaved 2-region archive
+        is processed mont/spain/mont/spain/mont, not grouped."""
         from app.services import archive_intake
 
         zip_bytes = _interleaved_archive()
@@ -104,6 +114,8 @@ class TestArchiveSpatialOrder:
         def fake_ingest(db, *, user_id, filename, raw, resolved_sport,
                         contribute_heatmap, source, skip_heat_computation,
                         collect_touched_ways=None):
+            # The bytes the drain feeds ingest must be the member's REAL bytes.
+            assert raw.lstrip().startswith(b"<?xml"), raw[:40]
             processed_order.append(filename)
             return "imported", "act-id", None
 
@@ -125,11 +137,10 @@ class TestArchiveSpatialOrder:
         summary = drain_mod.drain_pending_archives(limit=1, pace_seconds=0.0)
 
         assert summary["imported"] == 5, summary
-        assert len(processed_order) == 5, processed_order
-        regions = [name.split("_", 1)[0] for name in processed_order]
-        # Contiguity: once the region changes it must never change back.
-        switches = sum(1 for i in range(1, len(regions)) if regions[i] != regions[i - 1])
-        assert switches == 1, f"region-hopping order (expected 1 switch): {processed_order}"
+        # One pass, iteration order — exactly the zip's own member order.
+        assert processed_order == [
+            "mont_1.gpx", "spain_1.gpx", "mont_2.gpx", "spain_2.gpx", "mont_3.gpx",
+        ], processed_order
 
 
 class _FakeResult:

@@ -1,9 +1,10 @@
 """Non-regression: Garmin "Export All" archives nest activity files INSIDE inner
-``UploadedFiles_*.zip`` zips. ``iter_zip_members`` emits them as
-``<inner.zip>!<member>``; the drain's PASS 2 must read them from the inner zip,
-NOT ``zf.read()`` the composite name off the OUTER archive — which KeyErrors and
-was the root cause of a real Garmin archive draining with ~100% member failures
-(``imported: 0, failed: 16361``, tester 2, 2026-08-13).
+``UploadedFiles_*.zip`` zips. The drain ingests archive members in a SINGLE pass,
+straight from the bytes ``archive_intake.iter_zip_members`` yields — so the
+load-bearing invariant is that iter_zip_members surfaces each nested member as
+``<inner.zip>!<member>`` WITH its real inner bytes (a bug here reproduced tester
+2's Garmin archive draining ``imported:0, failed:16361`` on 2026-08-13, before the
+single-pass fix).
 
 Also pins the single-file size cap: real long Garmin rides run 12-20 MB, which the
 old 10 MB ``MAX_GPX_SIZE`` 413'd.
@@ -49,52 +50,40 @@ def _mk_garmin_archive() -> bytes:
     })
 
 
-def test_iter_zip_members_yields_nested_members_as_composite_names():
+def test_iter_zip_members_yields_nested_members_with_real_inner_bytes():
+    """The single-pass drain ingests the bytes iter_zip_members yields, so each
+    Garmin nested member must surface as ``<inner.zip>!<member>`` WITH its real
+    inner GPX bytes (not the outer-zip entry, which doesn't exist → the old
+    ~100% Garmin failure)."""
     with zipfile.ZipFile(io.BytesIO(_mk_garmin_archive())) as zf:
-        names = [n for (n, _raw, _s) in archive_intake.iter_zip_members(zf)]
-    assert any("!" in n and n.endswith("_456984147534.gpx") for n in names), names
-    assert any("!" in n and n.endswith("_458924523384.gpx") for n in names), names
-
-
-def test_read_planned_member_resolves_nested_composite_name():
-    """The exact PASS-2 read the drain performs. OLD code did
-    ``zf.read('<inner.zip>!<member>')`` → KeyError on every Garmin member; the
-    fix descends into the inner zip and returns the real bytes."""
-    with zipfile.ZipFile(io.BytesIO(_mk_garmin_archive())) as zf:
-        names = [n for (n, _r, _s) in archive_intake.iter_zip_members(zf)]
-        nested = next(n for n in names if n.endswith("_456984147534.gpx"))
-        assert "!" in nested
-
-        # Reproduce the old failure: the composite name is NOT an outer-zip entry.
-        raised = False
-        try:
-            zf.read(nested)
-        except KeyError:
-            raised = True
-        assert raised, "composite name unexpectedly present in the outer zip"
-
-        # The fix returns the real inner GPX bytes (no KeyError).
-        inner_cache: dict = {}
-        raw = archive_intake.read_planned_member(zf, nested, inner_cache)
-        archive_intake.close_inner_cache(inner_cache)
+        members = list(archive_intake.iter_zip_members(zf))
+    by_name = {n: raw for (n, raw, _s) in members}
+    nested = [n for n in by_name if "!" in n]
+    assert any(n.endswith("_456984147534.gpx") for n in nested), nested
+    assert any(n.endswith("_458924523384.gpx") for n in nested), nested
+    # The yielded bytes are the REAL inner GPX (this is what the drain ingests).
+    for n in nested:
+        raw = by_name[n]
+        assert isinstance(raw, bytes)
         assert raw.lstrip().startswith(b"<?xml"), raw[:40]
         assert b"road_biking" in raw
+        # And NOT reachable as a flat outer-zip entry (the old KeyError path).
+        with zipfile.ZipFile(io.BytesIO(_mk_garmin_archive())) as zf2:
+            raised = False
+            try:
+                zf2.read(n)
+            except KeyError:
+                raised = True
+            assert raised, f"{n} should not be a flat outer-zip entry"
 
 
-def test_read_planned_member_flat_member_unchanged():
-    """A non-nested (flat) member still reads straight from the outer zip."""
-    archive = _zip_of({"activities/ride.gpx": _mk_gpx("Flat")})
-    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
-        raw = archive_intake.read_planned_member(zf, "activities/ride.gpx", {})
-    assert b"road_biking" in raw
-
-
-def test_read_planned_member_flat_name_with_bang_reads_from_outer():
-    """A FLAT member whose own filename contains '!' must still read from the
-    outer archive — only a '<inner.zip>!<member>' composite is nested."""
-    archive = _zip_of({"activities/ride!2.gpx": _mk_gpx("Bang")})
-    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
-        raw = archive_intake.read_planned_member(zf, "activities/ride!2.gpx", {})
+def test_iter_zip_members_flat_member_reads_normally():
+    """A non-nested (flat) member yields straight from the outer zip."""
+    with zipfile.ZipFile(io.BytesIO(_zip_of({"activities/ride.gpx": _mk_gpx("Flat")}))) as zf:
+        members = list(archive_intake.iter_zip_members(zf))
+    names = [n for (n, _r, _s) in members]
+    assert "activities/ride.gpx" in names
+    raw = next(r for (n, r, _s) in members if n == "activities/ride.gpx")
     assert b"road_biking" in raw
 
 
