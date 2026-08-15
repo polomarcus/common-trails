@@ -15,8 +15,7 @@ import { fetchCommunityStats, getPmtilesUrl } from '@/lib/cdn-cache';
 import { type CommunityStats, formatStatValue } from '@/lib/community-stats';
 import {
   communityTrailsSourceSpec, communityTrailsHeatLayerSpec, communityTrailsLineLayerSpec,
-  communityHeatSportFilter, LINE_CRISP_MINZOOM,
-  COMMUNITY_TRAILS_SOURCE, COMMUNITY_TRAILS_HEAT_LAYER, COMMUNITY_TRAILS_LINE_LAYER,
+  applyCommunityHeatSportFilter, LINE_CRISP_MINZOOM, COMMUNITY_TRAILS_SOURCE,
 } from '@/lib/community-heatmap-layers';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
@@ -292,13 +291,8 @@ export default function HomePage() {
   const applySportFilter = useCallback((sport: string) => {
     const m = mapRef.current;
     if (!m || !layersReady.current) return;
-    try {
-      const filter = communityHeatSportFilter(sport);
-      // The raster heatmap (over heat_points) is the hero's density visual; the
-      // point features carry `sport`, so the same chip filter applies to it.
-      if (m.getLayer(COMMUNITY_TRAILS_HEAT_LAYER)) m.setFilter(COMMUNITY_TRAILS_HEAT_LAYER, filter);
-      if (m.getLayer(COMMUNITY_TRAILS_LINE_LAYER)) m.setFilter(COMMUNITY_TRAILS_LINE_LAYER, filter);
-    } catch { /* silent */ }
+    // Shared SSOT with /map (useMapLayerSync) so both filter identically.
+    try { applyCommunityHeatSportFilter(m, sport); } catch { /* silent */ }
   }, []);
 
   // Load DFCI trails

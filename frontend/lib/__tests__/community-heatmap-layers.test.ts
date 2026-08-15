@@ -24,6 +24,8 @@ import {
   communityTrailsArrowLayerSpec,
   communityTrailsHeatLayerSpec,
   communityHeatSportFilter,
+  applyCommunityHeatSportFilter,
+  COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS,
   communityDirectionArrowFilter,
   COMMUNITY_TRAILS_SOURCE,
   COMMUNITY_TRAILS_GLOW_LAYER,
@@ -455,5 +457,54 @@ describe('direction-arrow dominance — the DOMINANT direction reads stronger', 
     const strong = { sport: 'mtb', oneway_score: 0.98, pass_count: 100, forward_count: 95, backward_count: 5 };
     expect(evalFilterExpr(communityDirectionArrowFilter(), balanced)).toBe(false);
     expect(evalFilterExpr(communityDirectionArrowFilter(), strong)).toBe(true);
+  });
+});
+
+/**
+ * Non-regression (2026-08-15): the /map sport chips did NOTHING — `heatmapSport`
+ * updated React state but nothing called `setFilter` on the map (home filtered
+ * inline in app/page.tsx; /map's useMapLayerSync never did). The fix extracts the
+ * SSOT helper `applyCommunityHeatSportFilter` that BOTH call. This drives the REAL
+ * helper against a fake map and asserts it pushes the sport filter to the density
+ * + line + hit layers — a filter that never reaches the map = the exact bug.
+ */
+describe('applyCommunityHeatSportFilter (SSOT — home + /map)', () => {
+  function fakeMap() {
+    const filters: Record<string, unknown> = {};
+    const known = new Set(COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS as readonly string[]);
+    return {
+      calls: filters,
+      getLayer: (id: string) => (known.has(id) ? { id } : undefined),
+      setFilter: (id: string, f: unknown) => { filters[id] = f; },
+    };
+  }
+
+  it('pushes the sport filter to the density + line + hit layers', () => {
+    const m = fakeMap();
+    applyCommunityHeatSportFilter(m, 'gravel');
+    for (const id of COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS) {
+      expect(m.calls[id], `layer ${id} must receive setFilter`).toEqual(
+        ['in', ['get', 'sport'], ['literal', ['gravel']]],
+      );
+    }
+  });
+
+  it('offroad expands to mtb+offroad+gravel (matches communityHeatSportFilter)', () => {
+    const m = fakeMap();
+    applyCommunityHeatSportFilter(m, 'offroad');
+    expect(m.calls[COMMUNITY_TRAILS_HEAT_LAYER]).toEqual(communityHeatSportFilter('offroad'));
+  });
+
+  it("'all' clears the filter (setFilter(null)) on every layer", () => {
+    const m = fakeMap();
+    applyCommunityHeatSportFilter(m, 'all');
+    for (const id of COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS) {
+      expect(m.calls[id]).toBeNull();
+    }
+  });
+
+  it('is safe on a partial map (community layers skipped when URL unset)', () => {
+    const m = { getLayer: () => undefined, setFilter: () => { throw new Error('should not be called'); } };
+    expect(() => applyCommunityHeatSportFilter(m, 'road')).not.toThrow();
   });
 });
