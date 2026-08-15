@@ -470,8 +470,13 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         client = storage.Client()
         bucket = client.bucket(bucket_name)
 
-        def _render_prefix(prefix: str, sport_filter: Collection[str] | None) -> None:
-            """Render one pyramid to ``<prefix>/`` (+ tiles.json + stale-purge)."""
+        def _render_prefix(
+            prefix: str, sport_filter: Collection[str] | None, max_z: int = max_zoom,
+        ) -> None:
+            """Render one pyramid to ``<prefix>/`` (+ tiles.json + stale-purge).
+
+            ``max_z`` caps this prefix's top zoom (per-sport calques render to a
+            LOWER zoom than the combined one — see the caller)."""
             written_keys: set[str] = set()
 
             def _upload_png(z: int, x: int, y: int, png: bytes) -> None:
@@ -486,13 +491,13 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
             t = time.time()
             stats = build_raster_pyramid(
                 geojson_path, upload_png=_upload_png,
-                min_zoom=min_zoom, max_zoom=max_zoom, sport_filter=sport_filter,
+                min_zoom=min_zoom, max_zoom=max_z, sport_filter=sport_filter,
             )
             purged = 0
             if stats.get("bounds"):
                 tiles_url = f"{_public_base_url(bucket_name)}/{prefix}/{{z}}/{{x}}/{{y}}.png"
                 tj = build_tilejson(
-                    tiles_url=tiles_url, min_zoom=min_zoom, max_zoom=max_zoom,
+                    tiles_url=tiles_url, min_zoom=min_zoom, max_zoom=max_z,
                     bounds=tuple(stats["bounds"]),
                     attribution=(
                         '© <a href="https://chemins-communs.fr">CHEMINS COMMUNS</a> '
@@ -517,18 +522,26 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
                             pass
             log.info(
                 "raster pyramid: %d tiles (z%d-%d, %d features), %d stale purged, in %.0fs → gs://%s/%s/",
-                stats.get("tiles", 0), min_zoom, max_zoom, stats.get("features", 0),
+                stats.get("tiles", 0), min_zoom, max_z, stats.get("features", 0),
                 purged, time.time() - t, bucket_name, prefix,
             )
 
-        # Combined all-sports calque (unchanged URL).
+        # Combined all-sports calque (unchanged URL, full z-range).
         _render_prefix("raster", None)
-        # Per-sport calques — each isolated so one sport's failure can't skip the
-        # rest of the build (the combined calque above already rendered).
+        # Per-sport calques at a LOWER top zoom (env HEATMAP_RASTER_PER_SPORT_MAX_ZOOM,
+        # default 12): 6 full z14 pyramids per build blow the 60-min job timeout
+        # (z13/z14 are ~95% of the tiles, each an individual GCS upload). A per-sport
+        # calque is planning CONTEXT — the client overzooms z12 above that. Each
+        # sport isolated so one failure can't skip the rest (combined already ran).
         if os.environ.get("HEATMAP_RASTER_PER_SPORT", "true").strip().lower() == "true":
+            try:
+                per_sport_max = int(os.environ.get("HEATMAP_RASTER_PER_SPORT_MAX_ZOOM", "12"))
+            except ValueError:
+                per_sport_max = 12
+            per_sport_max = min(per_sport_max, max_zoom)
             for sport in _CALQUE_SPORTS:
                 try:
-                    _render_prefix(f"raster-{sport}", set(expand_sport(sport)))
+                    _render_prefix(f"raster-{sport}", set(expand_sport(sport)), max_z=per_sport_max)
                 except Exception:  # pragma: no cover - best-effort per sport
                     log.warning("raster-%s calque failed (best-effort)", sport, exc_info=True)
     except Exception:
