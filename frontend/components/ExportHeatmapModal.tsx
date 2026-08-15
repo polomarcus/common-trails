@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { API_URL } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n';
 import { getCurrentUserId } from '@/lib/auth';
@@ -54,12 +55,14 @@ export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps)
 
   // "Use as a calque" — the community heatmap is also a public raster XYZ tile
   // pyramid, so it can be added as an OVERLAY layer in gpx.studio / VisuGPX via
-  // one URL (no download). See the raster pyramid built by build_pmtiles.
-  const calqueTilesJson =
-    'https://tiles.chemins-communs.fr/raster/tiles.json';
+  // one URL (no download). The XYZ TEMPLATE (…/{z}/{x}/{y}.png) is the correct
+  // URL — NOT tiles.json (gpx.studio would read that as a vector source and show
+  // nothing). Full tutorial + per-sport calques live at /calque.
+  const calqueTileUrl =
+    'https://tiles.chemins-communs.fr/raster/{z}/{x}/{y}.png';
   const [calqueCopied, setCalqueCopied] = useState(false);
   const copyCalqueUrl = () => {
-    navigator.clipboard?.writeText(calqueTilesJson).then(
+    navigator.clipboard?.writeText(calqueTileUrl).then(
       () => { setCalqueCopied(true); setTimeout(() => setCalqueCopied(false), 2000); },
       () => {/* clipboard blocked — the URL is visible to select manually */},
     );
@@ -186,7 +189,7 @@ export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps)
           </p>
           <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
             <code style={{ flex: 1, fontSize: 11, background: '#fff', border: '1px solid #cfe0d8', borderRadius: 6, padding: '7px 9px', wordBreak: 'break-all', color: '#2d6a4f' }}>
-              {calqueTilesJson}
+              {calqueTileUrl}
             </code>
             <button
               type="button"
@@ -197,6 +200,16 @@ export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps)
               {calqueCopied ? t('export.calque.copied') : t('export.calque.copy')}
             </button>
           </div>
+          {/* Prominent entry to the full step-by-step tutorial (with per-sport
+              calques) — Paul: "il faut bien indiquer dans l'UI comment exporter
+              vers gpx.studio". */}
+          <Link
+            href="/calque"
+            data-testid="calque-tutorial-link"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 12.5, fontWeight: 700, color: '#1a4731', textDecoration: 'none' }}
+          >
+            <span aria-hidden="true">🗺️</span> {t('export.calque.tutorialCta')} →
+          </Link>
         </div>
 
         {/* Static, pre-computed downloads. */}

@@ -125,3 +125,64 @@ def test_pass_count_drives_brightness(tmp_path):
                                      min_zoom=12, max_zoom=12)
     # Two well-separated traces → at z12 they occupy distinct tiles.
     assert stats["by_zoom"][12] >= 2
+
+def test_sport_filter_renders_only_matching_features(tmp_path):
+    """Per-sport calque (raster-<sport>/): sport_filter renders ONLY features
+    whose `sport` is in the set, and the bounds/tiles reflect just those — this
+    is what lets a gpx.studio overlay show one sport (a raster can't be filtered
+    client-side, so each sport is its own tileset)."""
+    gj = tmp_path / "hm.geojsonl"
+    _write_geojsonl(gj, [
+        # gravel near the Lez (Montpellier)
+        _line([[3.890, 43.610], [3.891, 43.611], [3.892, 43.612]], pass_count=50, sport="gravel"),
+        # road FAR away (near Toulouse) so its tiles are distinct z-cells
+        _line([[1.440, 43.600], [1.441, 43.601], [1.442, 43.602]], pass_count=90, sport="road"),
+    ])
+
+    def render(sport_filter):
+        tiles: dict[tuple[int, int, int], bytes] = {}
+        stats = pyr.build_raster_pyramid(
+            str(gj), upload_png=lambda z, x, y, b: tiles.__setitem__((z, x, y), b),
+            min_zoom=6, max_zoom=12, sport_filter=sport_filter,
+        )
+        return stats, tiles
+
+    all_stats, _ = render(None)
+    gravel_stats, gravel_tiles = render({"gravel"})
+    road_stats, road_tiles = render({"road"})
+
+    # Filtered builds see only their sport's features.
+    assert all_stats["features"] == 2
+    assert gravel_stats["features"] == 1
+    assert road_stats["features"] == 1
+
+    # Bounds are the FILTERED extent: gravel is near Montpellier (~3.89),
+    # road near Toulouse (~1.44) — they must not bleed into each other.
+    assert 3.88 < gravel_stats["bounds"][0] < 3.90
+    assert 1.43 < road_stats["bounds"][0] < 1.45
+
+    # The two sports occupy disjoint z12 tiles (700 km apart) → no shared tile.
+    g12 = {(x, y) for (z, x, y) in gravel_tiles if z == 12}
+    r12 = {(x, y) for (z, x, y) in road_tiles if z == 12}
+    assert g12 and r12 and g12.isdisjoint(r12)
+
+
+def test_offroad_filter_expands_to_mtb_gravel_offroad(tmp_path):
+    """The offroad calque must include mtb + gravel + offroad (mirrors the
+    backend SSOT config.expand_sport, which build_pmtiles feeds as the filter)."""
+    from app.config import expand_sport
+    gj = tmp_path / "hm.geojsonl"
+    _write_geojsonl(gj, [
+        _line([[3.890, 43.610], [3.891, 43.611]], sport="mtb"),
+        _line([[3.892, 43.612], [3.893, 43.613]], sport="gravel"),
+        _line([[3.894, 43.614], [3.895, 43.615]], sport="offroad"),
+        _line([[3.896, 43.616], [3.897, 43.617]], sport="road"),
+        _line([[3.898, 43.618], [3.899, 43.619]], sport="running"),
+    ])
+    tiles: dict = {}
+    stats = pyr.build_raster_pyramid(
+        str(gj), upload_png=lambda z, x, y, b: tiles.__setitem__((z, x, y), b),
+        min_zoom=6, max_zoom=12, sport_filter=set(expand_sport("offroad")),
+    )
+    # 3 of the 5 features (mtb+gravel+offroad), NOT road/running.
+    assert stats["features"] == 3

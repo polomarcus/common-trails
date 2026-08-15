@@ -36,6 +36,7 @@ const fr: Translations = {
   'export.calque.bodyAfter': ' (type raster / XYZ) avec cette URL de tuiles :',
   'export.calque.copy': 'Copier',
   'export.calque.copied': '✓ Copié',
+  'export.calque.tutorialCta': 'Utilise la heatmap comme calque (tuto pas-à-pas + par sport)',
   'export.downloads.legend': 'Téléchargements',
   'export.pmtiles.desc': '— vector tiles, France entière, MapLibre / pmtiles.js',
   'export.geojsonl.desc': '— GeoJSON par lignes (gzip), France entière, gpx.studio / QGIS',

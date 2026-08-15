@@ -5,9 +5,25 @@ import Link from 'next/link';
 import TopNav from '@/components/TopNav';
 import { useT } from '@/lib/i18n';
 
-// The one URL that matters — a raster XYZ template. NOT translated, NOT the
-// .json (gpx.studio would read it as vector) and NOT the .pmtiles.
-const TILE_URL = 'https://tiles.chemins-communs.fr/raster/{z}/{x}/{y}.png';
+// Raster XYZ templates — the combined ("all") calque + one per sport. NOT the
+// .json (gpx.studio would read it as vector) and NOT the .pmtiles. The per-sport
+// prefixes mirror the backend build (_CALQUE_SPORTS in build_pmtiles.py).
+const BASE = 'https://tiles.chemins-communs.fr';
+function tileUrlFor(sport: string): string {
+  return sport === 'all'
+    ? `${BASE}/raster/{z}/{x}/{y}.png`
+    : `${BASE}/raster-${sport}/{z}/{x}/{y}.png`;
+}
+
+// Chips mirror the map + home (Tous/Route/Gravel/VTT/Off-road/Course).
+const SPORTS: { key: string; emoji: string; label: string }[] = [
+  { key: 'all', emoji: '🔥', label: 'Tous' },
+  { key: 'road', emoji: '🚴', label: 'Route' },
+  { key: 'gravel', emoji: '🪨', label: 'Gravel' },
+  { key: 'mtb', emoji: '⛰️', label: 'VTT' },
+  { key: 'offroad', emoji: '🌿', label: 'Off-road' },
+  { key: 'running', emoji: '🏃', label: 'Course' },
+];
 
 const GREEN = '#2d6a4f';
 const DEEP = '#1a4731';
@@ -15,6 +31,8 @@ const INK = '#444';
 
 export default function CalquePage() {
   const t = useT();
+  const [sport, setSport] = useState('all');
+  const tileUrl = tileUrlFor(sport);
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f0' }}>
       <TopNav breadcrumbs={[{ label: t('calque.breadcrumb') }]} />
@@ -27,7 +45,8 @@ export default function CalquePage() {
           {t('calque.intro')}
         </p>
 
-        <CopyUrl t={t} />
+        <SportPicker sport={sport} setSport={setSport} />
+        <CopyUrl t={t} url={tileUrl} />
 
         <StepsTitle>{t('calque.stepsTitle')}</StepsTitle>
         <Step n={1} title={t('calque.step1Title')}>
@@ -35,7 +54,7 @@ export default function CalquePage() {
         </Step>
         <Step n={2} title={t('calque.step2Title')}>
           <P>{t('calque.step2Text')}</P>
-          <SettingsPanel t={t} />
+          <SettingsPanel t={t} url={tileUrl} />
         </Step>
         <Step n={3} title={t('calque.step3Title')}>
           <P>{t('calque.step3Text')}</P>
@@ -81,23 +100,53 @@ export default function CalquePage() {
   );
 }
 
+// ── Sport picker — swaps the calque URL between the combined + per-sport rasters ──
+
+function SportPicker({ sport, setSport }: { sport: string; setSport: (s: string) => void }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+      {SPORTS.map((s) => {
+        const on = s.key === sport;
+        return (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => setSport(s.key)}
+            aria-pressed={on}
+            style={{
+              cursor: 'pointer', border: `1px solid ${on ? DEEP : '#d8ddd8'}`, borderRadius: 999,
+              padding: '7px 14px', fontSize: 13.5, fontWeight: on ? 700 : 500,
+              background: on ? DEEP : '#fff', color: on ? '#fff' : '#4a5850',
+              display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all .12s',
+            }}
+          >
+            <span aria-hidden="true">{s.emoji}</span> {s.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── The copyable tile URL ────────────────────────────────────────────────────
 
-function CopyUrl({ t }: { t: (k: string) => string }) {
+function CopyUrl({ t, url }: { t: (k: string) => string; url: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
       if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(TILE_URL);
+        await navigator.clipboard.writeText(url);
       } else {
         const ta = document.createElement('textarea');
-        ta.value = TILE_URL; document.body.appendChild(ta); ta.select();
+        ta.value = url; document.body.appendChild(ta); ta.select();
         document.execCommand('copy'); ta.remove();
       }
       setCopied(true);
       setTimeout(() => setCopied(false), 1900);
     } catch { /* clipboard blocked — user can still select the text */ }
   };
+  // Highlight the {z}/{x}/{y} template inside the (sport-dependent) URL.
+  const [before, after] = url.split('{z}/{x}/{y}');
   return (
     <div style={{ background: '#10231a', borderRadius: 14, padding: '16px 16px 14px', boxShadow: '0 1px 4px rgba(0,0,0,0.12)' }}>
       <div style={{ fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#78a892', fontWeight: 700, margin: '0 0 10px' }}>
@@ -110,7 +159,7 @@ function CopyUrl({ t }: { t: (k: string) => string }) {
           borderRadius: 9, padding: '12px 13px', fontSize: 14, color: '#cfe9db',
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         }}>
-          https://tiles.chemins-communs.fr/raster/<span style={{ color: '#6fe3a8' }}>{'{z}/{x}/{y}'}</span>.png
+          {before}<span style={{ color: '#6fe3a8' }}>{'{z}/{x}/{y}'}</span>{after}
         </code>
         <button
           type="button"
@@ -131,7 +180,7 @@ function CopyUrl({ t }: { t: (k: string) => string }) {
 
 // ── Faux gpx.studio settings panel ───────────────────────────────────────────
 
-function SettingsPanel({ t }: { t: (k: string) => string }) {
+function SettingsPanel({ t, url }: { t: (k: string) => string; url: string }) {
   return (
     <div style={{ marginTop: 14, background: '#f6f8f6', border: '1px solid #e0e6e0', borderRadius: 11, overflow: 'hidden' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', background: DEEP, color: '#dff0e6', fontSize: 13.5, fontWeight: 700 }}>
@@ -139,7 +188,7 @@ function SettingsPanel({ t }: { t: (k: string) => string }) {
       </div>
       <div style={{ padding: '4px 13px 12px' }}>
         <Field label={t('calque.fieldName')} value="Chemins Communs" />
-        <Field label={t('calque.fieldUrl')} mono value="https://tiles.chemins-communs.fr/raster/{z}/{x}/{y}.png" />
+        <Field label={t('calque.fieldUrl')} mono value={url} />
         <Field label={t('calque.fieldZoom')} mono value="14" />
         <Field label={t('calque.fieldType')} selected value={t('calque.valType')} />
       </div>

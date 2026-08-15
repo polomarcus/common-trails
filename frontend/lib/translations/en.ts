@@ -36,6 +36,7 @@ const en: Translations = {
   'export.calque.bodyAfter': ' (raster / XYZ type) with this tiles URL:',
   'export.calque.copy': 'Copy',
   'export.calque.copied': '✓ Copied',
+  'export.calque.tutorialCta': 'Use the heatmap as an overlay (step-by-step + per sport)',
   'export.downloads.legend': 'Downloads',
   'export.pmtiles.desc': '— vector tiles, all of France, MapLibre / pmtiles.js',
   'export.geojsonl.desc': '— newline-delimited GeoJSON (gzip), all of France, gpx.studio / QGIS',
