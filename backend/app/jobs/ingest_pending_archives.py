@@ -52,13 +52,23 @@ log = logging.getLogger(__name__)
 # Per-way chunk size for the end-of-archive heat_edges_agg recompute.
 HEAT_AGG_WAYS_PER_CHUNK = 500
 
-# Inter-member sleep, the drain's f1-micro breathing room. 1.0 s was tuned for
-# the OSM-matching era (30 s–3 min of DB work per activity). Post raw-trace pivot
-# a member ingest is a light parse + dedup-SELECT + INSERT (~10-20 ms), so 1.0 s
-# was ~99% idle sleep and made a 16k-member Garmin archive a multi-HOUR paid job.
-# 0.25 s keeps ~7% DB duty cycle (safe) while cutting drain runtime ~4×. Raise
-# via DRAIN_PACE_SECONDS if a real large drain stresses Cloud SQL.
-_DEFAULT_PACE_SECONDS = 0.25
+# Inter-member pacing — the drain's f1-micro breathing room. A fixed sleep was
+# always a GUESS at the DB's speed: 1.0 s was tuned for the OSM-matching era
+# (30 s–3 min of DB work per activity); post raw-trace pivot a member ingest is a
+# light parse + dedup-SELECT + INSERT (measured ~2.5 ms on docker Postgres, more
+# on a loaded f1-micro), so any fixed guess is either wasteful (a 16k-member
+# Garmin archive spent HOURS asleep) or unsafe on a slow instance.
+#
+# ADAPTIVE pacing removes the guess: sleep proportional to the PREVIOUS member's
+# REAL ingest wall-time (× DRAIN_PACE_RATIO, capped at DRAIN_PACE_MAX_SECONDS), so
+# the drain self-throttles to whatever DB it's hitting. ratio 1.0 → sleep ≈ the
+# work took → ~50 % DB duty cycle; a fast DB barely pauses, a slow/loaded one (or
+# a heavy legacy matched-mode member) automatically gets proportionally MORE room.
+# An explicit DRAIN_PACE_SECONDS (or a pace_seconds arg) pins a FIXED sleep
+# instead — the ops escape hatch and how tests force pace=0.
+_DEFAULT_PACE_SECONDS = 0.25   # legacy fixed fallback (only when adaptive is off)
+_DEFAULT_PACE_RATIO = 1.0      # adaptive: sleep ≈ last ingest's wall-time
+_DEFAULT_PACE_MAX_SECONDS = 1.0  # cap so one slow/stalled ingest can't sleep forever
 _DEFAULT_STATEMENT_TIMEOUT_MS = 120_000
 
 # A pending_archives row is claimed (status→'processing') then terminally
@@ -77,13 +87,62 @@ _statement_timeout_listener = None  # kept for test cleanup (event.remove)
 
 
 def _drain_pace_seconds() -> float:
-    """Inter-member pacing, env-tunable (``DRAIN_PACE_SECONDS``). The sleep is
-    the DB's breathing room between two heavy per-activity ingests — raising it
-    in prod slows the drain but keeps the shared db-f1-micro responsive."""
+    """Legacy FIXED inter-member pacing (``DRAIN_PACE_SECONDS``). Only consulted
+    when adaptive pacing is disabled — see ``_resolve_pace_mode``. Kept as the
+    fixed fallback + ops escape hatch."""
     try:
         return float(os.environ.get("DRAIN_PACE_SECONDS", _DEFAULT_PACE_SECONDS))
     except ValueError:
         return _DEFAULT_PACE_SECONDS
+
+
+def _pace_ratio() -> float:
+    """Adaptive pace multiplier (``DRAIN_PACE_RATIO``): sleep = last ingest's
+    wall-time × ratio. 1.0 → ~50 % DB duty cycle; raise to back off harder on a
+    struggling f1-micro, lower to drain faster."""
+    try:
+        return max(0.0, float(os.environ.get("DRAIN_PACE_RATIO", _DEFAULT_PACE_RATIO)))
+    except ValueError:
+        return _DEFAULT_PACE_RATIO
+
+
+def _pace_cap_seconds() -> float:
+    """Upper bound on any single adaptive sleep (``DRAIN_PACE_MAX_SECONDS``) so a
+    one-off slow/stalled ingest can't translate into a multi-second pause."""
+    try:
+        return max(0.0, float(os.environ.get("DRAIN_PACE_MAX_SECONDS", _DEFAULT_PACE_MAX_SECONDS)))
+    except ValueError:
+        return _DEFAULT_PACE_MAX_SECONDS
+
+
+def _resolve_pace_mode(explicit_pace: float | None) -> tuple[str, float]:
+    """Decide FIXED vs ADAPTIVE pacing ONCE per drain run.
+
+    - An explicit ``pace_seconds`` arg, or a set ``DRAIN_PACE_SECONDS`` env, pins
+      a FIXED sleep → ``("fixed", seconds)`` (ops escape hatch; tests force 0).
+    - Otherwise ADAPTIVE → ``("adaptive", ratio)``: the loop sleeps the previous
+      member's real ingest time × ratio (capped), self-tuning to the live DB.
+    """
+    if explicit_pace is not None:
+        return ("fixed", max(0.0, explicit_pace))
+    env = os.environ.get("DRAIN_PACE_SECONDS")
+    if env is not None and env.strip() != "":
+        try:
+            return ("fixed", max(0.0, float(env)))
+        except ValueError:
+            pass
+    return ("adaptive", _pace_ratio())
+
+
+def _next_pace(mode: str, value: float, last_work_s: float | None, cap: float) -> float:
+    """The sleep to apply BEFORE the next member. Fixed mode → the pinned value;
+    adaptive → ``last_work_s × ratio`` capped (0 for the first member, which has
+    no prior measurement)."""
+    if mode == "fixed":
+        return value
+    if last_work_s is None:
+        return 0.0
+    return min(cap, last_work_s * value)
 
 
 def _apply_drain_statement_timeout() -> None:
@@ -415,16 +474,17 @@ def drain_pending(
     pace_seconds: float | None = None,
     skip_heat_computation: bool = False,
 ) -> dict:
-    """Drain up to ``limit`` pending members, one at a time with ``pace_seconds``
-    between them (default: env ``DRAIN_PACE_SECONDS``, 0.25 s). Returns a
-    summary dict. Never raises on a single bad member.
+    """Drain up to ``limit`` pending members, one at a time with ADAPTIVE pacing
+    between them (sleep ≈ the previous member's real ingest time ×
+    ``DRAIN_PACE_RATIO``, capped; a fixed ``pace_seconds`` / ``DRAIN_PACE_SECONDS``
+    overrides). Returns a summary dict. Never raises on a single bad member.
     """
     import sentry_sdk
 
     from app.db.session import SessionLocal
 
-    if pace_seconds is None:
-        pace_seconds = _drain_pace_seconds()
+    pace_mode, pace_value = _resolve_pace_mode(pace_seconds)
+    pace_cap = _pace_cap_seconds()
     _apply_drain_statement_timeout()
 
     summary = {"processed": 0, "imported": 0, "skipped": 0, "failed": 0}
@@ -443,9 +503,16 @@ def drain_pending(
     # tiny, default 50). A probe failure just leaves the member unordered.
     _order_pending_batch(batch)
 
+    last_work_s: float | None = None
     for i, row in enumerate(batch):
+        # Pace BEFORE this ingest, from the previous member's real cost.
+        if i > 0:
+            pace = _next_pace(pace_mode, pace_value, last_work_s, pace_cap)
+            if pace > 0:
+                time.sleep(pace)
         summary["processed"] += 1
         db = SessionLocal()
+        _t0 = time.monotonic()
         try:
             raw = archive_intake.load_member(row["storage_backend"], row["storage_key"])
             outcome, activity_id, error = _ingest_member_bytes(
@@ -475,9 +542,7 @@ def drain_pending(
                 log.warning("could not mark pending row failed", exc_info=True)
         finally:
             db.close()
-
-        if pace_seconds > 0 and i < len(batch) - 1:
-            time.sleep(pace_seconds)
+            last_work_s = time.monotonic() - _t0
 
     # ONE deduplicated agg recompute for the whole batch (deferred per-member).
     _recompute_heat_agg_batched(touched_ways)
@@ -640,11 +705,13 @@ def drain_pending_archives(
     member into memory at a time, so the ~400 MB decompressed payload is never
     fully materialised.
 
-    Members are ingested in SPATIAL-LOCALITY order (first-point z14 tile) so
-    consecutive activities reuse warm OSM segment tiles — the 8 Gi job sizes the
-    OSM caches up via ``OSM_TILE_CACHE_MAX`` / ``OSM_GRID_CACHE_MAX`` (set in
-    scripts/deploy-prod.sh) so a region-dense archive matches at cache-hit speed
-    instead of reloading 17k–65k segments per activity.
+    Members are ingested in ONE streaming pass, in iteration order (the OSM-era
+    spatial-locality pre-sort was dropped with the raw-trace pivot — there is no
+    segment cache to keep warm). Inter-member pacing is ADAPTIVE by default
+    (``_resolve_pace_mode`` / ``_next_pace``): each sleep is the previous member's
+    real ingest wall-time × ``DRAIN_PACE_RATIO`` (capped), so the drain self-tunes
+    to the live DB — trivial in raw mode (~ms/member), backing off automatically
+    on a slow/loaded instance. A fixed ``DRAIN_PACE_SECONDS`` overrides it.
 
     Idempotent + concurrency-safe: rows are claimed ``FOR UPDATE SKIP LOCKED``,
     and per-member ``file_hash`` dedup (+ the #453 cross-source promotion) in
@@ -655,8 +722,8 @@ def drain_pending_archives(
 
     from app.db.session import SessionLocal
 
-    if pace_seconds is None:
-        pace_seconds = _drain_pace_seconds()
+    pace_mode, pace_value = _resolve_pace_mode(pace_seconds)
+    pace_cap = _pace_cap_seconds()
     _apply_drain_statement_timeout()
 
     summary = {"archives": 0, "imported": 0, "skipped": 0, "failed": 0, "archives_failed": 0}
@@ -706,10 +773,13 @@ def drain_pending_archives(
                 # raw-trace pivot (no matcher), so the sort was vestigial and the
                 # re-read only DOUBLED the zip I/O — worst for big nested Garmin
                 # archives, where PASS 2 re-opened every inner UploadedFiles_*.zip.
-                # One pass reads each member exactly once. Pace is between INGESTS
-                # (the heavy DB work); iter_zip_members enforces the zip-bomb caps.
+                # One pass reads each member exactly once. Pace is ADAPTIVE —
+                # each sleep is the PREVIOUS member's real ingest time × ratio
+                # (capped), so the drain self-tunes to the DB; iter_zip_members
+                # enforces the zip-bomb caps.
                 first = True
                 ingested = 0
+                last_work_s: float | None = None
                 for name, raw, csv_sport in archive_intake.iter_zip_members(zf):
                     counts["members_total"] += 1
                     if csv_sport is archive_intake._OVERSIZE:
@@ -722,8 +792,10 @@ def drain_pending_archives(
                     resolved_sport = (
                         csv_sport if isinstance(csv_sport, str) else arch["fallback_sport"]
                     )
-                    if pace_seconds > 0 and not first:
-                        time.sleep(pace_seconds)
+                    if not first:
+                        pace = _next_pace(pace_mode, pace_value, last_work_s, pace_cap)
+                        if pace > 0:
+                            time.sleep(pace)
                     first = False
                     ingested += 1
                     # Heartbeat: a real archive is 1000s of members — without
@@ -736,6 +808,7 @@ def drain_pending_archives(
                             arch["id"], ingested,
                             counts["imported"], counts["skipped"], counts["failed"],
                         )
+                    _t0 = time.monotonic()
                     try:
                         outcome, _aid, _err = _ingest_member_bytes(
                             db,
@@ -753,6 +826,8 @@ def drain_pending_archives(
                         counts["failed"] += 1
                         sentry_sdk.capture_exception(exc)
                         log.error("archive %s member %s failed", arch["id"], name, exc_info=True)
+                    finally:
+                        last_work_s = time.monotonic() - _t0
             # End-of-archive: ONE deduplicated agg recompute, BEFORE the
             # terminal transition so status='done' implies a fresh aggregate.
             _recompute_heat_agg_batched(touched_ways)
@@ -828,7 +903,9 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=50, help="Max members per run (per-member queue).")
     parser.add_argument(
         "--pace", type=float, default=None,
-        help="Seconds between members (default: env DRAIN_PACE_SECONDS, else 0.25).",
+        help="Fixed seconds between members. Omit for ADAPTIVE pacing "
+             "(sleep ≈ last ingest's time × DRAIN_PACE_RATIO); DRAIN_PACE_SECONDS "
+             "pins a fixed sleep instead.",
     )
     parser.add_argument("--archive-limit", type=int, default=5, help="Max whole archives per run.")
     args = parser.parse_args()
