@@ -235,3 +235,42 @@ def test_raw_drain_500_members_throughput(client, auth_headers):
     finally:
         db.close()
     print(f"\nraw drain: {N} members in {elapsed:.1f}s = {per_member_ms:.1f} ms/member")
+
+
+@pytest.mark.slow
+def test_raw_drain_adaptive_pacing_stays_fast(client, auth_headers, monkeypatch):
+    """The DEFAULT (adaptive) pacing must NOT re-inflate the drain. With no
+    DRAIN_PACE_SECONDS pinned, a 300-member raw drain self-tunes: sleep ≈ each
+    member's ~ms ingest, so total time stays a small multiple of the pure-work
+    time — NOT the minutes a fixed 0.25 s pace would add (300 × 0.25 = 75 s)."""
+    from app.db.models import Activity
+    from app.db.session import SessionLocal
+    from app.jobs.ingest_pending_archives import drain_pending_archives
+
+    monkeypatch.delenv("DRAIN_PACE_SECONDS", raising=False)  # force adaptive
+    uid = _user_id(client, auth_headers)
+    N = 300
+    members, csv_rows = [], []
+    for i in range(N):
+        lat, lon = 43.0 + (i % 100) * 0.01, 3.0 + (i // 100) * 0.01
+        members.append((f"activities/ride_{i}.gpx", _gpx(f"Ride {i}", lat, lon, day=i)))
+        csv_rows.append(f"{i},2024-01-01,Ride {i},Ride,activities/ride_{i}.gpx")
+    _upload_and_complete(client, auth_headers, _archive(members, csv_rows))
+
+    t0 = time.monotonic()
+    # pace_seconds=None → the resolver picks adaptive (the prod default path).
+    summary = drain_pending_archives(limit=5, pace_seconds=None, skip_heat_computation=False)
+    elapsed = time.monotonic() - t0
+
+    assert summary["imported"] == N, summary
+    # Fixed 0.25 s would add 300×0.25 = 75 s of pure sleep on top of the work.
+    # Adaptive (ratio 1.0 ≈ 50 % duty) must stay well under that — a generous
+    # 30 s ceiling still proves the pacing didn't re-inflate.
+    assert elapsed < 30, f"adaptive drain took {elapsed:.1f}s for {N} members — pacing re-inflated?"
+
+    db = SessionLocal()
+    try:
+        assert db.query(Activity).filter(Activity.user_id == uid).count() == N
+    finally:
+        db.close()
+    print(f"\nadaptive raw drain: {N} members in {elapsed:.1f}s")
