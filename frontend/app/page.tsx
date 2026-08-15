@@ -178,9 +178,11 @@ function renderStep2Desc(desc: string, stravaLabel: string, garminLabel: string,
 // ── Calque overlay card — public discovery of the gpx.studio/VisuGPX layer ────
 function CalqueCard() {
   const { t } = useI18n();
-  // The XYZ tile TEMPLATE — NOT tiles.json (gpx.studio reads that as a vector
-  // source and shows nothing). Full tutorial + per-sport calques at /calque.
-  const url = 'https://tiles.chemins-communs.fr/raster/{z}/{x}/{y}.png';
+  // Per-sport XYZ tile TEMPLATE — the calque export is per sport (no all-sports
+  // blend). Road shown as the default example; the other sports + the full
+  // step-by-step live at /calque. NOT tiles.json (gpx.studio reads that as a
+  // vector source and shows nothing).
+  const url = 'https://tiles.chemins-communs.fr/raster-road/{z}/{x}/{y}.png';
   const [copied, setCopied] = useState(false);
   const copy = () => {
     navigator.clipboard?.writeText(url).then(

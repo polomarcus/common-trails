@@ -15,9 +15,10 @@ function tileUrlFor(sport: string): string {
     : `${BASE}/raster-${sport}/{z}/{x}/{y}.png`;
 }
 
-// Chips mirror the map + home (Tous/Route/Gravel/VTT/Off-road/Course).
+// The calque export is PER SPORT (no "Tous" — the all-sports blend is dominated
+// by the majority sport and isn't a useful planning overlay; the all-sports view
+// lives on the landing page's hero instead). Chips mirror the map/home sports.
 const SPORTS: { key: string; emoji: string; label: string }[] = [
-  { key: 'all', emoji: '🔥', label: 'Tous' },
   { key: 'road', emoji: '🚴', label: 'Route' },
   { key: 'gravel', emoji: '🪨', label: 'Gravel' },
   { key: 'mtb', emoji: '⛰️', label: 'VTT' },
@@ -31,7 +32,7 @@ const INK = '#444';
 
 export default function CalquePage() {
   const t = useT();
-  const [sport, setSport] = useState('all');
+  const [sport, setSport] = useState('road');
   const tileUrl = tileUrlFor(sport);
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f0' }}>
@@ -67,8 +68,8 @@ export default function CalquePage() {
         <Callout tone="danger" title={t('calque.trap1Title')}>
           <P>{t('calque.trap1Text')}</P>
           <UrlPicker
-            ok={['…/raster/{z}/{x}/{y}.png']}
-            ko={['…/raster/tiles.json', '….pmtiles']}
+            ok={['…/raster-road/{z}/{x}/{y}.png']}
+            ko={['…/raster-road/tiles.json', '….pmtiles']}
           />
         </Callout>
         <Callout tone="warn" title={t('calque.trap2Title')}>
