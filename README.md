@@ -215,6 +215,7 @@ not allowed. Same choice as Mastodon, Plausible, Grafana, Nextcloud.
 **Why ODbL + commercial for the data?** The same share-alike-or-pay logic: anyone can use the
 community heatmap — commercially included — as long as derived databases stay open under ODbL.
 A closed platform that won't open up buys a licence instead of free-riding on the commons.
+The point: industry giants don't get to use the community's data without an agreement.
 
 Your personal activities and OAuth tokens stay **private** and are never published without
 explicit opt-in. By submitting a PR you agree your contribution is published under AGPL-3.0
