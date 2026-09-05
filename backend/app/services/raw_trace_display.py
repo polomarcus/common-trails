@@ -47,6 +47,8 @@ import json
 import logging
 import math
 import os
+import struct
+import zlib
 
 from sqlalchemy import text as sa_text
 
@@ -673,6 +675,73 @@ def _reject_far_outliers(coords: list, max_km: float) -> list:
     return [p for p in coords if haversine_m(p[0], p[1], mlon, mlat) <= max_m]
 
 
+# ── Precomputed display coords (migration 0065) ──────────────────────────────
+# The rebuild used to stream the WHOLE corpus as geometry_geojson TEXT from the
+# db-f1-micro TWICE per build (~1.4 GB at 17.4k activities) and re-run
+# json.loads + bbox-clip + outlier-reject per activity each time. The
+# ``display_coords`` blob caches the polyline AFTER those stages (and BEFORE
+# densify + mask, which stay at read time in the same order → byte-identical
+# output): zlib'd little-endian ``[u8 version][u32 n][n × (f64 lon, f64 lat)]``.
+# ~3.6× fewer bytes off the micro instance, ~10× cheaper to decode.
+#
+# The blob is only trusted when ``display_coords_params`` equals the CURRENT
+# fingerprint below — a changed max-span / raw-bbox / algorithm version makes
+# every cached row fall back to the live pipeline (self-healing, no flag-day);
+# the backfill CLI (app.cli.backfill_display_coords) re-caches at the new
+# params. Deliberately NOT in the fingerprint: mask_meters + the densify gap —
+# both run at read time, so changing them needs no re-cache.
+DISPLAY_COORDS_VERSION = 1
+
+
+def display_coords_fingerprint() -> str:
+    """Canonical parameter fingerprint stored next to each blob."""
+    bbox_env = os.environ.get("HEATMAP_RAW_BBOX", "").strip() or "-"
+    return f"v{DISPLAY_COORDS_VERSION}|span={max_span_km():g}|bbox={bbox_env}"
+
+
+def encode_display_coords(geometry_geojson: str | None) -> bytes | None:
+    """Run the parse → bbox-clip → outlier-reject stages ONCE and pack the
+    surviving polyline. Returns ``None`` for unparseable/degenerate geometry
+    (the reader then treats the row through the live pipeline, which drops it
+    the same way). An all-clipped trace encodes as a VALID 0-point blob so the
+    reader can skip it without touching the JSON at all."""
+    if not geometry_geojson:
+        return None
+    try:
+        coords = json.loads(geometry_geojson).get("coordinates", [])
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return None
+    if not isinstance(coords, list) or len(coords) < 2:
+        return None
+    bbox_clip = plausible_bbox()
+    if bbox_clip is not None:
+        coords = [p for p in coords if _in_bbox(p, bbox_clip)]
+    if len(coords) >= 2:
+        coords = _reject_far_outliers(coords, max_span_km())
+    if len(coords) < 2:
+        coords = []
+    buf = bytearray()
+    buf += struct.pack("<BI", DISPLAY_COORDS_VERSION, len(coords))
+    for p in coords:
+        buf += struct.pack("<dd", float(p[0]), float(p[1]))
+    return zlib.compress(bytes(buf))
+
+
+def decode_display_coords(blob: bytes | None) -> list | None:
+    """Inverse of ``encode_display_coords``. ``None`` on any corruption or
+    version mismatch (→ caller falls back to the live pipeline)."""
+    if not blob:
+        return None
+    try:
+        raw = zlib.decompress(blob)
+        version, n = struct.unpack_from("<BI", raw, 0)
+        if version != DISPLAY_COORDS_VERSION or len(raw) != 5 + 16 * n:
+            return None
+        return [list(t) for t in struct.iter_unpack("<dd", raw[5:])]
+    except (zlib.error, struct.error):
+        return None
+
+
 def _stream_activities(db, *, bbox=None, since_days=None):
     """STREAM community-eligible, heatmap-consented activities one row at a time.
 
@@ -720,16 +789,27 @@ def _stream_activities(db, *, bbox=None, since_days=None):
         params["since_days"] = int(since_days)
 
     where = " AND ".join(conditions)
+    # Ship EITHER the compact display_coords blob OR the JSON, never both: the
+    # CASE gates on the parameter fingerprint SERVER-side, so a row with a
+    # current cache streams ~3.6× fewer bytes off the db-f1-micro (the rebuild's
+    # dominant cost) and a stale/missing cache transparently ships the JSON for
+    # the live-pipeline fallback.
+    params["dc_fp"] = display_coords_fingerprint()
     result = db.execute(sa_text(
         f"""
-        SELECT id, user_id, sport, geometry_geojson
+        SELECT id, user_id, sport,
+               CASE WHEN display_coords IS NOT NULL
+                     AND display_coords_params = :dc_fp
+                    THEN NULL ELSE geometry_geojson END,
+               CASE WHEN display_coords_params = :dc_fp
+                    THEN display_coords ELSE NULL END
         FROM activities
         WHERE {where}
         ORDER BY id
         """
     ), params).yield_per(_ACTIVITY_STREAM_BATCH)
     for r in result:
-        yield r[0], r[1], r[2], r[3]
+        yield r[0], r[1], r[2], r[3], r[4]
 
 
 def iter_masked_runs(db, *, bbox=None, sport=None, since_days=None):
@@ -753,30 +833,37 @@ def iter_masked_runs(db, *, bbox=None, sport=None, since_days=None):
     m = mask_meters()
     max_span = max_span_km()
     bbox_clip = plausible_bbox()
-    for aid, user_id, raw_sport, geojson_str in _stream_activities(
+    for aid, user_id, raw_sport, geojson_str, dc_blob in _stream_activities(
             db, bbox=bbox, since_days=since_days):
         norm_sport = _normalize_heat_edge_sport(raw_sport)
         if sport_filter is not None and norm_sport not in sport_filter:
             continue
-        try:
-            coords = json.loads(geojson_str).get("coordinates", [])
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            continue
-        if not coords or len(coords) < 2:
-            continue
-        # Region clip (opt-in) FIRST — drops wholly-corrupt traces (e.g. an
-        # activity entirely mid-ocean) that the median guard can't, since their
-        # own median sits on the glitch. This is the ``HEATMAP_RAW_BBOX`` glitch
-        # guard (``bbox_clip``), independent of the caller's export ``bbox``.
-        if bbox_clip is not None:
-            coords = [p for p in coords if _in_bbox(p, bbox_clip)]
-            if len(coords) < 2:
+        # FAST PATH (migration 0065): a fingerprint-current display_coords blob
+        # already IS the post-clip, post-outlier polyline — skip straight to
+        # densify + mask (same stages, same order → byte-identical output).
+        coords = decode_display_coords(dc_blob) if dc_blob is not None else None
+        if coords is None:
+            if geojson_str is None:
+                continue  # corrupt blob AND no JSON shipped — defensive; unreachable
+            try:
+                coords = json.loads(geojson_str).get("coordinates", [])
+            except (json.JSONDecodeError, AttributeError, TypeError):
                 continue
-        # Then reject GPS-glitch outliers (points implausibly far from the ride's
-        # own body) BEFORE densify — else densify would interpolate a dense line
-        # straight out to the corrupt coordinate. Raw mode draws verbatim, so
-        # this is the guard the OSM-match implicitly gave the matched pipeline.
-        coords = _reject_far_outliers(coords, max_span)
+            if not coords or len(coords) < 2:
+                continue
+            # Region clip (opt-in) FIRST — drops wholly-corrupt traces (e.g. an
+            # activity entirely mid-ocean) that the median guard can't, since their
+            # own median sits on the glitch. This is the ``HEATMAP_RAW_BBOX`` glitch
+            # guard (``bbox_clip``), independent of the caller's export ``bbox``.
+            if bbox_clip is not None:
+                coords = [p for p in coords if _in_bbox(p, bbox_clip)]
+                if len(coords) < 2:
+                    continue
+            # Then reject GPS-glitch outliers (points implausibly far from the ride's
+            # own body) BEFORE densify — else densify would interpolate a dense line
+            # straight out to the corrupt coordinate. Raw mode draws verbatim, so
+            # this is the guard the OSM-match implicitly gave the matched pipeline.
+            coords = _reject_far_outliers(coords, max_span)
         if len(coords) < 2:
             continue
         # Densify to <5 m spacing so the density lattice sees every cell the

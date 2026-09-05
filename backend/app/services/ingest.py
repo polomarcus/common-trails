@@ -34,10 +34,31 @@ from app.services.provenance import (
     is_community_source,
     should_promote_to_community,
 )
-from app.services.raw_trace_display import raw_display_enabled
+from app.services.raw_trace_display import (
+    display_coords_fingerprint,
+    encode_display_coords,
+    raw_display_enabled,
+)
 from app.services.routing_profiles import compute_heat_score, compute_trail_score
 
 logger = logging.getLogger(__name__)
+
+
+def _display_coords_pair(geometry_geojson, source, contribute_heatmap):
+    """``(blob, fingerprint)`` for the precomputed display-coords cache
+    (migration 0065) — community rows only (they're the only rows the raw
+    heatmap build ever streams), ``(None, None)`` otherwise. Best-effort: a
+    failure here must never fail an ingest — the build's live-pipeline fallback
+    handles NULL rows identically, just slower."""
+    if not contribute_heatmap or source != COMMUNITY_SOURCE:
+        return None, None
+    try:
+        blob = encode_display_coords(geometry_geojson)
+    except Exception:  # noqa: BLE001 — derived cache is strictly optional
+        return None, None
+    if blob is None:
+        return None, None
+    return blob, display_coords_fingerprint()
 
 HEATMAP_K_ANONYMITY = int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
 
@@ -3057,6 +3078,11 @@ def _promote_activity_to_community(
         act.geometry_geojson = geo
         act.geometry = _geom_from_geojson_sql(geo)
         act.geometry_source = activity_data.get("geometry_source", "stream")
+        # Refresh the display-coords cache (0065): the row just became
+        # community-eligible AND its geometry changed — the derived blob must
+        # follow the NEW authoritative geometry or the map would draw the old.
+        act.display_coords, act.display_coords_params = _display_coords_pair(
+            geo, COMMUNITY_SOURCE, contribute_heatmap)
         db.query(ActivityCell).filter(ActivityCell.activity_id == activity_id).delete()
         for cell_key in _geojson_to_cells(geo):
             db.add(ActivityCell(
@@ -3232,6 +3258,10 @@ def ingest_activity(
         activity_id = str(uuid.uuid4())
         sport = activity_data.get("sport", "road")
         geometry_geojson = activity_data.get("geometry_geojson")
+        # Precomputed display-coords cache (0065) — community rows only, so the
+        # raw heatmap build streams a compact blob instead of the full JSON.
+        dc_blob, dc_params = _display_coords_pair(
+            geometry_geojson, activity_data.get("source"), contribute_heatmap)
 
         activity = Activity(
             id=activity_id,
@@ -3242,6 +3272,8 @@ def ingest_activity(
             sport=sport,
             name=activity_data.get("name"),
             geometry_geojson=geometry_geojson,
+            display_coords=dc_blob,
+            display_coords_params=dc_params,
             # Dual-write: populate the binary PostGIS column (added in
             # migration 0036) alongside the legacy TEXT column. Once all
             # readers move to the binary column, the TEXT column will be
