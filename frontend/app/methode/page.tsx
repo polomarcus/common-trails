@@ -157,6 +157,19 @@ export default function MethodePage() {
           <P>{t('methode.provenanceApi')}</P>
         </Card>
 
+        {/* Licence des données — ODbL + licence commerciale en parallèle
+            ("share-alike or pay", décision Paul 2026-09-05). Le grant
+            contributeur correspondant vit dans le consentement v5. */}
+        <Card>
+          <Title emoji="📜">{t('methode.licenseTitle')}</Title>
+          <P>{t('methode.licenseDesc')}</P>
+          <P>{t('methode.licenseDual')}</P>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <Pill>ODbL 1.0</Pill>
+            <Pill color="#a8590a">{t('methode.pill.commercial')}</Pill>
+          </div>
+        </Card>
+
         {/* Traces intouchées */}
         <Card>
           <Title emoji="✋">{t('methode.integrityTitle')}</Title>

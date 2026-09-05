@@ -199,12 +199,22 @@ manual-smoke note). See [`docs/`](docs/) for the local-testing guide and deploy 
 Deliberate dual-license:
 
 - **Source code** — [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE)
-- **Community data** (the heatmap, exports) — [Open Database Licence 1.0 (ODbL)](https://opendatacommons.org/licenses/odbl/)
+- **Community data** (the heatmap, exports) — [Open Database Licence 1.0 (ODbL)](https://opendatacommons.org/licenses/odbl/),
+  **dual-licensed**: also available under a separate **commercial licence** for uses that
+  cannot meet ODbL's share-alike (e.g. folding the data into a closed, proprietary product).
+  Contact: paul@epauler.fr. Contributors grant the project a non-exclusive right to offer
+  their contributions under that commercial licence (contribution consent v5, 2026-09);
+  the ODbL publication is unconditional and permanent — the data stays free for everyone
+  who honours attribution + share-alike. Revenue funds the project's infrastructure.
 
 **Why AGPL?** It closes the *SaaS loophole* of plain GPL: if anyone takes this code, modifies
 it and runs it as an online service, they must publish their modifications under the same
 licence. Contribute, fork, self-host, sell support — all allowed; run a closed modified SaaS —
 not allowed. Same choice as Mastodon, Plausible, Grafana, Nextcloud.
+
+**Why ODbL + commercial for the data?** The same share-alike-or-pay logic: anyone can use the
+community heatmap — commercially included — as long as derived databases stay open under ODbL.
+A closed platform that won't open up buys a licence instead of free-riding on the commons.
 
 Your personal activities and OAuth tokens stay **private** and are never published without
 explicit opt-in. By submitting a PR you agree your contribution is published under AGPL-3.0

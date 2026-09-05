@@ -29,7 +29,7 @@ const en: Translations = {
 
   // ── Community heatmap EXPORT modal (formats, bbox, async, ODbL) ────────────
   'export.title': 'Export the community layer (heatmap)',
-  'export.intro': 'Download the community layer (every trace shared by contributors). Data published under the ODbL 1.0 licence — any republication must keep the attribution.',
+  'export.intro': 'Download the community layer (every trace shared by contributors). Data published under the ODbL 1.0 licence — attribution and share-alike required. Use in a closed product without share-alike: a separate commercial licence is available, contact us.',
   'export.calque.title': '🗺️ Use as an overlay in gpx.studio / VisuGPX',
   'export.calque.bodyBefore': 'Show the whole heatmap underneath and draw your route on top. In gpx.studio or VisuGPX, add a ',
   'export.calque.bodyStrong': 'custom map layer',
@@ -379,7 +379,10 @@ const en: Translations = {
   'strava.archive.helpLink': 'How to — official Strava guide',
   'strava.archive.exportPageLink': 'Open my Strava data export page',
   'strava.archive.dropOnHero': 'Once the ZIP lands in your inbox, just drop it in the zone above.',
-  'strava.archive.consentLabel': 'I consent to contributing them to the open community popularity map, published under the ODbL licence. The start and end of each activity are masked to protect my sensitive locations (home, work).',
+  // ⚠️ LEGAL WORDING (consent v5) — any material change here must bump
+  // CONTRIBUTION_CONSENT_VERSION (lib/strava-archive-consent.ts). The second
+  // sentence is the dual-licensing grant.
+  'strava.archive.consentLabel': 'I consent to contributing my traces to the open community popularity map, published under the ODbL 1.0 licence. I grant Chemins Communs a non-exclusive right to also offer them under a commercial licence (revenue funds the project; my traces stay free under ODbL). The start and end of each activity are masked to protect my sensitive locations (home, work).',
   'strava.archive.consentRequired': 'Tick the consent box to continue.',
   'strava.archive.consentHint': 'Tick the box to enable uploading.',
   'strava.archive.preparing': 'Preparing the archive…',
@@ -825,6 +828,7 @@ const en: Translations = {
   'methode.rawIntro': "The community map shows your real GPS traces, precise, exactly as you rode them. No algorithm redraws them onto a road network. The more a path is ridden, the more it stands out: popular routes emerge from thousands of overlapping traces.",
   'methode.rawNoMatch': "No map-matching, no snapping to a known network. What you see is the raw aggregate of real rides — desire lines included: the singletracks and forest tracks no map knows about.",
   'methode.pill.masking': "Endpoints masked",
+  'methode.pill.commercial': "Commercial licence on request",
   'methode.rawBuildTitle': "Raw traces, overlaid",
   'methode.rawBuildDesc': "The recipe is simple: we read your GPX file, mask its start and end, then overlay it. Popularity is counted on a fine grid (~5 m), but the drawn line stays your exact geometry — the grid only colours, never redraws.",
   'methode.rawStep1Title': "You upload",
@@ -844,6 +848,9 @@ const en: Translations = {
   'methode.privacyNotKanon': "The old per-matched-segment K-anonymity model is gone: the raw map replaces it with these two safeguards, plus a members-only export.",
   'methode.provenanceTitle': "Your traces, your consent",
   'methode.provenanceDesc': "Only the traces you upload yourself — your Strava export (.zip), or GPX/FIT files — feed the public community map, with your explicit consent and under the open ODbL licence.",
+  'methode.licenseTitle': "Open for everyone, paid for closed platforms",
+  'methode.licenseDesc': "The community map is published under ODbL 1.0: free reuse — commercial included — under two conditions: credit the contributors, and republish any derived database under the same open licence (share-alike). That is what keeps the commons a commons.",
+  'methode.licenseDual': "A closed platform that refuses share-alike (folding our data into a proprietary product without opening it back up) must acquire a separate commercial licence — contact: paul@epauler.fr. By contributing you grant the project that non-exclusive right; revenue funds the infrastructure. Your traces themselves stay free under ODbL, for everyone, forever.",
   'methode.provenanceApi': "Activities synced through the Strava API stay strictly personal (Strava API policy §5.4/§5.10): never on the public map, never in the open export.",
   'methode.integrityTitle': "Untouched traces",
   'methode.integrityDesc': "Your GPX file is stored exactly as you recorded it. We never re-route it, never simplify it, never snap it to a road. Only the two ends are masked for privacy — the rest is kept to the last point.",
@@ -862,7 +869,7 @@ const en: Translations = {
   'privacy.privateVsCommunity': '3. Private data vs. community data',
   'privacy.activitiesPrivate': 'Your activities are private. They are never shared, sold or made accessible to other users.',
   'privacy.kAnonymity': 'The community map is public and open. It is fed only by the traces you upload yourself (GPX/FIT files or a Strava export), with your explicit consent — never by activities synced via the Strava API. Your traces appear precise, but the start and end of each activity are automatically masked (200 m by default) so as not to reveal your sensitive locations (home, work). During the private beta a trace may be visible individually; a distinct-contributor threshold, tightened as the community grows, will progressively limit display to areas ridden by several users.',
-  'privacy.odbl': 'The community map data is published as open data under the ODbL 1.0 licence (Open Database License): anyone may reuse and download it, provided the same open licence is kept.',
+  'privacy.odbl': 'The community map data is published as open data under the ODbL 1.0 licence (Open Database License): anyone may reuse and download it, provided the source is credited and the same open licence is kept (share-alike). In parallel, contributors (consent v5) grant the project a non-exclusive right to offer this data under a separate commercial licence to parties unwilling to honour share-alike — revenue funds the project.',
   'privacy.usedFor': 'Your data is used exclusively for:',
   'privacy.routeCalc': 'Let you export your traces as GPX to third-party tools (gpx.studio, BRouter, Komoot)',
   'privacy.noSponsored': 'No sponsored or promoted results on the map',
@@ -1092,7 +1099,7 @@ const en: Translations = {
   'calque.noteAppsT': 'Other apps',
   'calque.noteApps': 'The same URL works in any app that accepts a raster XYZ layer (VisuGPX, MapLibre, Leaflet…).',
   'calque.noteLicenseT': 'Licence',
-  'calque.noteLicense': 'Data © Chemins Communs, reusable with attribution —',
+  'calque.noteLicense': 'Data © Chemins Communs contributors, reusable with attribution and share-alike —',
 };
 
 export default en;

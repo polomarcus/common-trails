@@ -41,7 +41,15 @@ export const STRAVA_ARCHIVE_REQUEST_URL =
 // v4 (2026-08-09): consent label trimmed to the essential grant (removed the
 // "Je confirme déposer mes propres traces…" preamble). Same substance (ODbL
 // contribution + endpoint masking) — bumped for a clean audit trail.
-export const CONTRIBUTION_CONSENT_VERSION = 'contribution-2026-08-v4';
+// v5 (2026-09-05): dual-licensing grant (Paul's decision, 2026-09-05). On top
+// of the ODbL publication the contributor now grants the project a
+// NON-EXCLUSIVE right to also license their contribution under a separate
+// commercial licence (the "share-alike or pay" model: closed platforms that
+// won't honour ODbL share-alike must buy a licence; revenue funds the
+// project). Without this grant the project could not lawfully sell such
+// licences over contributed data. Prior-consent (v1-v4) contributions carry NO
+// such grant — they are ODbL-only unless re-consented.
+export const CONTRIBUTION_CONSENT_VERSION = 'contribution-2026-09-v5';
 
 export interface ArchiveConsentState {
   consentChecked: boolean;
