@@ -123,8 +123,12 @@ const en: Translations = {
   'layout.ogAlt': 'Chemins Communs — community cycling trace map',
 
   // ── Home page ────────────────────────────────────────────────────────────────
-  'home.hero.quote': 'The trails belong to those who ride them.',
-  'home.hero.subtitle': 'The open, community cycling heatmap — built from the traces you share, free under the ODbL licence.',
+  // Tagline = the value prop, visible on EVERY viewport (the subtitle is hidden
+  // on mobile) — it must carry "community heatmap" + "build real routes" alone.
+  'home.hero.quote': 'The community cycling heatmap: the more a trail is ridden, the brighter it glows. Everything you need to build real routes.',
+  'home.hero.subtitle': '“The trails belong to those who ride them.” Road, gravel, MTB — an open, free map built from the traces you share, under the ODbL licence.',
+  'home.hero.legendLow': 'lightly ridden',
+  'home.hero.legendHigh': 'heavily ridden',
   'home.stats.contributors': 'contributors',
   'home.stats.traces': 'traces',
   'home.stats.km': 'km of paths',
@@ -136,7 +140,7 @@ const en: Translations = {
   'home.openSource.text': "Your GPS shouldn't enrich closed platforms. Here, every shared trace stays a common good — open data ODbL, source code AGPLv3.",
   // Hero overlay + section headings (previously hardcoded FR literals → caused
   // the mixed-language hero: t()'d strings followed the locale, these did not)
-  'home.hero.exploreMap': 'Explore the map →',
+  'home.hero.exploreMap': 'Explore the heatmap — no account needed →',
   'home.hero.contribute': 'Contribute to the map',
   'home.hero.connected': 'Connected',
   'home.hero.logout': 'Log out',
@@ -157,8 +161,8 @@ const en: Translations = {
   'home.step2.desc': 'From {strava}, {garmin} or your own GPX files — every shared trace enriches the common map, under the ODbL licence.',
   'home.step2.strava': 'Strava',
   'home.step2.garmin': 'Garmin',
-  'home.step3.title': 'Build better traces',
-  'home.step3.desc': 'Get a clean GPX from the heatmap, ready for gpx.studio, VisuGPX or your GPS device.',
+  'home.step3.title': 'Build real routes',
+  'home.step3.desc': "Never built a route before? Follow the brightest trails: the heatmap gives you a clean GPX, ready for gpx.studio, VisuGPX or your GPS device.",
   "home.calque.title": "🗺️ Use the heatmap as an overlay",
   "home.calque.intro": "Show the whole community map underneath in gpx.studio or VisuGPX and draw your route on top — add a custom layer (raster / XYZ) with this URL:",
   "home.calque.copy": "Copy",

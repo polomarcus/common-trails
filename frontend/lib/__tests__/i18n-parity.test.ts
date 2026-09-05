@@ -205,7 +205,7 @@ describe('Home page source — no hardcoded FR copy leaked back into the compone
   // FR phrase → the key it now lives under. Absence in the component source +
   // presence in fr.ts proves the string was routed, not merely deleted.
   const routedPhrases: Array<[string, string]> = [
-    ['Explorer la carte', 'home.hero.exploreMap'],
+    ['Explorer la heatmap', 'home.hero.exploreMap'],
     ['Ajoutez vos traces', 'home.hero.join'],
     ['Déconnexion', 'home.hero.logout'],
     ['Vous avez bien été déconnecté', 'home.hero.disconnected'],

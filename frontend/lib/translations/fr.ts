@@ -123,8 +123,13 @@ const fr: Translations = {
   'layout.ogAlt': 'Chemins Communs — carte communautaire des traces cyclistes',
 
   // ── Home page ────────────────────────────────────────────────────────────────
-  'home.hero.quote': 'Les chemins appartiennent à ceux qui les parcourent.',
-  'home.hero.subtitle': 'La carte de popularité cycliste, ouverte et communautaire — bâtie par les traces que vous partagez, libre sous licence ODbL.',
+  // Tagline = the value prop, visible on EVERY viewport (the subtitle is hidden
+  // on mobile) — it must say "heatmap communautaire" + "tracer de vrais
+  // parcours" on its own (Paul, 2026-09-05: heatmap power at a glance).
+  'home.hero.quote': 'La heatmap communautaire du vélo : plus un chemin est roulé, plus il brille. De quoi tracer de vrais parcours.',
+  'home.hero.subtitle': '« Les chemins appartiennent à ceux qui les parcourent. » Route, gravel, VTT — carte ouverte et gratuite, bâtie par les traces que vous partagez, libre sous licence ODbL.',
+  'home.hero.legendLow': 'peu roulé',
+  'home.hero.legendHigh': 'très roulé',
   'home.stats.contributors': 'contributeurs',
   'home.stats.traces': 'traces',
   'home.stats.km': 'km de chemins',
@@ -136,7 +141,7 @@ const fr: Translations = {
   'home.openSource.text': "Vos GPS ne devraient pas enrichir des plateformes fermées. Ici, chaque trace partagée reste un bien commun — données ouvertes ODbL, code source AGPLv3.",
   // Hero overlay + section headings (previously hardcoded FR literals → caused
   // the mixed-language hero: t()'d strings followed the locale, these did not)
-  'home.hero.exploreMap': 'Explorer la carte →',
+  'home.hero.exploreMap': 'Explorer la heatmap — sans compte →',
   'home.hero.contribute': 'Contribuer à la carte',
   'home.hero.connected': 'Connecté',
   'home.hero.logout': 'Déconnexion',
@@ -157,8 +162,8 @@ const fr: Translations = {
   'home.step2.desc': 'Depuis {strava}, {garmin} ou vos fichiers GPX — chaque trace partagée enrichit la carte commune, sous licence ODbL.',
   'home.step2.strava': 'Strava',
   'home.step2.garmin': 'Garmin',
-  'home.step3.title': 'Construisez de meilleures traces',
-  'home.step3.desc': 'Récupérez un GPX propre à partir de la heatmap, prêt pour gpx.studio, VisuGPX ou votre GPS.',
+  'home.step3.title': 'Tracez de vrais parcours',
+  'home.step3.desc': "Jamais tracé de parcours ? Suivez les chemins les plus lumineux : la heatmap vous donne un GPX propre, prêt pour gpx.studio, VisuGPX ou votre GPS.",
   "home.calque.title": "🗺️ Utilise la heatmap comme calque",
   "home.calque.intro": "Affiche toute la carte communautaire en fond dans gpx.studio ou VisuGPX et trace ton itinéraire par-dessus — ajoute une couche personnalisée (raster / XYZ) avec cette URL :",
   "home.calque.copy": "Copier",

@@ -443,7 +443,7 @@ export default function HomePage() {
             z-index: 8;
           }
           .hero-content h1 { font-size: 26px !important; margin-bottom: 6px !important; }
-          .hero-content .hero-tagline { font-size: 13px !important; margin-bottom: 8px !important; }
+          .hero-content .hero-tagline { font-size: 14px !important; margin-bottom: 8px !important; }
           .hero-content .hero-subtitle { display: none; }
           .hero-content .hero-search { display: none; }
           .hero-content .hero-badges { display: none; }
@@ -548,12 +548,28 @@ export default function HomePage() {
           }}>
             Chemins Communs
           </h1>
+          {/* Tagline = the value prop ("heatmap communautaire", "tracer de
+              vrais parcours") — the ONLY copy line kept on mobile, so it is
+              styled as the statement, not a muted quote. */}
           <p className="hero-tagline" style={{
-            fontSize: 14, color: 'rgba(255,255,255,0.65)', lineHeight: 1.5,
+            fontSize: 15.5, fontWeight: 600, color: 'rgba(255,255,255,0.92)', lineHeight: 1.45,
             margin: '0 0 10px', maxWidth: 440,
+            textShadow: '0 1px 12px rgba(0,0,0,0.4)',
           }}>
             {t('home.hero.quote')}
           </p>
+          {/* Heat legend — decodes the map behind at a glance (same ramp as
+              lib/community-heatmap-layers.ts: dark plum → hot pink → orange).
+              Kept on mobile: it IS the "what am I looking at" explainer. */}
+          <div data-testid="hero-heat-legend" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px' }}>
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', whiteSpace: 'nowrap' }}>{t('home.hero.legendLow')}</span>
+            <div style={{
+              flex: '0 1 150px', height: 6, borderRadius: 3,
+              background: 'linear-gradient(to right, #7a2058, #a83275, #d63384, #f06595, #ff8c42)',
+              boxShadow: '0 0 8px rgba(214,51,132,0.4)',
+            }} />
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', whiteSpace: 'nowrap' }}>{t('home.hero.legendHigh')}</span>
+          </div>
           <p className="hero-subtitle" style={{
             fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: 1.5,
             margin: '0 0 16px', maxWidth: 440,
