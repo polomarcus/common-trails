@@ -126,7 +126,11 @@ const en: Translations = {
   // Tagline = the value prop, visible on EVERY viewport (the subtitle is hidden
   // on mobile and short viewports) — it must carry the whole pitch on its own.
   'home.hero.tagline': 'The community cycling heatmap: the more a trail is ridden, the brighter it glows. Everything you need to build real routes.',
-  'home.hero.subtitle': '“The trails belong to those who ride them.” Road, gravel, MTB — an open, free map built from the traces you share, under the ODbL licence.',
+  // {thesis} = common.thesis — the project's motto, quoted here and on /methode
+  // from ONE key so the two pages can't drift apart (they already had: the old
+  // methode key said "travel them" while the hero said "ride them").
+  'home.hero.subtitle': '“{thesis}” Road, gravel, MTB — an open, free map built from the traces you share, under the ODbL licence.',
+  'common.thesis': 'The trails belong to those who ride them.',
   'home.hero.legendLow': 'lightly ridden',
   'home.hero.legendHigh': 'heavily ridden',
   'home.stats.contributors': 'contributors',
@@ -167,7 +171,7 @@ const en: Translations = {
   'home.step3.title': 'Build real routes',
   'home.step3.desc': "Never built a route before? Follow the brightest trails: the heatmap gives you a clean GPX, ready for gpx.studio, VisuGPX or your GPS device.",
   "home.calque.title": "🗺️ Use the heatmap as an overlay",
-  "home.calque.intro": "Show the whole community map underneath in gpx.studio or VisuGPX and draw your route on top — add a custom layer (raster / XYZ) with this URL:",
+  "home.calque.intro": "Show the heatmap underneath in gpx.studio and draw your route on top. 30 seconds: Settings → Map Layers → Custom layers, and paste this URL:",
   "home.calque.copy": "Copy",
   "home.calque.copied": "✓ Copied",
   "home.calque.tutorialCta": "Step-by-step guide + per-sport overlay",
@@ -846,7 +850,6 @@ const en: Translations = {
   'methode.routingTitle': "Routing? We leave you the best tools",
   'methode.routingDesc': "Common Trails is an open popularity map and a source of traces. It's not a router — the ecosystem does that better than we could. Export any trace as GPX and open it in gpx.studio, BRouter or Komoot to build and follow your route.",
   'methode.routingNote': "The built-in router was removed: being a router isn't our job.",
-  'methode.footerThesis': "Trails belong to those who travel them.",
   'methode.footerExplain': "Explain what we do, acknowledge what we don't know.",
   'methode.exploreMap': "Explore the heatmap →",
   'methode.footerLicense': "Source code AGPLv3 · Data ODbL 1.0 · Endpoints masked",
@@ -1060,14 +1063,16 @@ const en: Translations = {
   'calque.copied': 'Copied ✓',
   'calque.stepsTitle': 'Step by step',
   'calque.step1Title': 'Open the map settings',
-  'calque.step1Text': "On gpx.studio, hover the map icon at the top right, then click the cog to open the settings.",
+  // Menu path validated in the real gpx.studio (2026-09-05); the map-icon
+  // hover is the alternative route to the same panel.
+  'calque.step1Text': "On gpx.studio, open the “Settings” menu → “Map Layers”. (Or: hover the map icon at the top right and click the cog — same panel.)",
   'calque.step2Title': 'Add a custom layer',
-  'calque.step2Text': "Choose “Add custom layer”, then fill in exactly these four fields:",
+  'calque.step2Text': "Under “Custom layers”, choose “Add custom layer”, then fill in exactly these four fields:",
   'calque.step3Title': 'Save',
   'calque.step3Text': "Click “Add layer”, then “Save”. The layer is remembered in your browser for next time.",
   'calque.step4Title': 'Turn the overlay on',
   'calque.step4Text': "Hover the map icon again, go to “Overlays › Custom” and tick Chemins Communs.",
-  'calque.step4Text2': "The community's traces appear in green on top of your basemap. The more a segment is ridden, the more it stands out.",
+  'calque.step4Text2': "The community's traces appear in purple → orange on top of your basemap. The more a segment is ridden, the warmer and brighter it glows.",
   'calque.panelTitle': 'New custom layer',
   'calque.fieldName': 'Name',
   'calque.fieldUrl': 'Tiles URL',

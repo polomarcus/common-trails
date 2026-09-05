@@ -181,7 +181,7 @@ export default function MethodePage() {
           textAlign: 'center',
         }}>
           <p style={{ fontSize: 15, color: '#fff', fontWeight: 600, margin: '0 0 6px' }}>
-            {t('methode.footerThesis')}
+            {t('common.thesis')}
           </p>
           <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', margin: '0 0 16px' }}>
             {t('methode.footerExplain')}

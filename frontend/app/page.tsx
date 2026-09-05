@@ -592,7 +592,7 @@ export default function HomePage() {
             fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: 1.5,
             margin: '0 0 16px', maxWidth: 440,
           }}>
-            {t('home.hero.subtitle')}
+            {t('home.hero.subtitle', { thesis: t('common.thesis') })}
           </p>
 
           {/* Place search */}

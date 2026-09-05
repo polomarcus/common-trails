@@ -127,7 +127,10 @@ const fr: Translations = {
   // on mobile and short viewports) — it must carry the whole pitch on its own
   // (Paul, 2026-09-05: heatmap power at a glance).
   'home.hero.tagline': 'La heatmap communautaire du vélo : plus un chemin est roulé, plus il brille. De quoi tracer de vrais parcours.',
-  'home.hero.subtitle': '« Les chemins appartiennent à ceux qui les parcourent. » Route, gravel, VTT — carte ouverte et gratuite, bâtie par les traces que vous partagez, libre sous licence ODbL.',
+  // {thesis} = common.thesis — the project's motto, quoted here and on /methode
+  // from ONE key so the two pages can't drift apart.
+  'home.hero.subtitle': '« {thesis} » Route, gravel, VTT — carte ouverte et gratuite, bâtie par les traces que vous partagez, libre sous licence ODbL.',
+  'common.thesis': 'Les chemins appartiennent à ceux qui les parcourent.',
   'home.hero.legendLow': 'peu roulé',
   'home.hero.legendHigh': 'très roulé',
   'home.stats.contributors': 'contributeurs',
@@ -168,7 +171,7 @@ const fr: Translations = {
   'home.step3.title': 'Tracez de vrais parcours',
   'home.step3.desc': "Jamais tracé de parcours ? Suivez les chemins les plus lumineux : la heatmap vous donne un GPX propre, prêt pour gpx.studio, VisuGPX ou votre GPS.",
   "home.calque.title": "🗺️ Utilise la heatmap comme calque",
-  "home.calque.intro": "Affiche toute la carte communautaire en fond dans gpx.studio ou VisuGPX et trace ton itinéraire par-dessus — ajoute une couche personnalisée (raster / XYZ) avec cette URL :",
+  "home.calque.intro": "Affiche la heatmap en fond dans gpx.studio et trace ton itinéraire par-dessus. 30 secondes : Settings → Map Layers → Custom layers, et colle cette URL :",
   "home.calque.copy": "Copier",
   "home.calque.copied": "✓ Copié",
   "home.calque.tutorialCta": "Tuto pas-à-pas + calque par sport",
@@ -847,7 +850,6 @@ const fr: Translations = {
   'methode.routingTitle': "Le routage ? On vous laisse les meilleurs outils",
   'methode.routingDesc': "Chemins communs est une carte de popularité ouverte et une source de traces. Ce n'est pas un routeur — l'écosystème le fait mieux que nous. Exportez n'importe quelle trace en GPX et ouvrez-la dans gpx.studio, BRouter ou Komoot pour construire et suivre votre itinéraire.",
   'methode.routingNote': "Le routeur intégré a été retiré : être un routeur n'est pas notre métier.",
-  'methode.footerThesis': "Les chemins appartiennent à ceux qui les parcourent.",
   'methode.footerExplain': "Expliquer ce que nous faisons, reconnaître ce que nous ne savons pas.",
   'methode.exploreMap': "Explorer la heatmap →",
   'methode.footerLicense': "Code source AGPLv3 · Données ODbL 1.0 · Extrémités masquées",
@@ -1061,14 +1063,16 @@ const fr: Translations = {
   'calque.copied': 'Copié ✓',
   'calque.stepsTitle': 'La marche à suivre',
   'calque.step1Title': 'Ouvre les réglages de carte',
-  'calque.step1Text': "Sur gpx.studio, survole l'icône de carte en haut à droite, puis clique sur la roue crantée pour ouvrir les réglages.",
+  // Menu path validated by Paul in the real gpx.studio (2026-09-05); the
+  // map-icon hover is the alternative route to the same panel.
+  'calque.step1Text': "Sur gpx.studio, menu « Settings » → « Map Layers ». (Ou : survole l'icône de carte en haut à droite puis clique la roue crantée — même panneau.)",
   'calque.step2Title': 'Ajoute une couche personnalisée',
-  'calque.step2Text': "Choisis « Ajouter une couche » (Add custom layer), puis renseigne exactement ces quatre champs :",
+  'calque.step2Text': "Dans « Custom layers », choisis « Ajouter une couche » (Add custom layer), puis renseigne exactement ces quatre champs :",
   'calque.step3Title': 'Enregistre',
   'calque.step3Text': "Clique « Ajouter la couche », puis « Enregistrer ». La couche est mémorisée dans ton navigateur pour tes prochaines visites.",
   'calque.step4Title': 'Active le calque',
   'calque.step4Text': "Survole à nouveau l'icône de carte, va dans « Superpositions › Personnalisé » (Overlays › Custom) et coche Chemins Communs.",
-  'calque.step4Text2': "Les traces de la communauté apparaissent en vert par-dessus ton fond de carte. Plus une portion est empruntée, plus elle ressort.",
+  'calque.step4Text2': "Les traces de la communauté apparaissent en violet → orange par-dessus ton fond de carte. Plus une portion est empruntée, plus elle ressort chaude et lumineuse.",
   'calque.panelTitle': 'Nouvelle couche personnalisée',
   'calque.fieldName': 'Nom',
   'calque.fieldUrl': 'URL des tuiles',
