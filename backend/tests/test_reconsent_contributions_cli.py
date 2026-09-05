@@ -21,7 +21,11 @@ import uuid
 import pytest
 
 from app.cli.reconsent_contributions import (
-    RECONSENT_SOURCE, V5_TEXT_FR, V5_VERSION, apply_reconsent, plan_reconsent,
+    RECONSENT_SOURCE,
+    V5_TEXT_FR,
+    V5_VERSION,
+    apply_reconsent,
+    plan_reconsent,
 )
 from app.db.models import ContributionConsent, User
 from app.db.session import SessionLocal
