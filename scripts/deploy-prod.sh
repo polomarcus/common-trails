@@ -517,14 +517,16 @@ job_memory_for() {
     # the job's tmpfs = RAM, so it MUST stay large. 8Gi is justified/measured.
     "common-trails-ingest-pending-archives-${ENV}")
       echo "8Gi" ;;
-    # The raw-trace PMTiles builder: the bounded, server-side-cursor streaming
-    # build (#506/#516) is memory-bounded by occupied geography, not by point
-    # count. 4Gi (was 2Gi) is belt-and-suspenders headroom for tippecanoe now
-    # that the local-count regrade can grow the feature file (the #621 regrade
-    # OOM-killed a 2Gi job at 1.3 M features; fix/regrade-oom-and-pool bounds the
-    # split, and this raises the ceiling too — the drain job is already 8Gi).
+    # The raw-trace PMTiles builder: 8Gi (was 4Gi) since 2026-09-05 — the 4Gi
+    # ceiling OOM-killed the prod build (signal 9, execution 22mkq) once a heavy
+    # contributor grew the corpus to 17.4k activities: the export child (lattice
+    # + parse high-water) + the tmpfs geojsonl intermediates (/tmp = RAM on
+    # Cloud Run, ~1.4 GB) + tippecanoe all share one cgroup. Measured green at
+    # 8Gi (39-min build, 2026-09-05). ⚠️ This assertion runs on EVERY deploy —
+    # lowering it here silently reverts any out-of-band bump and re-breaks the
+    # rebuild (exactly how the first 8Gi bump got lost).
     "common-trails-build-pmtiles-${ENV}")
-      echo "4Gi" ;;
+      echo "8Gi" ;;
     # import-strava / strava-subscribe / resync-strava: light Strava sync jobs,
     # 512Mi each (their current live sizing, captured via `describe`).
     "common-trails-import-strava-${ENV}"|"common-trails-strava-subscribe-${ENV}"|"common-trails-resync-strava-${ENV}")
