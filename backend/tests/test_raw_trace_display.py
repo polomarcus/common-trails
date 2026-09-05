@@ -689,3 +689,57 @@ def test_drawn_coordinates_are_precise_not_lattice_snapped(tmp_path, monkeypatch
         db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": _TEST_USER})
         db.commit()
         db.close()
+
+
+# ── Isolated (child-process) export — the 2026-09-02 4Gi OOM fix ─────────────
+# The raw export's peak RAM (lattice + parse-arena high-water) used to stay
+# resident while tippecanoe ran on top of it in the same memory cgroup (which
+# also counts every tmpfs /tmp file). build_pmtiles now runs the export in a
+# short-lived spawn-child by default so that memory is RETURNED to the OS.
+
+def test_isolated_export_enabled_matrix(monkeypatch):
+    """Explicit env wins in both directions; default = isolated everywhere
+    EXCEPT under pytest (so monkeypatched exporter seams keep working)."""
+    from app.jobs.build_pmtiles import _isolated_export_enabled
+
+    monkeypatch.setenv("HEATMAP_EXPORT_ISOLATED", "true")
+    assert _isolated_export_enabled() is True
+    monkeypatch.setenv("HEATMAP_EXPORT_ISOLATED", "false")
+    assert _isolated_export_enabled() is False
+    # Unset → we ARE under pytest here (PYTEST_CURRENT_TEST set) → in-process.
+    monkeypatch.delenv("HEATMAP_EXPORT_ISOLATED", raising=False)
+    assert "PYTEST_CURRENT_TEST" in os.environ
+    assert _isolated_export_enabled() is False
+    # ...and without the pytest marker the default is ISOLATED (prod).
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert _isolated_export_enabled() is True
+
+
+def test_isolated_export_child_matches_in_process(tmp_path, monkeypatch,
+                                                  seeded_activities):
+    """GOLDEN: the spawn-child export produces BYTE-IDENTICAL artifacts + stats
+    to the in-process path (same corpus, same files) — the isolation must be a
+    pure memory-lifecycle change, never a data change. Drives the REAL child
+    (real spawn, its own DB session), not a mock."""
+    from app.jobs.build_pmtiles import _run_raw_export
+
+    db = SessionLocal()
+    try:
+        monkeypatch.setenv("HEATMAP_EXPORT_ISOLATED", "false")
+        s_in: dict = {}
+        w_in = _run_raw_export(db, str(tmp_path / "a.geojsonl"),
+                               str(tmp_path / "a_pts.geojsonl"), s_in)
+
+        monkeypatch.setenv("HEATMAP_EXPORT_ISOLATED", "true")
+        s_child: dict = {}
+        w_child = _run_raw_export(db, str(tmp_path / "b.geojsonl"),
+                                  str(tmp_path / "b_pts.geojsonl"), s_child)
+    finally:
+        db.close()
+
+    assert w_child == w_in > 0
+    assert s_child == s_in
+    assert (tmp_path / "b.geojsonl").read_bytes() == (tmp_path / "a.geojsonl").read_bytes()
+    assert (tmp_path / "b_pts.geojsonl").read_bytes() == (tmp_path / "a_pts.geojsonl").read_bytes()
+    # The stats hand-off file is cleaned up.
+    assert not (tmp_path / "b.geojsonl.stats.json").exists()
