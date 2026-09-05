@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.65.0](https://github.com/polomarcus/common-trails/compare/backend-v0.64.0...backend-v0.65.0) (2026-09-05)
+
+
+### Features
+
+* **calque:** per-sport export only — drop the all-sports "Tous" raster ([#14](https://github.com/polomarcus/common-trails/issues/14)) ([df82cad](https://github.com/polomarcus/common-trails/commit/df82cadee6e73b0bfa2fcfe0419d7530f3a35607))
+* **calque:** per-sport raster overlays for gpx.studio + discoverability ([#11](https://github.com/polomarcus/common-trails/issues/11)) ([b15573b](https://github.com/polomarcus/common-trails/commit/b15573b07c17c28ffa3d4c00770a237eee02a117))
+
+
+### Bug Fixes
+
+* **calque:** cap per-sport rasters at z12 so all 6 pyramids fit the job ([#13](https://github.com/polomarcus/common-trails/issues/13)) ([30e0442](https://github.com/polomarcus/common-trails/commit/30e04420067674c1db3c969acf69f3da1dab222f))
+* **ingest:** Garmin nested-zip archives + larger GPX cap + surfaced upload errors ([#4](https://github.com/polomarcus/common-trails/issues/4)) ([9b1fcf0](https://github.com/polomarcus/common-trails/commit/9b1fcf00aab0fb465eb89e7e07852d50cc9a4602))
+* **map:** React [#418](https://github.com/polomarcus/common-trails/issues/418) hydration crash for logged-in visitors (+ honest k_anonymity pointer) ([#6](https://github.com/polomarcus/common-trails/issues/6)) ([2eec3cc](https://github.com/polomarcus/common-trails/commit/2eec3cc87c3fbc43f278fbfd0e7ce9c62299414d))
+* **pmtiles:** isolate the raw export in a child process — the 4Gi OOM fix ([#16](https://github.com/polomarcus/common-trails/issues/16)) ([7b35ee2](https://github.com/polomarcus/common-trails/commit/7b35ee269f55f77ce77d095c4642554cf9b1c67b))
+
 ## [0.64.0](https://github.com/polomarcus/common-trails/compare/backend-v0.63.2...backend-v0.64.0) (2026-08-10)
 
 

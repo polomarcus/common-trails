@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.7.168](https://github.com/polomarcus/common-trails/compare/common-trails-v0.7.167...common-trails-v0.7.168) (2026-09-05)
+
+
+### Features
+
+* **calque:** per-sport export only — drop the all-sports "Tous" raster ([#14](https://github.com/polomarcus/common-trails/issues/14)) ([df82cad](https://github.com/polomarcus/common-trails/commit/df82cadee6e73b0bfa2fcfe0419d7530f3a35607))
+* **calque:** per-sport raster overlays for gpx.studio + discoverability ([#11](https://github.com/polomarcus/common-trails/issues/11)) ([b15573b](https://github.com/polomarcus/common-trails/commit/b15573b07c17c28ffa3d4c00770a237eee02a117))
+* **export:** surface heatmap export on home + main menu, fix calque URL ([#12](https://github.com/polomarcus/common-trails/issues/12)) ([9c29797](https://github.com/polomarcus/common-trails/commit/9c29797c52346512a0b3ff747316b996e14db469))
+
+
+### Bug Fixes
+
+* **calque:** cap per-sport rasters at z12 so all 6 pyramids fit the job ([#13](https://github.com/polomarcus/common-trails/issues/13)) ([30e0442](https://github.com/polomarcus/common-trails/commit/30e04420067674c1db3c969acf69f3da1dab222f))
+* **deploy:** assert build-pmtiles job at 8Gi — CD was reverting the OOM bump ([#19](https://github.com/polomarcus/common-trails/issues/19)) ([e4e4843](https://github.com/polomarcus/common-trails/commit/e4e48431c8f3b34b7e8ec633425ecef3190bc727))
+* **ingest:** Garmin nested-zip archives + larger GPX cap + surfaced upload errors ([#4](https://github.com/polomarcus/common-trails/issues/4)) ([9b1fcf0](https://github.com/polomarcus/common-trails/commit/9b1fcf00aab0fb465eb89e7e07852d50cc9a4602))
+* **map:** apply the sport chip filter on /map (it did nothing before) ([#10](https://github.com/polomarcus/common-trails/issues/10)) ([555c70f](https://github.com/polomarcus/common-trails/commit/555c70f5f632d216c88f16bdc5479ed8326f8266))
+* **map:** React [#418](https://github.com/polomarcus/common-trails/issues/418) hydration crash for logged-in visitors (+ honest k_anonymity pointer) ([#6](https://github.com/polomarcus/common-trails/issues/6)) ([2eec3cc](https://github.com/polomarcus/common-trails/commit/2eec3cc87c3fbc43f278fbfd0e7ce9c62299414d))
+* **pmtiles:** isolate the raw export in a child process — the 4Gi OOM fix ([#16](https://github.com/polomarcus/common-trails/issues/16)) ([7b35ee2](https://github.com/polomarcus/common-trails/commit/7b35ee269f55f77ce77d095c4642554cf9b1c67b))
+
+
+### Miscellaneous
+
+* remove orphan tile-cache SW + add archive-import cost-optimization analysis ([#5](https://github.com/polomarcus/common-trails/issues/5)) ([c7d3be9](https://github.com/polomarcus/common-trails/commit/c7d3be9b94c97f6fa9058c40d8ec0a3d7f0d5001))
+
 ## [0.7.167](https://github.com/polomarcus/common-trails/compare/common-trails-v0.7.166...common-trails-v0.7.167) (2026-08-10)
 
 
