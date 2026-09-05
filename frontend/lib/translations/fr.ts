@@ -124,9 +124,9 @@ const fr: Translations = {
 
   // ── Home page ────────────────────────────────────────────────────────────────
   // Tagline = the value prop, visible on EVERY viewport (the subtitle is hidden
-  // on mobile) — it must say "heatmap communautaire" + "tracer de vrais
-  // parcours" on its own (Paul, 2026-09-05: heatmap power at a glance).
-  'home.hero.quote': 'La heatmap communautaire du vélo : plus un chemin est roulé, plus il brille. De quoi tracer de vrais parcours.',
+  // on mobile and short viewports) — it must carry the whole pitch on its own
+  // (Paul, 2026-09-05: heatmap power at a glance).
+  'home.hero.tagline': 'La heatmap communautaire du vélo : plus un chemin est roulé, plus il brille. De quoi tracer de vrais parcours.',
   'home.hero.subtitle': '« Les chemins appartiennent à ceux qui les parcourent. » Route, gravel, VTT — carte ouverte et gratuite, bâtie par les traces que vous partagez, libre sous licence ODbL.',
   'home.hero.legendLow': 'peu roulé',
   'home.hero.legendHigh': 'très roulé',
@@ -141,7 +141,10 @@ const fr: Translations = {
   'home.openSource.text': "Vos GPS ne devraient pas enrichir des plateformes fermées. Ici, chaque trace partagée reste un bien commun — données ouvertes ODbL, code source AGPLv3.",
   // Hero overlay + section headings (previously hardcoded FR literals → caused
   // the mixed-language hero: t()'d strings followed the locale, these did not)
-  'home.hero.exploreMap': 'Explorer la heatmap — sans compte →',
+  // Placement-neutral label (footer + logged-in hero); the "sans compte"
+  // acquisition variant is hero-only, for visitors without an account.
+  'home.hero.exploreMap': 'Explorer la heatmap →',
+  'home.hero.exploreMapNoAccount': 'Explorer la heatmap — sans compte →',
   'home.hero.contribute': 'Contribuer à la carte',
   'home.hero.connected': 'Connecté',
   'home.hero.logout': 'Déconnexion',
@@ -846,7 +849,7 @@ const fr: Translations = {
   'methode.routingNote': "Le routeur intégré a été retiré : être un routeur n'est pas notre métier.",
   'methode.footerThesis': "Les chemins appartiennent à ceux qui les parcourent.",
   'methode.footerExplain': "Expliquer ce que nous faisons, reconnaître ce que nous ne savons pas.",
-  'methode.exploreMap': "Explorer la carte →",
+  'methode.exploreMap': "Explorer la heatmap →",
   'methode.footerLicense': "Code source AGPLv3 · Données ODbL 1.0 · Extrémités masquées",
 
   // ── Privacy page ─────────────────────────────────────────────────────────────

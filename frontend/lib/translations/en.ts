@@ -124,8 +124,8 @@ const en: Translations = {
 
   // ── Home page ────────────────────────────────────────────────────────────────
   // Tagline = the value prop, visible on EVERY viewport (the subtitle is hidden
-  // on mobile) — it must carry "community heatmap" + "build real routes" alone.
-  'home.hero.quote': 'The community cycling heatmap: the more a trail is ridden, the brighter it glows. Everything you need to build real routes.',
+  // on mobile and short viewports) — it must carry the whole pitch on its own.
+  'home.hero.tagline': 'The community cycling heatmap: the more a trail is ridden, the brighter it glows. Everything you need to build real routes.',
   'home.hero.subtitle': '“The trails belong to those who ride them.” Road, gravel, MTB — an open, free map built from the traces you share, under the ODbL licence.',
   'home.hero.legendLow': 'lightly ridden',
   'home.hero.legendHigh': 'heavily ridden',
@@ -140,7 +140,10 @@ const en: Translations = {
   'home.openSource.text': "Your GPS shouldn't enrich closed platforms. Here, every shared trace stays a common good — open data ODbL, source code AGPLv3.",
   // Hero overlay + section headings (previously hardcoded FR literals → caused
   // the mixed-language hero: t()'d strings followed the locale, these did not)
-  'home.hero.exploreMap': 'Explore the heatmap — no account needed →',
+  // Placement-neutral label (footer + logged-in hero); the "no account"
+  // acquisition variant is hero-only, for visitors without an account.
+  'home.hero.exploreMap': 'Explore the heatmap →',
+  'home.hero.exploreMapNoAccount': 'Explore the heatmap — no account needed →',
   'home.hero.contribute': 'Contribute to the map',
   'home.hero.connected': 'Connected',
   'home.hero.logout': 'Log out',
@@ -845,7 +848,7 @@ const en: Translations = {
   'methode.routingNote': "The built-in router was removed: being a router isn't our job.",
   'methode.footerThesis': "Trails belong to those who travel them.",
   'methode.footerExplain': "Explain what we do, acknowledge what we don't know.",
-  'methode.exploreMap': "Explore the map →",
+  'methode.exploreMap': "Explore the heatmap →",
   'methode.footerLicense': "Source code AGPLv3 · Data ODbL 1.0 · Endpoints masked",
 
   // ── Privacy page ─────────────────────────────────────────────────────────────

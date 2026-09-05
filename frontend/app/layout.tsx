@@ -6,19 +6,23 @@ import BetaBanner from '../components/BetaBanner';
 import NotificationToasts from '../components/NotificationToasts';
 import './globals.css';
 
+// Mirrors the hero tagline (home.hero.tagline) — the crawler/link-preview copy
+// must sell the same positioning as the page itself.
+const SITE_DESCRIPTION = 'La heatmap communautaire du vélo : plus un chemin est roulé, plus il brille. De quoi tracer de vrais parcours. Open source, données ODbL.';
+
 export const metadata: Metadata = {
   title: {
     default: 'Chemins communs',
     template: '%s — Chemins communs',
   },
-  description: 'La carte de popularité cycliste ouverte et communautaire — bâtie par les traces que vous partagez. Open source, ODbL.',
+  description: SITE_DESCRIPTION,
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://chemins-communs.fr'),
   icons: {
     icon: `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/icon.svg`,
   },
   openGraph: {
     title: 'Chemins communs',
-    description: 'La carte de popularité cycliste ouverte et communautaire — bâtie par les traces que vous partagez. Open source, ODbL.',
+    description: SITE_DESCRIPTION,
     type: 'website',
     locale: 'fr_FR',
     images: [{
@@ -32,7 +36,7 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: 'Chemins communs',
-    description: 'La carte de popularité cycliste ouverte et communautaire — bâtie par les traces que vous partagez. Open source, ODbL.',
+    description: SITE_DESCRIPTION,
     images: [`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/og-card.png`],
   },
 };

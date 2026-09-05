@@ -172,7 +172,9 @@ describe('Home hero + sections — every routed string exists in both locales', 
   // hardcoded CTA/badges in French). Routing them through t() fixes the mix.
   // If any is un-routed again, add it here so the leak stays caught.
   const homeKeys = [
-    'home.hero.exploreMap', 'home.hero.contribute',
+    'home.hero.tagline', 'home.hero.subtitle',
+    'home.hero.legendLow', 'home.hero.legendHigh',
+    'home.hero.exploreMap', 'home.hero.exploreMapNoAccount', 'home.hero.contribute',
     'home.hero.connected', 'home.hero.logout', 'home.hero.join', 'home.hero.joinSub', 'home.hero.disconnected',
     'home.onboarding.ctaTitle', 'home.onboarding.cta', 'home.onboarding.ctaSub',
     'home.badge.anonymized', 'home.badge.openSource',
