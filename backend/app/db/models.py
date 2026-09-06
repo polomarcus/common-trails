@@ -19,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -357,6 +358,14 @@ class Activity(Base):
     # Binary PostGIS geometry — added in 0036 to halve storage and skip
     # `json.loads` on every read. Dual-written by ingest_activity().
     geometry = Column(Geometry("LINESTRING", srid=4326), nullable=True) if _HAS_GEOALCHEMY else Column(Text, nullable=True)
+    # Precomputed DISPLAY-ONLY cleaned coords for the raw heatmap build
+    # (migration 0065): zlib'd float64 (lon, lat) pairs, post bbox-clip +
+    # outlier-reject, PRE densify + mask. Derived cache — geometry_geojson stays
+    # the untouched source of truth (Crouzet). `display_coords_params` is the
+    # parameter fingerprint; the reader ignores the blob when it doesn't match
+    # the current env (see raw_trace_display.display_coords_fingerprint).
+    display_coords = Column(LargeBinary, nullable=True)
+    display_coords_params = Column(Text, nullable=True)
     distance_m = Column(Float, nullable=True)
     elevation_gain_m = Column(Float, nullable=True)
     file_hash = Column(String(64), nullable=True)  # SHA256 for file dedup

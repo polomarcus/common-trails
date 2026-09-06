@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -34,10 +34,31 @@ from app.services.provenance import (
     is_community_source,
     should_promote_to_community,
 )
-from app.services.raw_trace_display import raw_display_enabled
+from app.services.raw_trace_display import (
+    display_coords_fingerprint,
+    encode_display_coords,
+    raw_display_enabled,
+)
 from app.services.routing_profiles import compute_heat_score, compute_trail_score
 
 logger = logging.getLogger(__name__)
+
+
+def _display_coords_pair(geometry_geojson, source, contribute_heatmap):
+    """``(blob, fingerprint)`` for the precomputed display-coords cache
+    (migration 0065) — community rows only (they're the only rows the raw
+    heatmap build ever streams), ``(None, None)`` otherwise. Best-effort: a
+    failure here must never fail an ingest — the build's live-pipeline fallback
+    handles NULL rows identically, just slower."""
+    if not contribute_heatmap or source != COMMUNITY_SOURCE:
+        return None, None
+    try:
+        blob = encode_display_coords(geometry_geojson)
+    except Exception:  # noqa: BLE001 — derived cache is strictly optional
+        return None, None
+    if blob is None:
+        return None, None
+    return blob, display_coords_fingerprint()
 
 HEATMAP_K_ANONYMITY = int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
 
@@ -3057,6 +3078,11 @@ def _promote_activity_to_community(
         act.geometry_geojson = geo
         act.geometry = _geom_from_geojson_sql(geo)
         act.geometry_source = activity_data.get("geometry_source", "stream")
+        # Refresh the display-coords cache (0065): the row just became
+        # community-eligible AND its geometry changed — the derived blob must
+        # follow the NEW authoritative geometry or the map would draw the old.
+        act.display_coords, act.display_coords_params = _display_coords_pair(
+            geo, COMMUNITY_SOURCE, contribute_heatmap)
         db.query(ActivityCell).filter(ActivityCell.activity_id == activity_id).delete()
         for cell_key in _geojson_to_cells(geo):
             db.add(ActivityCell(
@@ -3232,6 +3258,10 @@ def ingest_activity(
         activity_id = str(uuid.uuid4())
         sport = activity_data.get("sport", "road")
         geometry_geojson = activity_data.get("geometry_geojson")
+        # Precomputed display-coords cache (0065) — community rows only, so the
+        # raw heatmap build streams a compact blob instead of the full JSON.
+        dc_blob, dc_params = _display_coords_pair(
+            geometry_geojson, activity_data.get("source"), contribute_heatmap)
 
         activity = Activity(
             id=activity_id,
@@ -3242,6 +3272,8 @@ def ingest_activity(
             sport=sport,
             name=activity_data.get("name"),
             geometry_geojson=geometry_geojson,
+            display_coords=dc_blob,
+            display_coords_params=dc_params,
             # Dual-write: populate the binary PostGIS column (added in
             # migration 0036) alongside the legacy TEXT column. Once all
             # readers move to the binary column, the TEXT column will be
@@ -4550,34 +4582,125 @@ def load_seed_gpx(user_id: str) -> int:
     return count
 
 
-def get_user_activities(user_id: str) -> list[dict]:
-    """Return all activities for a user (private). Used by me_activities endpoint."""
+def _map_activity_filters(user_id: str, sport: str | None):
+    """WHERE clauses shared by ``count_user_map_activities`` and
+    ``iter_user_map_activities`` — the /me/activities semantics: the user's
+    own rows, with a non-empty geometry, optionally one sport."""
+    from app.db.models import Activity
+
+    conds = [
+        Activity.user_id == user_id,
+        Activity.geometry_geojson.isnot(None),
+        Activity.geometry_geojson != "",
+    ]
+    if sport is not None:
+        conds.append(Activity.sport == sport)
+    return conds
+
+
+def count_user_map_activities(user_id: str, sport: str | None = None) -> int:
+    """COUNT of the user's map-displayable activities (geometry + sport filter).
+
+    Companion to ``iter_user_map_activities`` — the /me/activities endpoint
+    streams its body, so ``total`` (emitted at the head of the JSON) must be
+    known before the rows are iterated. An indexed COUNT on ``user_id`` is
+    far cheaper than materialising the rows to len() them (the pre-fix code
+    loaded EVERY column of EVERY activity — 14k rows ≈ 0.4–1.4 GB for a real
+    beta user — into web RAM just to slice ``[-limit:]``).
+    """
+    from sqlalchemy import func, select
+
     from app.db.models import Activity
     from app.db.session import SessionLocal
 
     db = SessionLocal()
     try:
-        activities = db.query(Activity).filter(Activity.user_id == user_id).all()
-        return [
-            {
-                "id": a.id,
-                "user_id": a.user_id,
-                "provider": a.provider,
-                "provider_activity_id": a.provider_activity_id,
-                "sport": a.sport,
-                "name": a.name,
-                "geometry_geojson": a.geometry_geojson,
-                "distance_m": a.distance_m,
-                "elevation_gain_m": a.elevation_gain_m,
-                "file_hash": a.file_hash,
-                "contribute_heatmap": a.contribute_heatmap,
-                "moving_time": a.moving_time,
-                "activity_date": (a.activity_date or a.created_at).isoformat() if (a.activity_date or a.created_at) else None,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "total_photo_count": a.total_photo_count or 0,
+        stmt = (
+            select(func.count())
+            .select_from(Activity)
+            .where(*_map_activity_filters(user_id, sport))
+        )
+        return int(db.execute(stmt).scalar() or 0)
+    finally:
+        db.close()
+
+
+def iter_user_map_activities(
+    user_id: str, sport: str | None = None, limit: int | None = None
+) -> Iterator[dict]:
+    """Stream the user's ``limit`` most recent map-displayable activities,
+    oldest-first — filtering/ordering/limiting pushed into SQL.
+
+    Replaces ``get_user_activities`` (which SELECTed every column of the
+    user's WHOLE corpus — geometry_geojson included — then filtered and
+    sliced ``[-limit:]`` in Python: an OOM on a 512Mi instance for a 14k-
+    activity user, and the biggest recurring db-f1-micro read).
+
+    Semantics preserved from the ``[-limit:]`` era:
+    - "most recent" = ``COALESCE(activity_date, created_at)`` — the same
+      effective date the response serialises as ``activity_date``;
+    - rows come back ASCENDING by that date (the old code returned the tail
+      of an insertion-ordered list, so the newest activity streamed LAST —
+      the frontend and tests rely on ``features[-1]`` being the newest);
+    - only the columns the /me/activities Feature serialises are projected
+      (``geometry_geojson`` IS served per-feature, so it's fetched — but only
+      for the ``limit`` selected rows);
+    - ``yield_per`` streams rows through a server-side cursor so at most a
+      small window of geometries is in memory at once. The session stays
+      open until the generator is exhausted or closed (StreamingResponse
+      closes it on client disconnect via the ``finally``).
+    """
+    from sqlalchemy import func, select
+
+    from app.db.models import Activity
+    from app.db.session import SessionLocal
+
+    effective_date = func.coalesce(Activity.activity_date, Activity.created_at)
+    inner = (
+        select(
+            Activity.id,
+            Activity.provider,
+            Activity.provider_activity_id,
+            Activity.sport,
+            Activity.name,
+            Activity.geometry_geojson,
+            Activity.distance_m,
+            Activity.elevation_gain_m,
+            Activity.moving_time,
+            Activity.activity_date,
+            Activity.created_at,
+            Activity.total_photo_count,
+        )
+        .where(*_map_activity_filters(user_id, sport))
+        .order_by(effective_date.desc().nullslast(), Activity.id.desc())
+    )
+    if limit is not None:
+        inner = inner.limit(limit)
+    sub = inner.subquery()
+    outer_date = func.coalesce(sub.c.activity_date, sub.c.created_at)
+    stmt = (
+        select(sub)
+        .order_by(outer_date.asc().nullsfirst(), sub.c.id.asc())
+        .execution_options(yield_per=200)
+    )
+
+    db = SessionLocal()
+    try:
+        for r in db.execute(stmt):
+            yield {
+                "id": r.id,
+                "provider": r.provider,
+                "provider_activity_id": r.provider_activity_id,
+                "sport": r.sport,
+                "name": r.name,
+                "geometry_geojson": r.geometry_geojson,
+                "distance_m": r.distance_m,
+                "elevation_gain_m": r.elevation_gain_m,
+                "moving_time": r.moving_time,
+                "activity_date": (r.activity_date or r.created_at).isoformat() if (r.activity_date or r.created_at) else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "total_photo_count": r.total_photo_count or 0,
             }
-            for a in activities
-        ]
     finally:
         db.close()
 
@@ -4585,7 +4708,7 @@ def get_user_activities(user_id: str) -> list[dict]:
 def get_user_activities_meta(user_id: str) -> list[dict]:
     """Return activity metadata only — NO geometry_geojson.
 
-    Companion to ``get_user_activities`` for callers that don't need the
+    Companion to ``iter_user_map_activities`` for callers that don't need the
     LineString (personal-bests, per-sport stats). Projects only the
     columns required for aggregation; cuts payload from MB-per-row to
     a few hundred bytes and lets SQLAlchemy stream rows instead of

@@ -139,6 +139,86 @@ def export_geojson(db, path: str, props: list[str], min_uc: int,
     return written
 
 
+def _isolated_export_enabled() -> bool:
+    """Run the raw export in a CHILD process (the 2026-09-02 OOM fix)?
+
+    Default ON — except under pytest (``PYTEST_CURRENT_TEST`` is set by the
+    runner for the duration of each test), where the export runs in-process so
+    the suite's monkeypatched ``export_raw_geojson`` seams keep working (a
+    spawned child re-imports the real module and would silently ignore them).
+    ``HEATMAP_EXPORT_ISOLATED=true|false`` overrides explicitly in BOTH
+    directions (ops/debugging, and the isolation golden test which forces the
+    real child under pytest).
+    """
+    v = os.environ.get("HEATMAP_EXPORT_ISOLATED", "").strip().lower()
+    if v in ("true", "false"):
+        return v == "true"
+    return "PYTEST_CURRENT_TEST" not in os.environ
+
+
+def _raw_export_child(geojson_path: str, points_path: str, stats_path: str) -> None:
+    """Child-process entrypoint for the raw export (spawned by
+    ``_run_raw_export`` — see there for WHY). Opens its OWN DB session (a
+    spawn-child inherits no parent connection), writes the two geojsonl files,
+    and hands the scalar results back through a tiny JSON file."""
+    from app.db.session import SessionLocal
+    from app.services.raw_trace_display import export_raw_geojson
+    db = SessionLocal()
+    try:
+        stats: dict = {}
+        written = export_raw_geojson(db, geojson_path, points_path=points_path,
+                                     stats_out=stats)
+        with open(stats_path, "w") as f:
+            json.dump({"written": written,
+                       "network_m": stats.get("network_m"),
+                       "occupied_cells": stats.get("occupied_cells")}, f)
+    finally:
+        db.close()
+
+
+def _run_raw_export(db, geojson_path: str, points_path: str,
+                    stats_out: dict) -> int:
+    """Run the raw export, ISOLATED in a child process by default.
+
+    WHY (the 2026-09-02 4Gi OOM, execution 22mkq, signal 9): the export's peak
+    RAM — the per-cell lattice plus the allocator high-water of streaming/parsing
+    thousands of activity geometries — stays RESIDENT in this process afterwards
+    (pymalloc never returns its arenas), and tippecanoe then runs as a
+    subprocess ON TOP of it, inside the same Cloud Run memory cgroup that ALSO
+    counts every /tmp file (tmpfs = RAM). Growing the corpus (a heavy
+    contributor's +1089 rides) pushed that stack past 4Gi. Running the export in
+    a short-lived spawn-child returns ALL of its memory to the OS at exit, so
+    tippecanoe starts with a clean budget. Bonus: if the export itself is
+    OOM-killed, the cgroup killer takes the (biggest) CHILD and this parent
+    survives to log a clear error instead of the whole container dying silently.
+
+    In-process fallback (TEST_MODE / ``HEATMAP_EXPORT_ISOLATED=false``) is
+    byte-identical — same function, same files.
+    """
+    from app.services.raw_trace_display import export_raw_geojson
+    if not _isolated_export_enabled():
+        return export_raw_geojson(db, geojson_path, points_path=points_path,
+                                  stats_out=stats_out)
+    import multiprocessing
+    stats_path = geojson_path + ".stats.json"
+    ctx = multiprocessing.get_context("spawn")
+    p = ctx.Process(target=_raw_export_child,
+                    args=(geojson_path, points_path, stats_path))
+    p.start()
+    p.join()
+    if p.exitcode != 0:
+        raise RuntimeError(
+            f"raw export child exited {p.exitcode} "
+            "(negative = killed by signal; -9 usually means the export itself "
+            "outgrew the job memory — raise the job's --memory)")
+    with open(stats_path) as f:
+        payload = json.load(f)
+    os.unlink(stats_path)
+    stats_out["network_m"] = payload.get("network_m")
+    stats_out["occupied_cells"] = payload.get("occupied_cells")
+    return int(payload["written"])
+
+
 def run_tippecanoe(geojson_path: str, output: str, min_zoom: int, max_zoom: int,
                    points_path: str | None = None) -> None:
     # Tile-size budget: 500KB/tile is the default tippecanoe ceiling and
@@ -189,7 +269,7 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
         return
 
     from app.db.session import SessionLocal
-    from app.services.raw_trace_display import export_raw_geojson, raw_display_enabled
+    from app.services.raw_trace_display import raw_display_enabled
     db = SessionLocal()
     try:
         raw_mode = raw_display_enabled()
@@ -215,8 +295,7 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
             # stats_out captures the occupied-lattice network estimate for the
             # home "km de chemins" banner (heat_edges_agg is dropped under raw).
             raw_stats: dict = {}
-            written = export_raw_geojson(db, geojson_path, points_path=points_path,
-                                         stats_out=raw_stats)
+            written = _run_raw_export(db, geojson_path, points_path, raw_stats)
             raw_network_m = raw_stats.get("network_m")
             pts_mb = (os.path.getsize(points_path) / 1024 / 1024
                       if os.path.exists(points_path) else 0.0)
@@ -270,6 +349,13 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
             run_tippecanoe(geojson_path, output, min_zoom, max_zoom,
                            points_path=points_path)
             log.info("tippecanoe: %.0fs (%.1f MB)", time.time() - t1, os.path.getsize(output) / 1024 / 1024)
+            # Free the heat_points intermediate NOW, not at the end: /tmp on
+            # Cloud Run is tmpfs (= RAM, counted against the job's memory
+            # limit), the file runs to hundreds of MB at scale, and tippecanoe
+            # was its ONLY reader. Deleting it before the upload/gzip/raster
+            # phases returns that RAM to the budget (2026-09-02 OOM fix).
+            if points_path and os.path.exists(points_path):
+                os.unlink(points_path)
             # PUBLISH THE PRIMARY ARTIFACT FIRST. The static heatmap-display.pmtiles
             # is what /map + the hero load; it MUST reach GCS before the best-effort
             # secondary artifacts (geojsonl, raster pyramid). The raster pyramid
@@ -295,11 +381,6 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
                 # geojsonl. Env-gated (HEATMAP_RASTER_PYRAMID); never raises.
                 _build_and_upload_raster_pyramid(geojson_path)
             os.unlink(geojson_path)
-            # The heat_points geojsonl is a build-only intermediate (baked into
-            # the multi-layer PMTiles above) — not published for export, so just
-            # delete it.
-            if points_path and os.path.exists(points_path):
-                os.unlink(points_path)
             log.info("=== Done in %.0fs ===", time.time() - t0)
             log.info("Output: %s", output)
 
