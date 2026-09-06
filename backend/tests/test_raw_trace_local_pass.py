@@ -302,12 +302,22 @@ def test_lone_ride_pieces_reconstruct_the_masked_run(tmp_path, monkeypatch):
     for p in pieces[1:]:
         assert p[0] == union[-1], "consecutive lone pieces must share the cut vertex"
         union.extend(p[1:])
-    # The synthetic stream feeds the lone run verbatim as its masked run (no
-    # re-mask, identity gate), so the pieces union must reproduce it EXACTLY —
-    # byte-for-byte, in order, no gap/dup/moved vertex.
+    # RE-PINNED 2026-09-06 (perf/strip-interpolated-emission): the emitter now
+    # strips exactly-collinear vertices from the DRAWN line (_strip_interpolated
+    # — removing the read-time densifier's lerp artifacts; this synthetic run is
+    # perfectly straight, so its interior vertices are elided too). The contract
+    # becomes: the union is an ORDERED SUBSET of the masked run with the SAME
+    # endpoints and shared cut vertices — the identical drawn line, partitioned,
+    # never reshaped, no invented/moved/reordered vertex.
     masked = [[round(p[0], 6), round(p[1], 6)] for p in lone]
-    assert union == masked, (
-        "the pieces union must reconstruct the masked run byte-for-byte")
+    assert union[0] == masked[0], "union must start at the masked run's start"
+    assert union[-1] == masked[-1], "union must end at the masked run's end"
+    search_from = 0
+    for v in union:
+        assert v in masked[search_from:], (
+            f"union vertex {v} is not a masked-run vertex in order — the strip "
+            "must only ELIDE vertices, never invent/move/reorder them")
+        search_from = masked.index(v, search_from) + 1
 
 
 # ── Bounded split: GPS-noise bucket flicker must NOT fragment (the OOM) ────────
@@ -406,3 +416,47 @@ def test_noisy_bands_split_bounded_but_still_grades(monkeypatch):
     assert len(pieces) < n // 4, "must not fragment toward one piece per cell"
     print(f"\n[noisy-bands] points={n} bands={n_bands} "
           f"min_piece_m={min_m} pieces={len(pieces)}")
+
+
+# ── _strip_interpolated: only the densifier's lerp points are removed ─────────
+
+def test_strip_interpolated_removes_only_densifier_points():
+    """Real (bending) vertices survive the emission strip EXACTLY; the ≤3 m
+    lerp points the read-time densifier injects are all removed. This is the
+    load-bearing guarantee of perf/strip-interpolated-emission: −61% geojsonl
+    measured with ZERO drawn-shape change."""
+    from app.services.ingest import _densify_coords
+    # Genuine bends (each triple deviates far beyond _EMIT_SIMPLIFY_TOL_DEG).
+    orig = [[3.8700, 43.6100], [3.8720, 43.6111], [3.8735, 43.6118],
+            [3.8760, 43.6120], [3.8770, 43.6140]]
+    dense = _densify_coords([list(p) for p in orig], max_gap=3.0)
+    assert len(dense) > 5 * 5, "densifier must have injected many lerp points"
+    stripped = rtd._strip_interpolated(dense)
+    assert [[p[0], p[1]] for p in stripped] == orig, (
+        "strip must return exactly the original vertices — nothing more "
+        "(lerp left behind), nothing less (a real bend removed)")
+
+
+def test_strip_interpolated_keeps_endpoints_and_short_runs():
+    two = [[3.87, 43.61], [3.88, 43.62]]
+    assert rtd._strip_interpolated(two) == two
+    # A perfectly straight run collapses to its endpoints — same drawn line.
+    straight = [[3.87, 43.61 + i * 1e-4] for i in range(50)]
+    s = rtd._strip_interpolated(straight)
+    assert s[0] == tuple(straight[0]) or list(s[0]) == straight[0]
+    assert list(s[-1]) == straight[-1] or s[-1] == tuple(straight[-1])
+    assert len(s) == 2
+
+
+def test_strip_tolerance_order_of_magnitude_is_pinned():
+    """Review pin (PR #24): a bend deviating ~1e-7° (≈1 cm — 100× the strip
+    tolerance, far below GPS noise) must SURVIVE the strip. Guards against a
+    future tolerance inflation silently simplifying REAL geometry while the
+    macroscopic-bend tests still pass."""
+    mid = [3.8710 + 1e-7, 43.6105]  # 1 cm off the exact chord midpoint
+    pts = [[3.8700, 43.6100], mid, [3.8720, 43.6110]]
+    out = [list(p) for p in rtd._strip_interpolated(pts)]
+    assert mid in out, "a 1 cm bend must never be stripped"
+    # ...while a truly-collinear midpoint IS stripped (the feature works).
+    exact = [[3.8700, 43.6100], [3.8710, 43.6105], [3.8720, 43.6110]]
+    assert len(rtd._strip_interpolated(exact)) == 2

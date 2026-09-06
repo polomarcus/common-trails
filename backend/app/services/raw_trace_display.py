@@ -742,6 +742,38 @@ def decode_display_coords(blob: bytes | None) -> list | None:
         return None
 
 
+# ── Emission-side strip of densifier-interpolated points ─────────────────────
+# ``iter_masked_runs`` densifies every run to ≤3 m so the LATTICE sees each
+# crossed cell — but pass 2 used to write those interpolated vertices VERBATIM
+# into the trails GeoJSONL: 3-5× the points of the imported trace, all exactly
+# collinear (pure lerp), inflating the tmpfs geojsonl (= RAM on Cloud Run),
+# tippecanoe time, the per-sport artifacts, the raster-pyramid parses and the
+# published PMTiles itself (82→126 MB was partly this). The counting/grading/
+# gating and the heat_points stride emission keep the DENSIFIED run; ONLY the
+# drawn LineString is stripped, via Douglas-Peucker at ~0.1 mm — six orders of
+# magnitude below GPS noise, so it can remove ONLY our own lerp artifacts,
+# never an imported vertex with any real geometric information. Endpoints are
+# always preserved, so the piece-shared cut vertices survive and adjacent
+# pieces still reconstruct the run. TRACE INTEGRITY (Crouzet): the interpolated
+# points are synthesized by US at read time — the stored GPX is untouched, and
+# an exactly-straight drawn line stays exactly the same line.
+_EMIT_SIMPLIFY_TOL_DEG = 1e-9  # ≈ 0.11 mm of latitude
+
+
+def _strip_interpolated(pts: list) -> list:
+    """Remove the densifier's exactly-collinear lerp points from a drawn piece
+    (endpoints always kept). Falls back to the input on any shapely hiccup."""
+    if len(pts) <= 2:
+        return pts
+    try:
+        from shapely.geometry import LineString  # lazy: keep web import light
+        simp = list(LineString([(p[0], p[1]) for p in pts])
+                    .simplify(_EMIT_SIMPLIFY_TOL_DEG, preserve_topology=False).coords)
+        return simp if len(simp) >= 2 else pts
+    except Exception:  # pragma: no cover - defensive; drawing beats dropping
+        return pts
+
+
 def _stream_activities(db, *, bbox=None, since_days=None):
     """STREAM community-eligible, heatmap-consented activities one row at a time.
 
@@ -1169,7 +1201,7 @@ def export_raw_geojson(db, path: str, points_path: str | None = None,
                         "geometry": {
                             "type": "LineString",
                             "coordinates": [[round(p[0], 6), round(p[1], 6)]
-                                            for p in oriented],
+                                            for p in _strip_interpolated(oriented)],
                         },
                         "properties": props,
                     }
@@ -1246,7 +1278,7 @@ def aggregate_raw_for_export(db, bbox, sport, min_uc: int,
                 props["geometry"] = {
                     "type": "LineString",
                     "coordinates": [[round(p[0], 6), round(p[1], 6)]
-                                    for p in oriented],
+                                    for p in _strip_interpolated(oriented)],
                 }
                 features.append(props)
     return features
