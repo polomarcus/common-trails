@@ -155,8 +155,12 @@ def _reference_materialized_export(db, path: str) -> int:
                         "type": "Feature",
                         "geometry": {
                             "type": "LineString",
+                            # 2026-09-06: the emitter strips the read-time
+                            # densifier's exactly-collinear lerp points
+                            # (_strip_interpolated) — mirror it so this reference
+                            # stays the independent semantic cross-check.
                             "coordinates": [[round(p[0], 6), round(p[1], 6)]
-                                            for p in piece],
+                                            for p in rtd._strip_interpolated(piece)],
                         },
                         "properties": {
                             "sport": sport,
