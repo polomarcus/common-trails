@@ -171,7 +171,6 @@ def import_founder_archive(
 
                 try:
                     outcome, activity_id, error = _ingest_member_bytes(
-                        db,
                         user_id=user_id,
                         filename=name,
                         raw=raw,

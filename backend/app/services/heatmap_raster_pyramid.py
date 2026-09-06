@@ -23,7 +23,8 @@ import json
 import logging
 import math
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Collection, Iterable, Sequence
+from typing import NamedTuple
 
 from shapely.geometry import LineString
 
@@ -133,32 +134,33 @@ def build_tilejson(
     }
 
 
-def build_raster_pyramid(
-    geojsonl_path: str,
-    *,
-    upload_png: Callable[[int, int, int, bytes], None],
-    min_zoom: int = DEFAULT_MIN_ZOOM,
-    max_zoom: int = DEFAULT_MAX_ZOOM,
-    sport_filter: Collection[str] | None = None,
-) -> dict:
-    """Render an XYZ PNG pyramid from a raw-display GeoJSONL and push each
-    non-empty tile via ``upload_png(z, x, y, png_bytes)``.
+class ParsedFeature(NamedTuple):
+    """One geojsonl LineString feature, parsed + RDP-simplified ONCE.
 
-    ``sport_filter`` (a set of raw sport ids, already ``expand_sport``-ed by the
-    caller): when given, only features whose ``properties.sport`` is IN the set
-    are rendered — this drives the per-sport calques (``raster-<sport>/``) so a
-    gpx.studio overlay can show just gravel / mtb / road. ``None`` = all sports
-    (the combined ``raster/`` pyramid). The ``bounds`` in the returned stats are
-    the FILTERED features' bounds.
-
-    Returns a stats dict incl. the data-derived ``bounds`` (for the TileJSON).
-    Buckets popularity on ``pass_count`` (falls back to ``user_count``). Never
-    materialises more than the parsed edge list; renders occupied tiles only.
+    ``bounds`` is the feature's RAW-coordinate extent (pre-simplification) —
+    kept per-feature so a sport-filtered render can reconstruct the exact
+    FILTERED bounds the legacy single-pass builder computed. ``coords`` may
+    hold a single point (a degenerate feature): the legacy path let such a
+    feature extend the bounds but never rendered it, and the render below
+    preserves that.
     """
-    edges: list[HeatEdge] = []
-    min_lon = min_lat = math.inf
-    max_lon = max_lat = -math.inf
 
+    sport: str
+    coords: tuple[tuple[float, float], ...]  # simplified (lon, lat) run
+    pop: int  # pass_count fallback user_count fallback 1
+    bounds: tuple[float, float, float, float]  # min_lon, min_lat, max_lon, max_lat
+
+
+def parse_heat_edges(geojsonl_path: str) -> list[ParsedFeature]:
+    """Read + json-parse + RDP-simplify the raw-display GeoJSONL ONCE.
+
+    Split out of ``build_raster_pyramid`` so the 5 per-sport calques (plus the
+    optional combined one) can share a single parse: re-reading and
+    re-simplifying the whole national corpus per pyramid was ~5-6× the
+    necessary parse cost of a rebuild. Sport filtering happens at RENDER time
+    (``render_pyramid_from_parsed``) on the in-memory list instead.
+    """
+    features: list[ParsedFeature] = []
     for line in _iter_geojsonl_lines(geojsonl_path):
         try:
             feat = json.loads(line)
@@ -169,38 +171,83 @@ def build_raster_pyramid(
             continue
         props = feat.get("properties") or {}
         sport = str(props.get("sport", "all") or "all")
-        # Per-sport calque: skip features outside the requested set BEFORE they
-        # touch bounds/edges, so raster-<sport>/ + its TileJSON are sport-exact.
-        if sport_filter is not None and sport not in sport_filter:
-            continue
         coords_raw = geom.get("coordinates") or []
         pts: list[tuple[float, float]] = []
+        f_min_lon = f_min_lat = math.inf
+        f_max_lon = f_max_lat = -math.inf
         for p in coords_raw:
             if isinstance(p, (list, tuple)) and len(p) >= 2:
                 lon, lat = float(p[0]), float(p[1])
                 pts.append((lon, lat))
-                min_lon, max_lon = min(min_lon, lon), max(max_lon, lon)
-                min_lat, max_lat = min(min_lat, lat), max(max_lat, lat)
-        if len(pts) < 2:
+                f_min_lon, f_max_lon = min(f_min_lon, lon), max(f_max_lon, lon)
+                f_min_lat, f_max_lat = min(f_min_lat, lat), max(f_max_lat, lat)
+        if not pts:
             continue
-        # Simplify (RDP) before rendering — the raw geojsonl has 100k+-point
-        # features; re-projecting those per crossed tile is the perf killer.
-        # ~11 m tolerance is invisible at overlay zooms (see _SIMPLIFY_TOL_DEG).
-        try:
-            simp = list(LineString(pts).simplify(_SIMPLIFY_TOL_DEG, preserve_topology=False).coords)
-            if len(simp) >= 2:
-                pts = [(c[0], c[1]) for c in simp]
-        except Exception:  # pragma: no cover - defensive; keep the raw pts
-            pass
+        if len(pts) >= 2:
+            # Simplify (RDP) before rendering — the raw geojsonl has
+            # 100k+-point features; re-projecting those per crossed tile is
+            # the perf killer. ~11 m tolerance is invisible at overlay zooms
+            # (see _SIMPLIFY_TOL_DEG).
+            try:
+                simp = list(LineString(pts).simplify(_SIMPLIFY_TOL_DEG, preserve_topology=False).coords)
+                if len(simp) >= 2:
+                    pts = [(c[0], c[1]) for c in simp]
+            except Exception:  # pragma: no cover - defensive; keep the raw pts
+                pass
         # Bucket on pass_count (busy corridors burn brighter); user_count is ~1
         # everywhere at K=1. render_tile_png buckets via HeatEdge.user_count, so
         # feed pass_count there.
         pop = int(props.get("pass_count") or props.get("user_count") or 1)
-        edges.append(HeatEdge(coords=tuple(pts), user_count=pop, sport=sport))
+        features.append(ParsedFeature(
+            sport=sport, coords=tuple(pts), pop=pop,
+            bounds=(f_min_lon, f_min_lat, f_max_lon, f_max_lat),
+        ))
+    return features
+
+
+def render_pyramid_from_parsed(
+    features: Sequence[ParsedFeature],
+    *,
+    upload_png: Callable[[int, int, int, bytes], None],
+    min_zoom: int = DEFAULT_MIN_ZOOM,
+    max_zoom: int = DEFAULT_MAX_ZOOM,
+    sport_filter: Collection[str] | None = None,
+    source: str = "<parsed>",
+) -> dict:
+    """Render an XYZ PNG pyramid from PRE-PARSED features (``parse_heat_edges``)
+    and push each non-empty tile via ``upload_png(z, x, y, png_bytes)``.
+
+    ``sport_filter`` (a set of raw sport ids, already ``expand_sport``-ed by the
+    caller): when given, only features whose ``sport`` is IN the set are
+    rendered — this drives the per-sport calques (``raster-<sport>/``) so a
+    gpx.studio overlay can show just gravel / mtb / road. ``None`` = all sports
+    (the combined ``raster/`` pyramid). The ``bounds`` in the returned stats are
+    the FILTERED features' bounds (identical to a filtered single-pass parse).
+
+    Returns a stats dict incl. the data-derived ``bounds`` (for the TileJSON).
+    Never materialises more than the edge list; renders occupied tiles only.
+    ``source`` labels the empty-corpus warning (the geojsonl path when called
+    through the ``build_raster_pyramid`` wrapper).
+    """
+    edges: list[HeatEdge] = []
+    min_lon = min_lat = math.inf
+    max_lon = max_lat = -math.inf
+
+    for pf in features:
+        # Per-sport calque: skip features outside the requested set BEFORE they
+        # touch bounds/edges, so raster-<sport>/ + its TileJSON are sport-exact.
+        if sport_filter is not None and pf.sport not in sport_filter:
+            continue
+        f_min_lon, f_min_lat, f_max_lon, f_max_lat = pf.bounds
+        min_lon, max_lon = min(min_lon, f_min_lon), max(max_lon, f_max_lon)
+        min_lat, max_lat = min(min_lat, f_min_lat), max(max_lat, f_max_lat)
+        if len(pf.coords) < 2:
+            continue  # degenerate feature: bounds-only, never rendered
+        edges.append(HeatEdge(coords=pf.coords, user_count=pf.pop, sport=pf.sport))
 
     stats = {"features": len(edges), "tiles": 0, "by_zoom": {}, "bounds": None}
     if not edges:
-        log.warning("raster pyramid: 0 LineString features in %s — nothing to render", geojsonl_path)
+        log.warning("raster pyramid: 0 LineString features in %s — nothing to render", source)
         return stats
 
     bounds = (min_lon, min_lat, max_lon, max_lat)
@@ -224,3 +271,29 @@ def build_raster_pyramid(
                  zoom, z_count, len(tile_edges))
 
     return stats
+
+
+def build_raster_pyramid(
+    geojsonl_path: str,
+    *,
+    upload_png: Callable[[int, int, int, bytes], None],
+    min_zoom: int = DEFAULT_MIN_ZOOM,
+    max_zoom: int = DEFAULT_MAX_ZOOM,
+    sport_filter: Collection[str] | None = None,
+) -> dict:
+    """Back-compat one-shot API: parse ``geojsonl_path`` then render ONE pyramid.
+
+    Thin wrapper over ``parse_heat_edges`` + ``render_pyramid_from_parsed``
+    (behaviour, stats and tile bytes are identical to the historical
+    single-pass implementation). Callers building SEVERAL pyramids from the
+    same geojsonl (build_pmtiles' per-sport calques) should parse once and
+    call ``render_pyramid_from_parsed`` per pyramid instead.
+    """
+    return render_pyramid_from_parsed(
+        parse_heat_edges(geojsonl_path),
+        upload_png=upload_png,
+        min_zoom=min_zoom,
+        max_zoom=max_zoom,
+        sport_filter=sport_filter,
+        source=geojsonl_path,
+    )
