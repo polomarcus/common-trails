@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "common-trails-backend"
-version = "0.64.0"
+version = "0.65.0"
 description = "CHEMINS COMMUNS — Backend API"
 requires-python = ">=3.13"
 dependencies = [
