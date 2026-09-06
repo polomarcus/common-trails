@@ -239,6 +239,11 @@ def run_tippecanoe(geojson_path: str, output: str, min_zoom: int, max_zoom: int,
         "tippecanoe",
         "-o", output,
         f"-Z{min_zoom}", f"-z{max_zoom}",
+        # -P / --read-parallel: input is line-delimited GeoJSON (one feature
+        # per line — both the trails and heat_points files), so tippecanoe can
+        # split the parse across cores. Free wall-clock on the cpu2 job; no
+        # effect on the produced tiles.
+        "-P",
     ]
     if points_path is not None:
         cmd += ["-L", f"trails:{geojson_path}", "-L", f"heat_points:{points_path}"]
@@ -502,6 +507,75 @@ def _pmtiles_version_id(pmtiles_bytes: bytes | None = None) -> str:
 # all-sports pyramid stays at the bare ``raster/`` prefix (unchanged URL).
 _CALQUE_SPORTS = ("road", "gravel", "mtb", "running", "offroad")
 
+# Concurrent GCS PNG uploads per pyramid. The render loop produces thousands of
+# small tiles; serially each one is a full HTTPS round-trip (~50-100 ms) that
+# dominated the raster phase's wall-clock. 16 parallel PUTs of ~1-20 KB PNGs is
+# well under any GCS/egress limit on a cpu2 job.
+_DEFAULT_UPLOAD_WORKERS = 16
+
+
+def _raster_upload_workers() -> int:
+    """Thread-pool size for raster tile uploads (env, defensive parse)."""
+    try:
+        workers = int(os.environ.get(
+            "HEATMAP_RASTER_UPLOAD_WORKERS", str(_DEFAULT_UPLOAD_WORKERS)))
+    except ValueError:
+        workers = _DEFAULT_UPLOAD_WORKERS
+    return max(1, workers)
+
+
+def _render_and_upload_pyramid(
+    parsed_features, *, upload_key_png, prefix: str, min_zoom: int, max_zoom: int,
+    sport_filter, workers: int,
+) -> tuple[dict, set[str]]:
+    """Render one XYZ pyramid from PRE-PARSED features, uploading each tile PNG
+    through a bounded thread pool.
+
+    ``upload_key_png(key, png_bytes)`` performs one blocking upload (the GCS
+    round-trip). The render loop only SUBMITS uploads and keeps rasterising the
+    next tile, so upload latency overlaps CPU work instead of serialising after
+    it. Returns ``(stats, written_keys)`` where ``written_keys`` holds ONLY the
+    keys whose upload COMPLETED — collected from the futures' results, so the
+    set is race-free and the caller's stale-tile purge (which deletes every
+    blob NOT in it) can never be poisoned by a torn concurrent update.
+
+    Every upload is joined before returning; the FIRST upload exception (in
+    submission order) is re-raised so a failed calque is surfaced to the
+    per-sport best-effort handler instead of silently publishing a partial
+    pyramid + purging its siblings.
+    """
+    from concurrent.futures import Future, ThreadPoolExecutor
+
+    from app.services.heatmap_raster_pyramid import render_pyramid_from_parsed
+
+    futures: list[Future] = []
+
+    def _do_upload(key: str, png: bytes) -> str:
+        upload_key_png(key, png)
+        return key
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        def _submit_png(z: int, x: int, y: int, png: bytes) -> None:
+            key = f"{prefix}/{z}/{x}/{y}.png"
+            futures.append(pool.submit(_do_upload, key, png))
+
+        stats = render_pyramid_from_parsed(
+            parsed_features, upload_png=_submit_png,
+            min_zoom=min_zoom, max_zoom=max_zoom, sport_filter=sport_filter,
+            source=f"<parsed:{prefix}>",
+        )
+        written_keys: set[str] = set()
+        first_exc: Exception | None = None
+        for fut in futures:
+            try:
+                written_keys.add(fut.result())
+            except Exception as exc:  # noqa: BLE001 — surfaced below
+                if first_exc is None:
+                    first_exc = exc
+        if first_exc is not None:
+            raise first_exc
+    return stats, written_keys
+
 
 def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
     """Best-effort: render raster XYZ tile pyramids from the raw-display geojsonl
@@ -542,14 +616,31 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         from app.services.heatmap_raster_pyramid import (
             DEFAULT_MAX_ZOOM,
             DEFAULT_MIN_ZOOM,
-            build_raster_pyramid,
             build_tilejson,
+            parse_heat_edges,
         )
 
         min_zoom = int(os.environ.get("HEATMAP_RASTER_MIN_ZOOM", str(DEFAULT_MIN_ZOOM)))
         max_zoom = int(os.environ.get("HEATMAP_RASTER_MAX_ZOOM", str(DEFAULT_MAX_ZOOM)))
+        combined_on = os.environ.get(
+            "HEATMAP_RASTER_COMBINED", "false").strip().lower() == "true"
+        per_sport_on = os.environ.get(
+            "HEATMAP_RASTER_PER_SPORT", "true").strip().lower() == "true"
+        if not combined_on and not per_sport_on:
+            return
+        upload_workers = _raster_upload_workers()
         client = storage.Client()
         bucket = client.bucket(bucket_name)
+
+        # Parse + RDP-simplify the whole geojsonl ONCE and render every calque
+        # from the shared in-memory feature list. The legacy path re-read +
+        # re-json-parsed + re-simplified the ENTIRE national corpus per pyramid
+        # (5 per-sport + optional combined = up to 6 full parses) — pure waste,
+        # since only the sport FILTER differs between them.
+        t_parse = time.time()
+        parsed = parse_heat_edges(geojson_path)
+        log.info("raster pyramid: parsed %d features once in %.0fs "
+                 "(shared across calques)", len(parsed), time.time() - t_parse)
 
         def _render_prefix(
             prefix: str, sport_filter: Collection[str] | None, max_z: int = max_zoom,
@@ -558,21 +649,19 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
 
             ``max_z`` caps this prefix's top zoom (per-sport calques render to a
             LOWER zoom than the combined one — see the caller)."""
-            written_keys: set[str] = set()
 
-            def _upload_png(z: int, x: int, y: int, png: bytes) -> None:
-                key = f"{prefix}/{z}/{x}/{y}.png"
+            def _upload_key_png(key: str, png: bytes) -> None:
                 blob = bucket.blob(key)
                 # Stable-named MUTABLE artifact (same URL, new bytes each rebuild)
                 # — keep the cache short so a rebuild reaches consumers promptly.
                 blob.cache_control = "public, max-age=3600"
                 blob.upload_from_string(png, content_type="image/png")
-                written_keys.add(key)
 
             t = time.time()
-            stats = build_raster_pyramid(
-                geojson_path, upload_png=_upload_png,
+            stats, written_keys = _render_and_upload_pyramid(
+                parsed, upload_key_png=_upload_key_png, prefix=prefix,
                 min_zoom=min_zoom, max_zoom=max_z, sport_filter=sport_filter,
+                workers=upload_workers,
             )
             purged = 0
             if stats.get("bounds"):
@@ -614,7 +703,7 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         # export is dropped. It was also the single biggest build cost (z6-14 =
         # ~21k tiles / ~24 min of a 46-min build). Re-enable via
         # HEATMAP_RASTER_COMBINED=true if an all-sports XYZ overlay is ever wanted.
-        if os.environ.get("HEATMAP_RASTER_COMBINED", "false").strip().lower() == "true":
+        if combined_on:
             _render_prefix("raster", None)
         # Per-sport calques — the community heatmap EXPORT (one XYZ overlay per
         # sport for gpx.studio). Capped at HEATMAP_RASTER_PER_SPORT_MAX_ZOOM
@@ -622,7 +711,7 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         # planning CONTEXT, and z13/z14 would be ~95% of the tiles (each an
         # individual GCS upload). Each sport isolated so one failure can't skip
         # the rest.
-        if os.environ.get("HEATMAP_RASTER_PER_SPORT", "true").strip().lower() == "true":
+        if per_sport_on:
             try:
                 per_sport_max = int(os.environ.get("HEATMAP_RASTER_PER_SPORT_MAX_ZOOM", "12"))
             except ValueError:

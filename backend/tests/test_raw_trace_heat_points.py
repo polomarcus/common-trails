@@ -212,6 +212,9 @@ def test_run_tippecanoe_multi_layer_command(monkeypatch):
     assert "trails:/tmp/trails.geojsonl" in cmd
     assert "heat_points:/tmp/pts.geojsonl" in cmd
     assert "-l" not in cmd  # -l cannot combine with -L
+    # --read-parallel: line-delimited input → parallel parse is safe and free
+    # wall-clock on the cpu2 job (perf/rebuild-raster).
+    assert "-P" in cmd
 
     # Single-layer (matched mode / no points)
     bp.run_tippecanoe("/tmp/trails.geojsonl", "/tmp/out.pmtiles", 6, 15)
@@ -219,3 +222,4 @@ def test_run_tippecanoe_multi_layer_command(monkeypatch):
     assert "-l" in cmd and "trails" in cmd
     assert "/tmp/trails.geojsonl" in cmd
     assert not any(str(a).startswith("heat_points:") for a in cmd)
+    assert "-P" in cmd
