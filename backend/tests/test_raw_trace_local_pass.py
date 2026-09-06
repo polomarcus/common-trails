@@ -446,3 +446,17 @@ def test_strip_interpolated_keeps_endpoints_and_short_runs():
     assert s[0] == tuple(straight[0]) or list(s[0]) == straight[0]
     assert list(s[-1]) == straight[-1] or s[-1] == tuple(straight[-1])
     assert len(s) == 2
+
+
+def test_strip_tolerance_order_of_magnitude_is_pinned():
+    """Review pin (PR #24): a bend deviating ~1e-7° (≈1 cm — 100× the strip
+    tolerance, far below GPS noise) must SURVIVE the strip. Guards against a
+    future tolerance inflation silently simplifying REAL geometry while the
+    macroscopic-bend tests still pass."""
+    mid = [3.8710 + 1e-7, 43.6105]  # 1 cm off the exact chord midpoint
+    pts = [[3.8700, 43.6100], mid, [3.8720, 43.6110]]
+    out = [list(p) for p in rtd._strip_interpolated(pts)]
+    assert mid in out, "a 1 cm bend must never be stripped"
+    # ...while a truly-collinear midpoint IS stripped (the feature works).
+    exact = [[3.8700, 43.6100], [3.8710, 43.6105], [3.8720, 43.6110]]
+    assert len(rtd._strip_interpolated(exact)) == 2
