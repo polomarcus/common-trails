@@ -30,10 +30,11 @@ log = logging.getLogger(__name__)
 # fresh contribution appears on the map — but nothing stopped an abusive
 # (registered) user looping tiny 1-point uploads to fire N rebuild JOBS ($$$).
 # Debounce the trigger to at most once per cooldown window: the FIRST trigger in
-# a window fires, the rest are suppressed. Correctness is preserved — the daily
-# backstop scheduler and the next real upload AFTER the cooldown both still
-# refresh the display, so a suppressed trigger only DELAYS a rebuild, never
-# drops it. Process-local (per Cloud Run instance) — good enough to defang the
+# a window fires, the rest are suppressed. ⚠️ There is NO scheduled rebuild
+# backstop (only the archive drain runs daily), so a suppressed trigger leaves
+# the display stale until the NEXT trigger after the cooldown (a later upload,
+# or an archive drain that imports something) — delayed, but only dropped if no
+# trigger ever follows. Process-local (per Cloud Run instance) — good enough to defang the
 # per-user request loop; the goal is cost-bounding, not global exactness.
 # Cooldown is env-overridable via BUILD_PMTILES_DEBOUNCE_S (default 600s = 10min).
 _build_pmtiles_last_trigger: float = 0.0
@@ -92,18 +93,24 @@ def warn_on_missing_job_config() -> list[str]:
     """Log a loud WARNING naming any expected job-trigger env var that is unset.
 
     Returns the list of missing var names (so a caller / test can inspect it).
-    Does NOT raise and does NOT crash startup — the daily backstop scheduler
-    still drains archives and rebuilds PMTiles, so a missing var degrades
-    gracefully. This only makes a silent config-drift regression visible in
-    the logs (a `--set-env-vars` wipe is the classic cause).
+    Does NOT raise and does NOT crash startup — the daily archive-drain
+    scheduler still drains archives (and its post-drain ping rebuilds PMTiles
+    when it imported something), so a missing var degrades rather than breaks.
+    ⚠️ But there is NO scheduled PMTiles-rebuild backstop: with the trigger env
+    gone, a loose-file upload's display refresh simply never fires and the map
+    stays stale until the next archive drain that imports. This warning makes
+    the silent config-drift regression visible in the logs (a `--set-env-vars`
+    wipe is the classic cause).
     """
     missing = [k for k in _EXPECTED_JOB_CONFIG_ENV if not os.environ.get(k)]
     if missing:
         log.warning(
-            "Event-driven job triggers DEGRADED — missing env var(s): %s. The "
-            "archive drain + PMTiles rebuild will only run via the daily "
-            "backstop scheduler until these are restored (a `gcloud run ... "
-            "--set-env-vars` wipe is the usual cause — use --update-env-vars).",
+            "Event-driven job triggers DEGRADED — missing env var(s): %s. "
+            "Archives will only drain via the daily scheduler, and PMTiles "
+            "rebuild pings from the web will NOT fire (the display stays stale "
+            "until a drain imports something — there is no daily rebuild "
+            "backstop). Restore the vars (a `gcloud run ... --set-env-vars` "
+            "wipe is the usual cause — use --update-env-vars).",
             ", ".join(missing),
         )
     return missing
@@ -187,9 +194,10 @@ def trigger_build_pmtiles_job() -> bool:
 
     Returns True on a 2xx from ``jobs:run``, else False. NEVER raises — every
     I/O failure is logged and swallowed so the archive drain stays best-effort
-    (the ingested ``heat_edges`` are already committed; a missed ping is caught
-    by the next drain / an unrelated rebuild). The build-pmtiles job is proven
-    to run on db-f1-micro with no tier bump.
+    (the ingested ``heat_edges`` are already committed). ⚠️ A missed ping has NO
+    scheduled backstop: the display stays stale until the NEXT trigger — a later
+    upload's ping, the next drain that imports something, or a manual rebuild.
+    The build-pmtiles job is proven to run on db-f1-micro with no tier bump.
     """
     if not _is_enabled("BUILD_PMTILES_JOB_NAME"):
         return False

@@ -18,7 +18,11 @@ from app.api.auth import AuthenticatedUser, get_current_user
 from app.db.models import Activity, ActivityPhoto
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
-from app.services.ingest import get_activity_by_id, get_user_activities
+from app.services.ingest import (
+    count_user_map_activities,
+    get_activity_by_id,
+    iter_user_map_activities,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,29 +78,31 @@ async def me_activities(
     ``]}`` — so the full feature list is never built in memory. The JSON shape
     is byte-for-byte the same object the frontend already parses with
     ``resp.json()``: ``{"type":"FeatureCollection","total":N,"features":[...]}``.
+
+    **SQL-side filter/order/limit** (memory fix, follow-up to the 32 MiB one):
+    the old code called ``get_user_activities`` — EVERY column of the user's
+    WHOLE corpus (geometry_geojson included) materialized in web RAM, then
+    filtered and sliced ``[-limit:]`` in Python. A real beta user has 14,460
+    activities (≈0.4–1.4 GB) on a 512Mi instance → OOM. Now the sport +
+    geometry filters, the "most recent ``limit``" selection and the column
+    projection all happen in Postgres, and rows stream through a server-side
+    cursor (``yield_per``) — memory is O(window), not O(corpus). Ordering
+    contract unchanged: features ascend by effective date, newest LAST
+    (what ``[-limit:]`` on the insertion-ordered list produced).
     """
     user_id = current_user.user_id
-    user_acts = [
-        a for a in get_user_activities(user_id)
-        if (sport is None or a["sport"] == sport)
-        and a.get("geometry_geojson")
-    ]
 
-    # Keep the most recent `limit` activities
-    user_acts = user_acts[-limit:]
-
-    # ``total`` is emitted at the head of the body, so it is the count of
-    # activities we are about to stream. Every row here already passed the
-    # ``geometry_geojson`` filter, so a per-feature render failure
-    # (json.JSONDecodeError on a corrupt stored geometry) is a near-never
-    # defensive skip — the streamed feature count matches ``total`` in the
-    # normal path (the shape the old materialized response produced).
-    total = len(user_acts)
+    # ``total`` is emitted at the head of the body, so it must be known before
+    # the rows stream: a cheap indexed COUNT, capped at ``limit``. (A write
+    # landing between the COUNT and the row scan could skew it by a row —
+    # same near-never mismatch class as the defensive per-feature skip below,
+    # accepted for O(1) memory.)
+    total = min(count_user_map_activities(user_id, sport=sport), limit)
 
     def _iter_body() -> Iterator[bytes]:
         yield f'{{"type":"FeatureCollection","total":{total},"features":['.encode()
         first = True
-        for act in user_acts:
+        for act in iter_user_map_activities(user_id, sport=sport, limit=limit):
             try:
                 feature = _activity_to_feature(act)
             except (json.JSONDecodeError, KeyError, TypeError):
