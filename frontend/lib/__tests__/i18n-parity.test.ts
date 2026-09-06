@@ -172,7 +172,9 @@ describe('Home hero + sections — every routed string exists in both locales', 
   // hardcoded CTA/badges in French). Routing them through t() fixes the mix.
   // If any is un-routed again, add it here so the leak stays caught.
   const homeKeys = [
-    'home.hero.exploreMap', 'home.hero.contribute',
+    'home.hero.tagline', 'home.hero.subtitle',
+    'home.hero.legendLow', 'home.hero.legendHigh',
+    'home.hero.exploreMap', 'home.hero.exploreMapNoAccount', 'home.hero.contribute',
     'home.hero.connected', 'home.hero.logout', 'home.hero.join', 'home.hero.joinSub', 'home.hero.disconnected',
     'home.onboarding.ctaTitle', 'home.onboarding.cta', 'home.onboarding.ctaSub',
     'home.badge.anonymized', 'home.badge.openSource',
@@ -202,31 +204,31 @@ describe('Home page source — no hardcoded FR copy leaked back into the compone
     // that legitimately remains in a code comment is not a false positive.
     .replace(/\/\*[\s\S]*?\*\//g, '');
 
-  // FR phrase → the key it now lives under. Absence in the component source +
-  // presence in fr.ts proves the string was routed, not merely deleted.
-  const routedPhrases: Array<[string, string]> = [
-    ['Explorer la carte', 'home.hero.exploreMap'],
-    ['Ajoutez vos traces', 'home.hero.join'],
-    ['Déconnexion', 'home.hero.logout'],
-    ['Vous avez bien été déconnecté', 'home.hero.disconnected'],
-    ['Extrémités masquées', 'home.badge.anonymized'],
-    ['Comment ça marche', 'home.section.howItWorks'],
-    ['De la heatmap communautaire', 'home.section.howItWorksSub'],
-    ["Profitez d'une heatmap", 'home.step1.title'],
-    ['Pistes DFCI', 'home.trails.title'],
-    ['Reprendre le contrôle', 'home.philosophy.title'],
-    ['Méthodologie', 'home.philosophy.method'],
+  // Keys whose FR copy once leaked into the component as hardcoded literals.
+  // The guarded phrase is DERIVED from fr.ts (not repeated here), so a copy
+  // rework self-syncs instead of forcing a test edit — and deleting the row is
+  // never the cheap way out of a red test.
+  const routedKeys = [
+    'home.hero.exploreMap',
+    'home.hero.join',
+    'home.hero.logout',
+    'home.hero.disconnected',
+    'home.badge.anonymized',
+    'home.section.howItWorks',
+    'home.section.howItWorksSub',
+    'home.step1.title',
+    'home.trails.title',
+    'home.philosophy.title',
+    'home.philosophy.method',
   ];
 
-  it.each(routedPhrases)('"%s" is not hardcoded in app/page.tsx', (phrase) => {
+  it.each(routedKeys)('the fr copy of %s is not hardcoded in app/page.tsx', (key) => {
+    const copy = fr[key];
+    expect(copy, `fr[${key}] should exist — the routed copy lives there`).toBeTruthy();
     expect(
-      pageSrc.includes(phrase),
-      `"${phrase}" is still hardcoded in app/page.tsx — route it through t()`,
+      pageSrc.includes(copy),
+      `fr copy of ${key} ("${copy}") is hardcoded in app/page.tsx — route it through t()`,
     ).toBe(false);
-  });
-
-  it.each(routedPhrases)('"%s" lives in the fr dictionary instead', (phrase, key) => {
-    expect(fr[key], `fr[${key}] should carry the routed copy`).toContain(phrase);
   });
 });
 

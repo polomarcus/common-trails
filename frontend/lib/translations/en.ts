@@ -29,7 +29,7 @@ const en: Translations = {
 
   // ── Community heatmap EXPORT modal (formats, bbox, async, ODbL) ────────────
   'export.title': 'Export the community layer (heatmap)',
-  'export.intro': 'Download the community layer (every trace shared by contributors). Data published under the ODbL 1.0 licence — any republication must keep the attribution.',
+  'export.intro': 'Download the community layer (every trace shared by contributors). Data published under the ODbL 1.0 licence — attribution and share-alike required. Use in a closed product without share-alike: a separate commercial licence is available, contact us.',
   'export.calque.title': '🗺️ Use as an overlay in gpx.studio / VisuGPX',
   'export.calque.bodyBefore': 'Show the whole heatmap underneath and draw your route on top. In gpx.studio or VisuGPX, add a ',
   'export.calque.bodyStrong': 'custom map layer',
@@ -123,8 +123,16 @@ const en: Translations = {
   'layout.ogAlt': 'Chemins Communs — community cycling trace map',
 
   // ── Home page ────────────────────────────────────────────────────────────────
-  'home.hero.quote': 'The trails belong to those who ride them.',
-  'home.hero.subtitle': 'The open, community cycling heatmap — built from the traces you share, free under the ODbL licence.',
+  // Tagline = the value prop, visible on EVERY viewport (the subtitle is hidden
+  // on mobile and short viewports) — it must carry the whole pitch on its own.
+  'home.hero.tagline': 'The community cycling heatmap: the more a trail is ridden, the brighter it glows. Everything you need to build real routes.',
+  // {thesis} = common.thesis — the project's motto, quoted here and on /methode
+  // from ONE key so the two pages can't drift apart (they already had: the old
+  // methode key said "travel them" while the hero said "ride them").
+  'home.hero.subtitle': '“{thesis}” Road, gravel, MTB — an open, free map built from the traces you share, under the ODbL licence.',
+  'common.thesis': 'The trails belong to those who ride them.',
+  'home.hero.legendLow': 'lightly ridden',
+  'home.hero.legendHigh': 'heavily ridden',
   'home.stats.contributors': 'contributors',
   'home.stats.traces': 'traces',
   'home.stats.km': 'km of paths',
@@ -136,7 +144,10 @@ const en: Translations = {
   'home.openSource.text': "Your GPS shouldn't enrich closed platforms. Here, every shared trace stays a common good — open data ODbL, source code AGPLv3.",
   // Hero overlay + section headings (previously hardcoded FR literals → caused
   // the mixed-language hero: t()'d strings followed the locale, these did not)
-  'home.hero.exploreMap': 'Explore the map →',
+  // Placement-neutral label (footer + logged-in hero); the "no account"
+  // acquisition variant is hero-only, for visitors without an account.
+  'home.hero.exploreMap': 'Explore the heatmap →',
+  'home.hero.exploreMapNoAccount': 'Explore the heatmap — no account needed →',
   'home.hero.contribute': 'Contribute to the map',
   'home.hero.connected': 'Connected',
   'home.hero.logout': 'Log out',
@@ -157,10 +168,10 @@ const en: Translations = {
   'home.step2.desc': 'From {strava}, {garmin} or your own GPX files — every shared trace enriches the common map, under the ODbL licence.',
   'home.step2.strava': 'Strava',
   'home.step2.garmin': 'Garmin',
-  'home.step3.title': 'Build better traces',
-  'home.step3.desc': 'Get a clean GPX from the heatmap, ready for gpx.studio, VisuGPX or your GPS device.',
+  'home.step3.title': 'Build real routes',
+  'home.step3.desc': "Never built a route before? Follow the brightest trails: the heatmap gives you a clean GPX, ready for gpx.studio, VisuGPX or your GPS device.",
   "home.calque.title": "🗺️ Use the heatmap as an overlay",
-  "home.calque.intro": "Show the whole community map underneath in gpx.studio or VisuGPX and draw your route on top — add a custom layer (raster / XYZ) with this URL:",
+  "home.calque.intro": "Show the heatmap underneath in gpx.studio and draw your route on top. 30 seconds: Settings → Map Layers → Custom layers, and paste this URL:",
   "home.calque.copy": "Copy",
   "home.calque.copied": "✓ Copied",
   "home.calque.tutorialCta": "Step-by-step guide + per-sport overlay",
@@ -368,7 +379,10 @@ const en: Translations = {
   'strava.archive.helpLink': 'How to — official Strava guide',
   'strava.archive.exportPageLink': 'Open my Strava data export page',
   'strava.archive.dropOnHero': 'Once the ZIP lands in your inbox, just drop it in the zone above.',
-  'strava.archive.consentLabel': 'I consent to contributing them to the open community popularity map, published under the ODbL licence. The start and end of each activity are masked to protect my sensitive locations (home, work).',
+  // ⚠️ LEGAL WORDING (consent v5) — any material change here must bump
+  // CONTRIBUTION_CONSENT_VERSION (lib/strava-archive-consent.ts). The second
+  // sentence is the dual-licensing grant.
+  'strava.archive.consentLabel': 'I consent to contributing my traces to the open community popularity map, published under the ODbL 1.0 licence. I grant Chemins Communs a non-exclusive right to also offer them under a commercial licence (revenue funds the project; my traces stay free under ODbL). The start and end of each activity are masked to protect my sensitive locations (home, work).',
   'strava.archive.consentRequired': 'Tick the consent box to continue.',
   'strava.archive.consentHint': 'Tick the box to enable uploading.',
   'strava.archive.preparing': 'Preparing the archive…',
@@ -814,6 +828,7 @@ const en: Translations = {
   'methode.rawIntro': "The community map shows your real GPS traces, precise, exactly as you rode them. No algorithm redraws them onto a road network. The more a path is ridden, the more it stands out: popular routes emerge from thousands of overlapping traces.",
   'methode.rawNoMatch': "No map-matching, no snapping to a known network. What you see is the raw aggregate of real rides — desire lines included: the singletracks and forest tracks no map knows about.",
   'methode.pill.masking': "Endpoints masked",
+  'methode.pill.commercial': "Commercial licence on request",
   'methode.rawBuildTitle': "Raw traces, overlaid",
   'methode.rawBuildDesc': "The recipe is simple: we read your GPX file, mask its start and end, then overlay it. Popularity is counted on a fine grid (~5 m), but the drawn line stays your exact geometry — the grid only colours, never redraws.",
   'methode.rawStep1Title': "You upload",
@@ -833,15 +848,17 @@ const en: Translations = {
   'methode.privacyNotKanon': "The old per-matched-segment K-anonymity model is gone: the raw map replaces it with these two safeguards, plus a members-only export.",
   'methode.provenanceTitle': "Your traces, your consent",
   'methode.provenanceDesc': "Only the traces you upload yourself — your Strava export (.zip), or GPX/FIT files — feed the public community map, with your explicit consent and under the open ODbL licence.",
+  'methode.licenseTitle': "Open for everyone, paid for closed platforms",
+  'methode.licenseDesc': "The community map is published under ODbL 1.0: free reuse — commercial included — under two conditions: credit the contributors, and republish any derived database under the same open licence (share-alike). That is what keeps the commons a commons.",
+  'methode.licenseDual': "Why the dual regime? So that industry giants can't use the community's data without an agreement. A closed platform that refuses share-alike (folding our data into a proprietary product without opening it back up) must acquire a separate commercial licence — contact: paul@epauler.fr. By contributing you grant the project that non-exclusive right; revenue funds the infrastructure. Your traces themselves stay free under ODbL, for everyone, forever.",
   'methode.provenanceApi': "Activities synced through the Strava API stay strictly personal (Strava API policy §5.4/§5.10): never on the public map, never in the open export.",
   'methode.integrityTitle': "Untouched traces",
   'methode.integrityDesc': "Your GPX file is stored exactly as you recorded it. We never re-route it, never simplify it, never snap it to a road. Only the two ends are masked for privacy — the rest is kept to the last point.",
   'methode.routingTitle': "Routing? We leave you the best tools",
   'methode.routingDesc': "Common Trails is an open popularity map and a source of traces. It's not a router — the ecosystem does that better than we could. Export any trace as GPX and open it in gpx.studio, BRouter or Komoot to build and follow your route.",
   'methode.routingNote': "The built-in router was removed: being a router isn't our job.",
-  'methode.footerThesis': "Trails belong to those who travel them.",
   'methode.footerExplain': "Explain what we do, acknowledge what we don't know.",
-  'methode.exploreMap': "Explore the map →",
+  'methode.exploreMap': "Explore the heatmap →",
   'methode.footerLicense': "Source code AGPLv3 · Data ODbL 1.0 · Endpoints masked",
 
   // ── Privacy page ─────────────────────────────────────────────────────────────
@@ -852,7 +869,7 @@ const en: Translations = {
   'privacy.privateVsCommunity': '3. Private data vs. community data',
   'privacy.activitiesPrivate': 'Your activities are private. They are never shared, sold or made accessible to other users.',
   'privacy.kAnonymity': 'The community map is public and open. It is fed only by the traces you upload yourself (GPX/FIT files or a Strava export), with your explicit consent — never by activities synced via the Strava API. Your traces appear precise, but the start and end of each activity are automatically masked (200 m by default) so as not to reveal your sensitive locations (home, work). During the private beta a trace may be visible individually; a distinct-contributor threshold, tightened as the community grows, will progressively limit display to areas ridden by several users.',
-  'privacy.odbl': 'The community map data is published as open data under the ODbL 1.0 licence (Open Database License): anyone may reuse and download it, provided the same open licence is kept.',
+  'privacy.odbl': 'The community map data is published as open data under the ODbL 1.0 licence (Open Database License): anyone may reuse and download it, provided the source is credited and the same open licence is kept (share-alike). In parallel, contributors (consent v5) grant the project a non-exclusive right to offer this data under a separate commercial licence to parties unwilling to honour share-alike — revenue funds the project.',
   'privacy.usedFor': 'Your data is used exclusively for:',
   'privacy.routeCalc': 'Let you export your traces as GPX to third-party tools (gpx.studio, BRouter, Komoot)',
   'privacy.noSponsored': 'No sponsored or promoted results on the map',
@@ -1053,14 +1070,16 @@ const en: Translations = {
   'calque.copied': 'Copied ✓',
   'calque.stepsTitle': 'Step by step',
   'calque.step1Title': 'Open the map settings',
-  'calque.step1Text': "On gpx.studio, hover the map icon at the top right, then click the cog to open the settings.",
+  // Menu path validated in the real gpx.studio (2026-09-05); the map-icon
+  // hover is the alternative route to the same panel.
+  'calque.step1Text': "On gpx.studio, open the “Settings” menu → “Map Layers”. (Or: hover the map icon at the top right and click the cog — same panel.)",
   'calque.step2Title': 'Add a custom layer',
-  'calque.step2Text': "Choose “Add custom layer”, then fill in exactly these four fields:",
+  'calque.step2Text': "Under “Custom layers”, choose “Add custom layer”, then fill in exactly these four fields:",
   'calque.step3Title': 'Save',
   'calque.step3Text': "Click “Add layer”, then “Save”. The layer is remembered in your browser for next time.",
   'calque.step4Title': 'Turn the overlay on',
   'calque.step4Text': "Hover the map icon again, go to “Overlays › Custom” and tick Chemins Communs.",
-  'calque.step4Text2': "The community's traces appear in green on top of your basemap. The more a segment is ridden, the more it stands out.",
+  'calque.step4Text2': "The community's traces appear in purple → orange on top of your basemap. The more a segment is ridden, the warmer and brighter it glows.",
   'calque.panelTitle': 'New custom layer',
   'calque.fieldName': 'Name',
   'calque.fieldUrl': 'Tiles URL',
@@ -1080,7 +1099,7 @@ const en: Translations = {
   'calque.noteAppsT': 'Other apps',
   'calque.noteApps': 'The same URL works in any app that accepts a raster XYZ layer (VisuGPX, MapLibre, Leaflet…).',
   'calque.noteLicenseT': 'Licence',
-  'calque.noteLicense': 'Data © Chemins Communs, reusable with attribution —',
+  'calque.noteLicense': 'Data © Chemins Communs contributors, reusable with attribution and share-alike —',
 };
 
 export default en;

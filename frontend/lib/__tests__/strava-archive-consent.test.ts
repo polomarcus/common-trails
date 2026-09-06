@@ -57,12 +57,12 @@ describe('buildFilesConsentFields — /imports/files consent round-trip (audit g
     expect(fields).toEqual({ consent_id: 'consent-123' });
   });
 
-  it('the consent version is bumped whenever the wording changes (v4)', () => {
-    // Each material wording change bumps the audit version. v4 (2026-08-09)
-    // trimmed the label to the essential grant (dropped the "Je confirme
-    // déposer mes propres traces…" preamble) — same substance (ODbL + endpoint
-    // masking), new version for a clean consent audit trail.
-    expect(CONTRIBUTION_CONSENT_VERSION).toBe('contribution-2026-08-v4');
+  it('the consent version is bumped whenever the wording changes (v5)', () => {
+    // Each material wording change bumps the audit version. v5 (2026-09-05)
+    // added the dual-licensing grant: the contributor also grants the project
+    // a non-exclusive right to license the contribution commercially. A
+    // MATERIAL new grant → new version; v1-v4 rows remain ODbL-only.
+    expect(CONTRIBUTION_CONSENT_VERSION).toBe('contribution-2026-09-v5');
   });
 });
 

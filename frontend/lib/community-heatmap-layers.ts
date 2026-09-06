@@ -163,6 +163,20 @@ export const LINE_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['get', 'heat
   0, 0.4, 0.3, 0.45, 0.7, 0.52, 1.0, 0.6,
 ];
 
+// ⭐ SSOT color stops for the community heat ramp: dark plum (rare) → hot pink →
+// orange (very popular), Komoot-style. The line layer's `line-color`, the home
+// hero legend + SVG illustration, and /map's MapLegend swatch ALL derive from
+// this list — never re-type the hexes (the /map legend once drifted to a stale
+// BLUE ramp precisely because it was hand-copied).
+export const HEAT_RAMP_STOPS: ReadonlyArray<readonly [number, string]> = [
+  [0, '#7a2058'], [0.25, '#a83275'], [0.5, '#d63384'],
+  [0.75, '#f06595'], [0.9, '#ff7e3a'], [1.0, '#ff8c42'],
+];
+// The same ramp as a CSS gradient (left = rare, right = very popular), with the
+// TRUE stop positions — for legends/illustrations in plain HTML/SVG.
+export const HEAT_RAMP_CSS = `linear-gradient(to right, ${HEAT_RAMP_STOPS
+  .map(([pos, color]) => `${color} ${pos * 100}%`).join(', ')})`;
+
 // ⭐ SSOT width ramps — the /map hooks (useMapLayerSync, useHeatmapControl) IMPORT
 // these instead of re-declaring them, so a paint retune here can't silently fail
 // to reach /map (the 2026-08-05 pâté-fix bug: the spec was thinned but the hooks
@@ -235,11 +249,10 @@ export function communityTrailsLineLayerSpec(opts: CommunityLayerOptions = {}) {
       'line-sort-key': ['get', 'user_count'],
     },
     paint: {
-      // Core line ramp: dark plum (rare) → hot pink (occasional) →
-      // bright pink (popular) → orange (very popular). Komoot-style.
+      // Core line ramp — derived from HEAT_RAMP_STOPS (the SSOT the legends
+      // also read), dark plum (rare) → hot pink → orange (very popular).
       'line-color': ['interpolate', ['linear'], ['get', 'heat_score'],
-        0, '#7a2058', 0.25, '#a83275', 0.5, '#d63384',
-        0.75, '#f06595', 0.9, '#ff7e3a', 1.0, '#ff8c42',
+        ...HEAT_RAMP_STOPS.flatMap(([pos, color]) => [pos, color]),
       ],
       // Thinned (~half at the high-heat end): 8px cores made dense repeated
       // traces merge into a blob. See the pâté fix (2026-08-05). SSOT const.

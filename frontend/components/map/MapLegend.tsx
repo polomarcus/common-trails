@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { SPORT_COLORS, SPORT_DASH, SPORT_LABELS } from '@/lib/constants';
+import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import { useI18n } from '@/lib/i18n';
 import type { LayerToggles, WaymarkedToggles } from '@/hooks/useLayerToggles';
 
@@ -26,7 +27,9 @@ function MapLegend({ layers, waymarked }: MapLegendProps) {
     }}>
       {layers.heatmap && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ width: 40, height: 4, borderRadius: 2, background: 'linear-gradient(to right, #d0e8ff, #7bb3f0, #3b82f6, #1d4ed8, #1e3a5f)' }} />
+          {/* Was a stale hand-copied BLUE gradient that never followed the
+              plum→orange retune — the swatch now derives from the ramp SSOT. */}
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: HEAT_RAMP_CSS }} />
           <span>{t('map.legend.popularity')}</span>
         </div>
       )}

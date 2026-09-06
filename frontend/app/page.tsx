@@ -16,6 +16,7 @@ import { type CommunityStats, formatStatValue } from '@/lib/community-stats';
 import {
   communityTrailsSourceSpec, communityTrailsHeatLayerSpec, communityTrailsLineLayerSpec,
   applyCommunityHeatSportFilter, LINE_CRISP_MINZOOM, COMMUNITY_TRAILS_SOURCE,
+  HEAT_RAMP_STOPS, HEAT_RAMP_CSS,
 } from '@/lib/community-heatmap-layers';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
@@ -240,6 +241,10 @@ export default function HomePage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null);
   const layersReady = useRef(false);
+  // Shows the hero heat legend only once the PMTiles heat layers actually
+  // render (the PMTiles wiring is best-effort: on CDN failure the hero keeps a
+  // plain basemap, and a legend would then describe colours nowhere on screen).
+  const [heatLegendVisible, setHeatLegendVisible] = useState(false);
   const [disconnectedBanner, setDisconnectedBanner] = useState(false);
 
   // Show disconnected banner + skip auto-redirect when coming from logout
@@ -391,6 +396,7 @@ export default function HomePage() {
           communityTrailsLineLayerSpec({ visible: true, minzoom: LINE_CRISP_MINZOOM, opacityMult: 0.9 }),
           'dfci-trails-casing');
         layersReady.current = true;
+        setHeatLegendVisible(true);
         applySportFilter(activeSportRef.current);
       } catch { /* silent — hero keeps the plain basemap */ }
     })();
@@ -415,6 +421,14 @@ export default function HomePage() {
         .hero-cta { transition: all 0.2s ease; }
         .hero-cta:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3) !important; }
         input::placeholder { color: rgba(255,255,255,0.35); }
+        /* Short desktop/tablet viewports (13" laptop with browser chrome,
+           landscape tablets): the bottom-anchored hero stack grew with the
+           tagline+legend — shed the subtitle and tighten padding so the sport
+           pills and the h1 never clip under overflow:hidden. */
+        @media (min-width: 641px) and (max-height: 720px) {
+          .hero-content { padding-bottom: 18px !important; }
+          .hero-content .hero-subtitle { display: none; }
+        }
         @media (max-width: 640px) {
           .hero-wrapper {
             height: auto !important;
@@ -443,7 +457,7 @@ export default function HomePage() {
             z-index: 8;
           }
           .hero-content h1 { font-size: 26px !important; margin-bottom: 6px !important; }
-          .hero-content .hero-tagline { font-size: 13px !important; margin-bottom: 8px !important; }
+          .hero-content .hero-tagline { font-size: 14px !important; margin-bottom: 8px !important; }
           .hero-content .hero-subtitle { display: none; }
           .hero-content .hero-search { display: none; }
           .hero-content .hero-badges { display: none; }
@@ -548,17 +562,37 @@ export default function HomePage() {
           }}>
             Chemins Communs
           </h1>
+          {/* Tagline = the value prop — the ONLY copy line kept on mobile, so
+              it is styled as the statement, not a muted quote. */}
           <p className="hero-tagline" style={{
-            fontSize: 14, color: 'rgba(255,255,255,0.65)', lineHeight: 1.5,
+            fontSize: 15.5, fontWeight: 600, color: 'rgba(255,255,255,0.92)', lineHeight: 1.45,
             margin: '0 0 10px', maxWidth: 440,
+            textShadow: '0 1px 12px rgba(0,0,0,0.4)',
           }}>
-            {t('home.hero.quote')}
+            {t('home.hero.tagline')}
           </p>
+          {/* Heat legend — decodes the map behind at a glance. Gated on the
+              heat layers actually rendering (a legend over a bare basemap
+              would advertise colours that are nowhere on screen). */}
+          {heatLegendVisible && (
+            <div className="hero-legend" data-testid="hero-heat-legend" style={{
+              display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px',
+              fontSize: 11, color: 'rgba(255,255,255,0.55)', whiteSpace: 'nowrap',
+            }}>
+              <span>{t('home.hero.legendLow')}</span>
+              <div style={{
+                flex: '0 1 150px', height: 6, borderRadius: 3,
+                background: HEAT_RAMP_CSS,
+                boxShadow: `0 0 8px ${HEAT_RAMP_STOPS[2][1]}66`,
+              }} />
+              <span>{t('home.hero.legendHigh')}</span>
+            </div>
+          )}
           <p className="hero-subtitle" style={{
             fontSize: 13, color: 'rgba(255,255,255,0.5)', lineHeight: 1.5,
             margin: '0 0 16px', maxWidth: 440,
           }}>
-            {t('home.hero.subtitle')}
+            {t('home.hero.subtitle', { thesis: t('common.thesis') })}
           </p>
 
           {/* Place search */}
@@ -601,7 +635,9 @@ export default function HomePage() {
               backdropFilter: 'blur(8px)',
               display: 'inline-flex', alignItems: 'center', gap: 6,
             }}>
-              {t('home.hero.exploreMap')}
+              {/* "no account needed" is an acquisition pitch — only for
+                  visitors who don't have one. */}
+              {loggedIn ? t('home.hero.exploreMap') : t('home.hero.exploreMapNoAccount')}
             </Link>
           </div>
 
@@ -742,14 +778,12 @@ export default function HomePage() {
               {/* Gradient line visual — popularity colors */}
               <svg viewBox="0 0 320 80" width="100%" style={{ maxWidth: 320 }}>
                 <defs>
-                  {/* Matches the live heatmap ramp (lib/community-heatmap-layers.ts):
-                      dark plum (rare) → hot pink → orange (very popular). */}
+                  {/* Stops derive from the ramp SSOT (lib/community-heatmap-layers.ts)
+                      so a paint retune can't leave this illustration stale. */}
                   <linearGradient id="heat-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#7a2058" />
-                    <stop offset="25%" stopColor="#a83275" />
-                    <stop offset="50%" stopColor="#d63384" />
-                    <stop offset="75%" stopColor="#f06595" />
-                    <stop offset="100%" stopColor="#ff8c42" />
+                    {HEAT_RAMP_STOPS.map(([pos, color]) => (
+                      <stop key={pos} offset={`${pos * 100}%`} stopColor={color} />
+                    ))}
                   </linearGradient>
                 </defs>
                 <path d="M 20 55 Q 80 20, 160 40 T 300 30" fill="none" stroke="url(#heat-grad)" strokeWidth="5" strokeLinecap="round" />
