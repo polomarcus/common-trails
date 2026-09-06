@@ -420,13 +420,16 @@ async def import_files(
     # count would MISS a batch whose last file happens to be a duplicate while
     # earlier files created activities. A wasted rebuild on an all-duplicate
     # batch is rare, idempotent, and cheap. Never raises (best-effort); no-ops
-    # locally / in TEST_MODE; the daily backstop catches a missed trigger. The
-    # build-pmtiles job runs on db-f1-micro with no tier bump.
+    # locally / in TEST_MODE. ⚠️ There is NO scheduled rebuild backstop (only
+    # the archive drain runs daily): a missed/failed trigger leaves the display
+    # STALE until the next trigger (a later upload, or an archive drain that
+    # imports something). The build-pmtiles job runs on db-f1-micro with no
+    # tier bump.
     # Debounced (cost control): an abusive user looping tiny uploads must not
     # fire N expensive build-pmtiles JOBS. The FIRST trigger per cooldown
-    # window fires; the rest are suppressed (the daily backstop + the next
-    # upload after the cooldown still refresh — a suppressed trigger only
-    # delays, never drops, the rebuild). See run_jobs.build_pmtiles_debounce_ok.
+    # window fires; the rest are suppressed — a suppressed trigger delays the
+    # rebuild until the next trigger after the cooldown (there is no daily
+    # rebuild to catch it). See run_jobs.build_pmtiles_debounce_ok.
     if rebuild_display:
         try:
             from app.services.run_jobs import (

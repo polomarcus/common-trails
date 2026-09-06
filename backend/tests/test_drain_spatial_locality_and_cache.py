@@ -111,7 +111,7 @@ class TestArchiveIterationOrder:
 
         processed_order: list[str] = []
 
-        def fake_ingest(db, *, user_id, filename, raw, resolved_sport,
+        def fake_ingest(*, user_id, filename, raw, resolved_sport,
                         contribute_heatmap, source, skip_heat_computation,
                         collect_touched_ways=None):
             # The bytes the drain feeds ingest must be the member's REAL bytes.

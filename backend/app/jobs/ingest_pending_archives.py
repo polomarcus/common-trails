@@ -81,6 +81,13 @@ _DEFAULT_STATEMENT_TIMEOUT_MS = 120_000
 # owner. The reaper (_reap_stuck_archives) terminally FAILS those rows.
 _MAX_DRAIN_ATTEMPTS = int(os.environ.get("MAX_DRAIN_ATTEMPTS", "5"))
 _STUCK_PROCESSING_HOURS = int(os.environ.get("ARCHIVE_STUCK_PROCESSING_HOURS", "3"))
+# An `/init`'d archive whose browser PUT never happened stays 'awaiting_upload'
+# forever: it counts against MAX_OPEN_ARCHIVES_PER_USER (5 abandoned inits and
+# the user can never upload again) and the admin requeue 409s it. The reaper
+# fails those after this TTL.
+_AWAITING_UPLOAD_TTL_HOURS = int(
+    os.environ.get("ARCHIVE_AWAITING_UPLOAD_TTL_HOURS", "48")
+)
 
 _statement_timeout_registered = False
 _statement_timeout_listener = None  # kept for test cleanup (event.remove)
@@ -415,7 +422,6 @@ def _finish(db, row_id: str, status: str, *, activity_id: str | None = None, err
 
 
 def _ingest_member_bytes(
-    db,
     *,
     user_id: str,
     filename: str,
@@ -429,6 +435,7 @@ def _ingest_member_bytes(
     """Parse + ingest ONE archive member. Shared by both drains (per-member
     queue AND the whole-archive streaming drain) so provenance stamping +
     the sport cascade + #453 promotion can't drift between the two paths.
+    (No ``db`` arg: ``ingest_activity`` opens its own short-lived session.)
 
     ``collect_touched_ways``: when set, the per-activity ``heat_edges_agg``
     recompute is deferred and the touched osm_way_ids accumulate there — the
@@ -441,6 +448,16 @@ def _ingest_member_bytes(
     parsed = _parse_member(raw, filename or "member.gpx")
     if parsed.get("skip_reason"):
         return "skipped", None, parsed["skip_reason"]
+
+    # HUSK GUARD: a member that parses but yields ZERO usable coordinates
+    # (e.g. a Garmin .fit with no GPS records, a trackless .gpx) must NOT
+    # create an activity row — an empty husk renders nothing, camps in the
+    # user's activity list, and its file_hash dedup makes a later real
+    # re-import impossible. The 2026-08 Garmin recovery reported "14,460
+    # imported" when 13,882 rows were exactly such husks (no geometry, no
+    # distance). Skip, never "import".
+    if not parsed.get("geometry_geojson"):
+        return "skipped", None, "no_geometry"
 
     activity_data = {
         "provider": "file",
@@ -501,7 +518,14 @@ def drain_pending(
     # re-loads the bytes — a probe-then-reload keeps peak RAM bounded to one
     # member (the per-member queue is the legacy small-zip path; batches are
     # tiny, default 50). A probe failure just leaves the member unordered.
-    _order_pending_batch(batch)
+    #
+    # LEGACY MATCHED MODE ONLY: under the raw-trace pivot there is no OSM
+    # matcher and no segment cache to keep warm, so the sort is vestigial —
+    # its probe would just DOUBLE-read every member from storage (GCS) for
+    # nothing. Same reasoning that dropped the whole-archive drain's pre-sort.
+    from app.services.raw_trace_display import raw_display_enabled
+    if not raw_display_enabled():
+        _order_pending_batch(batch)
 
     last_work_s: float | None = None
     for i, row in enumerate(batch):
@@ -516,7 +540,6 @@ def drain_pending(
         try:
             raw = archive_intake.load_member(row["storage_backend"], row["storage_key"])
             outcome, activity_id, error = _ingest_member_bytes(
-                db,
                 user_id=row["user_id"],
                 filename=row["original_filename"] or "member.gpx",
                 raw=raw,
@@ -559,8 +582,19 @@ def _reap_stuck_archives(db) -> list[str]:
     drain (job timeout/OOM/eviction — no except block ran to transition them)
     once they've exhausted retries. Without this they sit in 'processing'
     forever, permanently consuming the owner's open-archive slot and never
-    notifying them. Returns the reaped archive ids (caller emails them).
+    notifying them. Returns the reaped-from-'processing' archive ids (the
+    caller emails those owners — an upload DID happen).
+
+    Also (same sweep) fails ABANDONED 'awaiting_upload' rows older than
+    ``ARCHIVE_AWAITING_UPLOAD_TTL_HOURS`` (default 48 h): an `/init`'d archive
+    whose browser PUT never completed otherwise camps on the per-user
+    MAX_OPEN_ARCHIVES_PER_USER slot forever, and the admin requeue 409s it
+    (it's neither failed nor stale-processing). Those ids are deliberately NOT
+    returned — no upload ever happened, so no terminal email — and the
+    (maybe never-created) bucket object is best-effort deleted.
+
     Best-effort — never raises (a reap hiccup must not block the drain)."""
+    reaped: list[str] = []
     try:
         rows = db.execute(sa_text(f"""
             UPDATE pending_archives
@@ -579,12 +613,43 @@ def _reap_stuck_archives(db) -> list[str]:
         if reaped:
             log.warning("reaped %d archive(s) stuck in 'processing' → failed: %s",
                         len(reaped), reaped)
-        return reaped
     except Exception:  # noqa: BLE001 — reaping must never break the drain
         with contextlib.suppress(Exception):
             db.rollback()
         log.warning("reap of stuck archives failed", exc_info=True)
-        return []
+
+    # Abandoned 'awaiting_upload' rows — separate try so a hiccup here can't
+    # undo/skip the 'processing' reap above (and vice versa).
+    try:
+        rows = db.execute(sa_text("""
+            UPDATE pending_archives
+            SET status = 'failed',
+                last_error = 'upload never completed within '
+                             || :ttl || 'h of init — slot released '
+                             '(start a new upload to retry)',
+                updated_at = now()
+            WHERE status = 'awaiting_upload'
+              AND updated_at < now() - make_interval(hours => :ttl)
+            RETURNING id, storage_backend, bucket_key
+        """), {"ttl": _AWAITING_UPLOAD_TTL_HOURS}).mappings().all()
+        db.commit()
+        if rows:
+            log.warning(
+                "reaped %d abandoned 'awaiting_upload' archive(s) → failed "
+                "(no upload within %dh; slot released, no email): %s",
+                len(rows), _AWAITING_UPLOAD_TTL_HOURS,
+                [str(r["id"]) for r in rows],
+            )
+        for r in rows:
+            # The PUT may have partially/fully landed without /complete ever
+            # being called — free the object. delete_archive never raises.
+            archive_intake.delete_archive(r["storage_backend"], r["bucket_key"])
+    except Exception:  # noqa: BLE001 — reaping must never break the drain
+        with contextlib.suppress(Exception):
+            db.rollback()
+        log.warning("reap of abandoned awaiting_upload archives failed", exc_info=True)
+
+    return reaped
 
 
 def _claim_archives(db, limit: int) -> list[dict]:
@@ -622,6 +687,22 @@ def _claim_archives(db, limit: int) -> list[dict]:
         """), {"ids": [r["id"] for r in rows]})
     db.commit()
     return [dict(r) for r in rows]
+
+
+def _finish_archive_now(archive_id: str, status: str, counts: dict, error: str | None = None) -> None:
+    """``_finish_archive`` with a session opened ONLY for the terminal UPDATE.
+
+    The archive drain used to open one session per archive BEFORE the member
+    loop and first touch it here, hours later — the whole multi-hour drain
+    pinned an idle connection out of db-f1-micro's tiny pool for one UPDATE.
+    """
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        _finish_archive(db, archive_id, status, counts, error)
+    finally:
+        db.close()
 
 
 def _finish_archive(db, archive_id: str, status: str, counts: dict, error: str | None = None) -> None:
@@ -752,7 +833,11 @@ def drain_pending_archives(
         # (including on failure mid-way: the heat_edges rows for the members
         # already ingested are committed, so the agg must not drift).
         touched_ways: set[int] = set()
-        db = SessionLocal()
+        # NO session is opened here: member ingests each use their own
+        # short-lived session inside ingest_activity, and the terminal
+        # transition opens one just-in-time (_finish_archive_now). The old
+        # per-archive session sat IDLE for the whole multi-hour member loop,
+        # pinning one of db-f1-micro's few connection slots.
         try:
             # Defense-in-depth size guard (SSOT ``MAX_ARCHIVE_BYTES``). ``/complete``
             # already re-checks size, but a race or a direct-bucket PUT that bypasses
@@ -811,7 +896,6 @@ def drain_pending_archives(
                     _t0 = time.monotonic()
                     try:
                         outcome, _aid, _err = _ingest_member_bytes(
-                            db,
                             user_id=arch["user_id"],
                             filename=name,
                             raw=raw,
@@ -831,7 +915,7 @@ def drain_pending_archives(
             # End-of-archive: ONE deduplicated agg recompute, BEFORE the
             # terminal transition so status='done' implies a fresh aggregate.
             _recompute_heat_agg_batched(touched_ways)
-            _finish_archive(db, arch["id"], "done", counts)
+            _finish_archive_now(arch["id"], "done", counts)
             _notify_archive_terminal(arch["id"], "done", counts)
         except archive_intake.StorageConfigError as exc:
             # OPS misconfiguration (e.g. the job env lost UPLOADS_BUCKET),
@@ -847,12 +931,16 @@ def drain_pending_archives(
                 arch.get("id"), exc, exc_info=True,
             )
             try:
-                db.execute(sa_text("""
-                    UPDATE pending_archives
-                    SET status = 'uploaded', updated_at = now()
-                    WHERE id = :id
-                """), {"id": arch["id"]})
-                db.commit()
+                reset_db = SessionLocal()
+                try:
+                    reset_db.execute(sa_text("""
+                        UPDATE pending_archives
+                        SET status = 'uploaded', updated_at = now()
+                        WHERE id = :id
+                    """), {"id": arch["id"]})
+                    reset_db.commit()
+                finally:
+                    reset_db.close()
             except Exception:
                 log.warning("could not reset archive row to uploaded", exc_info=True)
         except gpx_service.ZipBombError as exc:
@@ -867,7 +955,7 @@ def drain_pending_archives(
             # recompute their ways so the aggregate doesn't drift.
             _recompute_heat_agg_batched(touched_ways)
             try:
-                _finish_archive(db, arch["id"], "failed", counts, error=reason[:1000])
+                _finish_archive_now(arch["id"], "failed", counts, error=reason[:1000])
             except Exception:
                 log.warning("could not mark archive failed", exc_info=True)
             else:
@@ -881,13 +969,11 @@ def drain_pending_archives(
             # agg freshness for every touched way).
             _recompute_heat_agg_batched(touched_ways)
             try:
-                _finish_archive(db, arch["id"], "failed", counts, error=str(exc)[:1000])
+                _finish_archive_now(arch["id"], "failed", counts, error=str(exc)[:1000])
             except Exception:
                 log.warning("could not mark archive failed", exc_info=True)
             else:
                 _notify_archive_terminal(arch["id"], "failed", counts, error=str(exc))
-        finally:
-            db.close()
         summary["imported"] += counts["imported"]
         summary["skipped"] += counts["skipped"]
         summary["failed"] += counts["failed"]
