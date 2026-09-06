@@ -114,6 +114,166 @@ class TestMeActivitiesStreaming:
             assert feat["properties"]["sport"] == "road"
 
 
+class TestMeActivitiesSqlSideLimit:
+    """Pins the SQL-side filter/order/limit fix (memory follow-up to the
+    32 MiB streaming one).
+
+    The old ``get_user_activities`` SELECTed EVERY column of the user's WHOLE
+    corpus (geometry_geojson included) into web RAM, then Python-sliced
+    ``[-limit:]`` — an OOM for a 14k-activity user on a 512Mi instance. The
+    fix pushes sport/geometry filters, ordering and LIMIT into Postgres with
+    column projection. These tests pin:
+
+    1. the response CONTRACT is unchanged — same set (the ``limit`` most
+       recent by effective date), same order (ascending, newest LAST — what
+       ``[-limit:]`` on the insertion-ordered list returned);
+    2. the emitted row SELECT actually carries a SQL LIMIT (assertion-level
+       guard against a regression to fetch-all-then-slice).
+    """
+
+    @staticmethod
+    def _seed_activities(user_id: str, specs: list[dict]) -> None:
+        """Insert Activity rows directly (fast — no GPX upload round-trip).
+
+        ``specs``: dicts with name/sport/activity_date/geometry_geojson
+        overrides. Rows belong to the fixture's freshly-registered user, so
+        the SHARED test DB is never truncated or cross-polluted."""
+        import json as _json_mod
+        import uuid as uuid_mod
+
+        from app.db.models import Activity
+        from app.db.session import SessionLocal
+
+        default_geom = _json_mod.dumps({
+            "type": "LineString",
+            "coordinates": [[3.87, 43.62], [3.88, 43.63]],
+        })
+        db = SessionLocal()
+        try:
+            for i, spec in enumerate(specs):
+                db.add(Activity(
+                    user_id=user_id,
+                    provider="file",
+                    provider_activity_id=f"meacts-test-{uuid_mod.uuid4().hex[:12]}-{i}",
+                    sport=spec.get("sport", "road"),
+                    name=spec["name"],
+                    geometry_geojson=spec.get("geometry_geojson", default_geom),
+                    distance_m=1000.0 + i,
+                    activity_date=spec.get("activity_date"),
+                ))
+            db.commit()
+        finally:
+            db.close()
+
+    def test_limit_returns_most_recent_ascending_with_filters(self, client, auth_headers):
+        """Seed MORE than ``limit`` activities and pin the exact pre-fix
+        contract: sport+geometry filters apply BEFORE the limit, the response
+        holds the ``limit`` most recent rows, ascending, newest LAST."""
+        import datetime as _dt
+
+        user_id = _decode_user_id(auth_headers)
+        base = _dt.datetime(2026, 1, 1, 12, 0, tzinfo=_dt.UTC)
+        specs = []
+        # 15 road rides, one per day — road-4 has NO geometry (must be
+        # excluded BEFORE the limit, like the old Python-side filter).
+        for i in range(15):
+            specs.append({
+                "name": f"road-{i}",
+                "sport": "road",
+                "activity_date": base + _dt.timedelta(days=i),
+                **({"geometry_geojson": None} if i == 4 else {}),
+            })
+        # 5 interleaved MTB rides — excluded by ?sport=road BEFORE the limit.
+        for i in range(5):
+            specs.append({
+                "name": f"mtb-{i}",
+                "sport": "mtb",
+                "activity_date": base + _dt.timedelta(days=i, hours=6),
+            })
+        self._seed_activities(user_id, specs)
+
+        resp = client.get("/me/activities?sport=road&limit=10", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["type"] == "FeatureCollection"
+        assert data["total"] == 10
+        assert data["total"] == len(data["features"])
+        names = [f["properties"]["name"] for f in data["features"]]
+        # 14 road rides have geometry (road-4 dropped); the 10 most recent of
+        # those are road-5..road-14, streamed OLDEST-FIRST (newest LAST).
+        assert names == [f"road-{i}" for i in range(5, 15)], names
+
+        # Unfiltered with a limit: the 10 most recent across sports. All mtb
+        # rows sit at day 0-4 (+6h) so the 10 newest overall are still
+        # road-5..road-14, ascending.
+        resp_all = client.get("/me/activities?limit=10", headers=auth_headers)
+        data_all = resp_all.json()
+        assert data_all["total"] == 10
+        names_all = [f["properties"]["name"] for f in data_all["features"]]
+        assert names_all == [f"road-{i}" for i in range(5, 15)], names_all
+
+        # Other sport + small limit: 3 newest mtb rides, ascending.
+        resp_mtb = client.get("/me/activities?sport=mtb&limit=3", headers=auth_headers)
+        data_mtb = resp_mtb.json()
+        assert data_mtb["total"] == 3
+        assert [f["properties"]["name"] for f in data_mtb["features"]] == [
+            "mtb-2", "mtb-3", "mtb-4",
+        ]
+
+    def test_activities_row_select_carries_sql_limit(self, client, auth_headers):
+        """Assertion-level guard: the SELECT that fetches activity rows
+        (the one projecting geometry_geojson) must carry a SQL LIMIT — the
+        old code fetched the whole corpus and sliced in Python."""
+        from sqlalchemy import event
+
+        from app.db.session import engine
+
+        user_id = _decode_user_id(auth_headers)
+        import datetime as _dt
+        base = _dt.datetime(2026, 2, 1, tzinfo=_dt.UTC)
+        self._seed_activities(user_id, [
+            {"name": f"lim-{i}", "activity_date": base + _dt.timedelta(days=i)}
+            for i in range(8)
+        ])
+
+        recorded: list[str] = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            recorded.append(statement)
+
+        event.listen(engine, "before_cursor_execute", _record)
+        try:
+            resp = client.get("/me/activities?limit=5", headers=auth_headers)
+            assert resp.status_code == 200
+            data = resp.json()  # fully consume the stream → row query runs
+        finally:
+            event.remove(engine, "before_cursor_execute", _record)
+
+        assert data["total"] == 5
+        assert [f["properties"]["name"] for f in data["features"]] == [
+            f"lim-{i}" for i in range(3, 8)
+        ]
+
+        row_selects = [
+            s for s in recorded
+            # The row query PROJECTS geometry_geojson; the head-of-body COUNT
+            # only references it in its WHERE — exclude COUNTs.
+            if "FROM activities" in s and "geometry_geojson" in s
+            and "count(" not in s.lower()
+        ]
+        assert row_selects, "expected a SELECT on activities projecting geometry_geojson"
+        for s in row_selects:
+            assert "LIMIT" in s.upper(), (
+                f"the activities row SELECT must carry a SQL LIMIT "
+                f"(fetch-all-then-Python-slice regression): {s}"
+            )
+            # Column projection guard: the memory fix also stops SELECTing
+            # unserialized heavy/irrelevant columns (display_coords blob).
+            assert "display_coords" not in s, (
+                f"row SELECT must project only serialized columns: {s}"
+            )
+
+
 class TestMeActivities:
     def test_empty_returns_feature_collection(self, client, auth_headers):
         resp = client.get("/me/activities", headers=auth_headers)
