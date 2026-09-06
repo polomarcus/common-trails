@@ -17,7 +17,7 @@ const fr: Translations = {
   'nav.menuAriaLabel': 'Menu de navigation',
   'nav.privacy': 'Confidentialité',
   'nav.support': 'Support',
-  'nav.overlay': 'Exporter le fond communautaire (heatmap)',
+  'nav.overlay': 'Exporter la heatmap par sport (calque)',
 
   // ── Members-only community EXPORT gate (2026-07 posture) ───────────────────
   // The community MAP is public (anyone can view the heatmap); only the bulk
@@ -30,8 +30,8 @@ const fr: Translations = {
   // ── Community heatmap EXPORT modal (formats, bbox, async, ODbL) ────────────
   'export.title': 'Exporter le fond communautaire (heatmap)',
   'export.intro': "Téléchargez la couche communautaire (toutes les traces partagées par les contributeurs). Données publiées sous licence ODbL 1.0 — attribution et partage à l'identique requis. Usage dans un produit fermé sans partage à l'identique : licence commerciale séparée, contactez-nous.",
-  'export.calque.title': '🗺️ Utiliser comme calque dans gpx.studio / VisuGPX',
-  'export.calque.bodyBefore': 'Affichez toute la heatmap en fond et tracez votre itinéraire par-dessus. Dans gpx.studio ou VisuGPX, ajoutez une ',
+  'export.calque.title': '🗺️ La heatmap PAR SPORT en calque (gpx.studio / VisuGPX)',
+  'export.calque.bodyBefore': 'Affichez la heatmap d\'UN sport (route, gravel, VTT, course…) en fond et tracez par-dessus — URL ci-dessous pour Route, les autres sports sur le tuto. Dans gpx.studio ou VisuGPX, ajoutez une ',
   'export.calque.bodyStrong': 'couche de carte personnalisée',
   'export.calque.bodyAfter': ' (type raster / XYZ) avec cette URL de tuiles :',
   'export.calque.copy': 'Copier',
@@ -170,7 +170,7 @@ const fr: Translations = {
   'home.step2.garmin': 'Garmin',
   'home.step3.title': 'Tracez de vrais parcours',
   'home.step3.desc': "Jamais tracé de parcours ? Suivez les chemins les plus lumineux : la heatmap vous donne un GPX propre, prêt pour gpx.studio, VisuGPX ou votre GPS.",
-  "home.calque.title": "🗺️ Utilise la heatmap comme calque",
+  "home.calque.title": "🗺️ Utilise la heatmap par sport comme calque",
   "home.calque.intro": "Affiche la heatmap en fond dans gpx.studio et trace ton itinéraire par-dessus. 30 secondes : Settings → Map Layers → Custom layers, et colle cette URL :",
   "home.calque.copy": "Copier",
   "home.calque.copied": "✓ Copié",
@@ -896,7 +896,7 @@ const fr: Translations = {
   'map.account.komootDesc': 'Exporter vos GPX → importer ici',
   'map.account.importContribute': 'Importer / Contribuer',
   'map.account.importContributeDesc': 'GPX, ZIP, export Strava / Garmin / Komoot',
-  'map.account.useAsOverlay': 'Utiliser la heatmap pour tracer',
+  'map.account.useAsOverlay': 'Utiliser la heatmap par sport pour tracer',
   'map.account.useAsOverlayDesc': 'Calque gpx.studio / VisuGPX, par sport',
   'map.menuButton': 'Menu',
   'map.account.createOrLogin': 'Créer un compte ou connexion',
@@ -1066,8 +1066,8 @@ const fr: Translations = {
 
   // ── Calque / heatmap dans gpx.studio ──────────────────────────────────────
   'calque.breadcrumb': 'La heatmap en calque',
-  'calque.title': 'Afficher notre heatmap dans gpx.studio',
-  'calque.intro': "Superpose les traces de la communauté sur ta carte préférée, en calque transparent, pour préparer tes sorties. Une URL, trois réglages, trente secondes.",
+  'calque.title': 'La heatmap par sport, en calque dans gpx.studio',
+  'calque.intro': "Superpose la heatmap communautaire D'UN SPORT (route, gravel, VTT, off-road, course) sur ta carte préférée, en calque transparent, pour préparer tes sorties. Choisis le sport, copie l'URL : trois réglages, trente secondes.",
   'calque.urlLabel': "L'adresse du calque",
   'calque.copy': 'Copier',
   'calque.copied': 'Copié ✓',
