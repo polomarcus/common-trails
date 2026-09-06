@@ -896,6 +896,8 @@ const fr: Translations = {
   'map.account.komootDesc': 'Exporter vos GPX → importer ici',
   'map.account.importContribute': 'Importer / Contribuer',
   'map.account.importContributeDesc': 'GPX, ZIP, export Strava / Garmin / Komoot',
+  'map.account.useAsOverlay': 'Utiliser la heatmap pour tracer',
+  'map.account.useAsOverlayDesc': 'Calque gpx.studio / VisuGPX, par sport',
   'map.menuButton': 'Menu',
   'map.account.createOrLogin': 'Créer un compte ou connexion',
   'map.account.accountOf': 'Compte de {name}',
