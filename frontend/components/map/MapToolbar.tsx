@@ -569,6 +569,25 @@ export default function MapToolbar(props: MapToolbarProps) {
                 </div>
               </button>
 
+              {/* Use the heatmap to PLAN — the consume-side twin of the import
+                  entry above (Paul 2026-09-06: the export was buried at the
+                  bottom of the Calques panel; route-planning with the heatmap
+                  as a gpx.studio overlay deserves a first-class menu entry). */}
+              <Link
+                href="/calque"
+                data-testid="map-menu-calque"
+                onClick={() => setShowUserMenu(false)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, textDecoration: 'none', color: 'inherit', width: '100%' }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#f0f9f4')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                <span style={{ fontSize: 18 }}>🗺️</span>
+                <div>
+                  <div style={{ fontWeight: 600, color: '#1a4731' }}>{t('map.account.useAsOverlay')}</div>
+                  <div style={{ fontSize: 11, color: '#888' }}>{t('map.account.useAsOverlayDesc')}</div>
+                </div>
+              </Link>
+
               {/* Divider */}
               <div style={{ height: 1, background: '#f0f0f0', margin: '4px 0' }} />
 
