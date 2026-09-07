@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.66.0](https://github.com/polomarcus/common-trails/compare/backend-v0.65.0...backend-v0.66.0) (2026-09-07)
+
+
+### Features
+
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+
+
+### Bug Fixes
+
+* **api:** push /me/activities filter/order/limit into SQL (OOM fix) ([#20](https://github.com/polomarcus/common-trails/issues/20)) ([a512f9e](https://github.com/polomarcus/common-trails/commit/a512f9e067fde8438e5c050da78227564b782acb))
+* **ingestion:** hygiene round — reap abandoned inits, husk guard, dedup index, raw-mode presort skip ([#21](https://github.com/polomarcus/common-trails/issues/21)) ([5789e7a](https://github.com/polomarcus/common-trails/commit/5789e7a6976047371a976243362f511adda31f31))
+
 ## [0.65.0](https://github.com/polomarcus/common-trails/compare/backend-v0.64.0...backend-v0.65.0) (2026-09-05)
 
 

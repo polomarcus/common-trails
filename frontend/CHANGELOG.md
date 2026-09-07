@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.64.0](https://github.com/polomarcus/common-trails/compare/frontend-v0.63.0...frontend-v0.64.0) (2026-09-07)
+
+
+### Features
+
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+* **map:** 'Utiliser la heatmap pour tracer' in the account menu ([#25](https://github.com/polomarcus/common-trails/issues/25)) ([71656a2](https://github.com/polomarcus/common-trails/commit/71656a2321e6ac47f056639e8fca328931af2e6e))
+
 ## [0.63.0](https://github.com/polomarcus/common-trails/compare/frontend-v0.62.0...frontend-v0.63.0) (2026-09-05)
 
 
