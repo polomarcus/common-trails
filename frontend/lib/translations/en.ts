@@ -17,7 +17,7 @@ const en: Translations = {
   'nav.menuAriaLabel': 'Navigation menu',
   'nav.privacy': 'Privacy',
   'nav.support': 'Support',
-  'nav.overlay': 'Export the community heatmap',
+  'nav.overlay': 'Export the per-sport heatmap (overlay)',
 
   // ── Members-only community EXPORT gate (2026-07 posture) ───────────────────
   // The community MAP is public (anyone can view the heatmap); only the bulk
@@ -30,8 +30,8 @@ const en: Translations = {
   // ── Community heatmap EXPORT modal (formats, bbox, async, ODbL) ────────────
   'export.title': 'Export the community layer (heatmap)',
   'export.intro': 'Download the community layer (every trace shared by contributors). Data published under the ODbL 1.0 licence — attribution and share-alike required. Use in a closed product without share-alike: a separate commercial licence is available, contact us.',
-  'export.calque.title': '🗺️ Use as an overlay in gpx.studio / VisuGPX',
-  'export.calque.bodyBefore': 'Show the whole heatmap underneath and draw your route on top. In gpx.studio or VisuGPX, add a ',
+  'export.calque.title': '🗺️ The PER-SPORT heatmap as an overlay (gpx.studio / VisuGPX)',
+  'export.calque.bodyBefore': 'Show ONE sport\'s heatmap (road, gravel, MTB, running…) underneath and draw on top — URL below is Road, other sports in the guide. In gpx.studio or VisuGPX, add a ',
   'export.calque.bodyStrong': 'custom map layer',
   'export.calque.bodyAfter': ' (raster / XYZ type) with this tiles URL:',
   'export.calque.copy': 'Copy',
@@ -170,7 +170,7 @@ const en: Translations = {
   'home.step2.garmin': 'Garmin',
   'home.step3.title': 'Build real routes',
   'home.step3.desc': "Never built a route before? Follow the brightest trails: the heatmap gives you a clean GPX, ready for gpx.studio, VisuGPX or your GPS device.",
-  "home.calque.title": "🗺️ Use the heatmap as an overlay",
+  "home.calque.title": "🗺️ Use the per-sport heatmap as an overlay",
   "home.calque.intro": "Show the heatmap underneath in gpx.studio and draw your route on top. 30 seconds: Settings → Map Layers → Custom layers, and paste this URL:",
   "home.calque.copy": "Copy",
   "home.calque.copied": "✓ Copied",
@@ -895,7 +895,7 @@ const en: Translations = {
   'map.account.komootDesc': 'Export your GPX → import here',
   'map.account.importContribute': 'Import / Contribute',
   'map.account.importContributeDesc': 'GPX, ZIP, Strava / Garmin / Komoot export',
-  'map.account.useAsOverlay': 'Use the heatmap to plan routes',
+  'map.account.useAsOverlay': 'Use the per-sport heatmap to plan routes',
   'map.account.useAsOverlayDesc': 'gpx.studio / VisuGPX overlay, per sport',
   'map.menuButton': 'Menu',
   'map.account.createOrLogin': 'Sign up or log in',
@@ -1065,8 +1065,8 @@ const en: Translations = {
 
   // ── Overlay / heatmap in gpx.studio ───────────────────────────────────────
   'calque.breadcrumb': 'Heatmap as an overlay',
-  'calque.title': 'Show our heatmap in gpx.studio',
-  'calque.intro': "Layer the community's traces on top of your favourite map, as a transparent overlay, to plan your rides. One URL, three settings, thirty seconds.",
+  'calque.title': 'The per-sport heatmap as a gpx.studio overlay',
+  'calque.intro': "Overlay ONE sport's community heatmap (road, gravel, MTB, off-road, running) on your favourite planner as a transparent layer. Pick the sport, copy the URL: three settings, thirty seconds.",
   'calque.urlLabel': 'The overlay address',
   'calque.copy': 'Copy',
   'calque.copied': 'Copied ✓',
