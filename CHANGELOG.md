@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.169](https://github.com/polomarcus/common-trails/compare/common-trails-v0.7.168...common-trails-v0.7.169) (2026-09-07)
+
+
+### Features
+
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+* **map:** 'Utiliser la heatmap pour tracer' in the account menu ([#25](https://github.com/polomarcus/common-trails/issues/25)) ([71656a2](https://github.com/polomarcus/common-trails/commit/71656a2321e6ac47f056639e8fca328931af2e6e))
+
+
+### Bug Fixes
+
+* **api:** push /me/activities filter/order/limit into SQL (OOM fix) ([#20](https://github.com/polomarcus/common-trails/issues/20)) ([a512f9e](https://github.com/polomarcus/common-trails/commit/a512f9e067fde8438e5c050da78227564b782acb))
+* **ingestion:** hygiene round — reap abandoned inits, husk guard, dedup index, raw-mode presort skip ([#21](https://github.com/polomarcus/common-trails/issues/21)) ([5789e7a](https://github.com/polomarcus/common-trails/commit/5789e7a6976047371a976243362f511adda31f31))
+
 ## [0.7.168](https://github.com/polomarcus/common-trails/compare/common-trails-v0.7.167...common-trails-v0.7.168) (2026-09-05)
 
 
