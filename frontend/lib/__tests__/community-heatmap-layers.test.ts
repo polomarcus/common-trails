@@ -255,12 +255,22 @@ describe('raster-style density heatmap layer (feat/raster-heatmap)', () => {
     );
   });
 
-  it('LINE_CRISP_MINZOOM shows continuous lines from regional zoom (avoids the raster "dots" at the default view) but not at national overview', () => {
-    // Lowered 14→9 (2026-08-07): the raster dotted out at the default hero zoom
-    // (~z10-11); the continuous line layer from z9 fixes it. Kept >=6 so the
-    // national overview stays raster-only (individual lines would be noise).
-    expect(LINE_CRISP_MINZOOM).toBeGreaterThanOrEqual(6);
-    expect(LINE_CRISP_MINZOOM).toBeLessThanOrEqual(11);
+  it('LINE_CRISP_MINZOOM equals the SOURCE minzoom — lines draw wherever the tileset has data', () => {
+    // 14→9 (2026-08-07), then 9→6 (2026-10-12). The z9 floor hid a dense network:
+    // measured on the real prod tileset at z8.4 over Montpellier, the viewport
+    // held 41 285 `trails` features and the map drew ZERO lines, leaving only the
+    // ~3 px raster dots ("des petites bulles", Paul). The floor must therefore
+    // never sit ABOVE the zoom at which the source starts serving features —
+    // anything in between is data the tileset ships and the map silently hides.
+    const source = communityTrailsSourceSpec('pmtiles://https://example.org/x.pmtiles');
+    expect(LINE_CRISP_MINZOOM).toBe(source.minzoom);
+  });
+
+  it('the /map line layer is actually built with that floor (not a stale literal)', () => {
+    // The constant is only worth pinning if the layer reads it: /map passes it
+    // explicitly in lib/init-map-layers.ts and the home hero in app/page.tsx.
+    expect(communityTrailsLineLayerSpec({ minzoom: LINE_CRISP_MINZOOM }).minzoom)
+      .toBe(LINE_CRISP_MINZOOM);
   });
 });
 

@@ -34,16 +34,26 @@ export const COMMUNITY_TRAILS_HEAT_LAYER = 'community-trails-heat';
  *  (raw_trace_display._emit_run_points → build_pmtiles multi-layer tippecanoe). */
 export const HEAT_POINTS_SOURCE_LAYER = 'heat_points';
 
-/** Zoom floor for the THIN crisp line overlay. The raster heatmap carries the
- *  density look, but at regional zoom (the default hero view ~z10-11) its
- *  tippecanoe-thinned points render as scattered DOTS in sparse areas rather
- *  than continuous corridors (Paul, 2026-08-07: "on voit des points plutôt que
- *  des lignes au zoom par défaut"). The `trails` layer is continuous LineStrings,
- *  so showing it from z9 draws clean lines instead of dots. Verified on real prod
- *  pmtiles at z10.5: z14 = corridors+dots, z9 = a clean line network. Below z9
- *  (national overview) the raster alone carries the density (individual lines
- *  would just be noise there). */
-export const LINE_CRISP_MINZOOM = 9;
+/** Zoom floor for the THIN crisp line overlay — pinned to the SOURCE's own
+ *  `minzoom` (communityTrailsSourceSpec), i.e. the lines draw wherever the
+ *  tileset actually has data.
+ *
+ *  The raster heatmap carries the density look, but its tippecanoe-thinned
+ *  points render as scattered DOTS in sparse areas rather than continuous
+ *  corridors (Paul, 2026-08-07: "on voit des points plutôt que des lignes au
+ *  zoom par défaut"). The `trails` layer is continuous LineStrings, so showing
+ *  it draws clean lines instead of dots.
+ *
+ *  Was 9, on the assumption that below that the lines "would just be noise".
+ *  Measured on the real prod tileset instead (2026-10-12) — at z8.4 over
+ *  Montpellier the viewport holds 41 285 `trails` features and 6 818
+ *  `heat_points`, yet ZERO lines were drawn: the floor hid them, and the raster
+ *  radius there is only ~3 px (2 px @z6 → 4 px @z10), so a dense region rendered
+ *  as a handful of faint bubbles. Dropping the floor to the source minzoom draws
+ *  5 401 lines in that same view — a continuous Montpellier↔Nîmes network — and
+ *  z6.2 (national) still reads as corridors, not noise. The assumption was
+ *  simply wrong; keep this EQUAL to the source minzoom (a test pins it). */
+export const LINE_CRISP_MINZOOM = 6;
 
 /** oneway_score >= this ⇒ a trail is ridden predominantly ONE way (backend
  *  circular-concentration R; mirror of raw_trace_display.ONEWAY_SCORE_THRESHOLD).
