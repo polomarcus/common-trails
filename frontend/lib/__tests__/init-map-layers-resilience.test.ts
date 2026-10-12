@@ -6,8 +6,11 @@
  * (which reads the same PMTiles file) was fine. Cause: `addMapSourcesAndLayers`
  * was straight-line code whose FIRST statement, `registerDirectionArrow()`,
  * touches the canvas (`getImageData`) and calls `map.addImage()`. Either can
- * throw in the wild (hardened/anti-fingerprinting browsers block canvas reads;
- * `addImage` rejects a duplicate id). The throw aborted every block after it,
+ * throw in the wild: `addImage` raises `RangeError: mismatched image size` when
+ * the declared size disagrees with the bitmap (verified in maplibre-gl 4.3.2,
+ * which wraps the bytes in `new RGBAImage({width, height}, …)`), and
+ * `getImageData` raises SecurityError where canvas reads are blocked. The throw
+ * aborted every block after it,
  * and `layersReady` was never set — so the Calques checkbox and the `H`
  * shortcut were inert too, with nothing in the UI to explain it.
  *
@@ -38,7 +41,7 @@ interface FakeMap {
 
 /** A map stub that records what was added. `failures` makes a given call throw. */
 function makeMap(failures: {
-  addImage?: boolean;
+  addImageThrows?: boolean;
   sourceId?: string;
 } = {}): FakeMap {
   const m: FakeMap = {
@@ -53,7 +56,10 @@ function makeMap(failures: {
       m.layers.push(spec.id);
     },
     addImage(id, img) {
-      if (failures.addImage) throw new Error(`An image named "${id}" already exists.`);
+      // A sprite registration can fail for reasons other than the size check
+      // (a future maplibre validation, a patched/instrumented map…). The message
+      // mirrors the real RangeError so the test can't drift into fiction.
+      if (failures.addImageThrows) throw new RangeError('mismatched image size');
       // MapLibre validates the declared size against the byte length and throws
       // on a mismatch — the exact check that a fractional devicePixelRatio broke.
       if (img.width * img.height * 4 !== img.data.length) {
@@ -157,9 +163,9 @@ describe('addMapSourcesAndLayers — block isolation', () => {
     expect(m.sources).toContain('user-activities');
   });
 
-  it('still adds the community heatmap when addImage throws on a duplicate id', () => {
+  it('still adds the community heatmap when addImage itself throws', () => {
     installBrowserGlobals(false);
-    const m = makeMap({ addImage: true });
+    const m = makeMap({ addImageThrows: true });
 
     expect(() => addMapSourcesAndLayers(m)).not.toThrow();
 
@@ -178,7 +184,10 @@ describe('addMapSourcesAndLayers — block isolation', () => {
     for (const id of COMMUNITY_LAYERS) expect(m.layers).toContain(id);
     // A swallowed failure that says nothing is how this bug stayed invisible.
     expect(errorSpy).toHaveBeenCalled();
-    expect(String(errorSpy.mock.calls[0][0])).toContain('terrain + hillshade');
+    // `.some`, not `calls[0]`: any other console.error (env-url's fail-loud path
+    // under a different NODE_ENV, a log added to an earlier block…) would shift
+    // the index and quietly make this assertion inspect the wrong call.
+    expect(errorSpy.mock.calls.some((c: unknown[]) => String(c[0]).includes('terrain + hillshade'))).toBe(true);
   });
 
   it('a failing block does not take down the ones after it (DFCI → user layers)', () => {

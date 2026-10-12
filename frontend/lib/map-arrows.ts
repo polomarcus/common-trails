@@ -14,13 +14,16 @@
  * by simply skipping the icon, so a failure here must cost the chevrons and
  * nothing else.
  *
- * ⚠️ Both canvas calls below can genuinely throw in the wild:
+ * ⚠️ Two calls below can genuinely throw in the wild (verified against the
+ * pinned maplibre-gl 4.3.2):
+ *   - `map.addImage()` → `RangeError: mismatched image size` — it wraps the
+ *     bytes in `new RGBAImage({width, height}, …)`, which throws synchronously
+ *     when `width * height * 4 !== data.length`. THE prod bug of 2026-10-12,
+ *     see the dimension comment below;
  *   - `ctx.getImageData()` → SecurityError on hardened browsers/extensions that
- *     block canvas reads (anti-fingerprinting);
- *   - `map.addImage()` → "an image named 'direction-arrow' already exists" if the
- *     setup ever runs twice on the same map instance.
- * Unguarded, either one used to abort the ENTIRE /map layer setup (it was the
- * first statement of addMapSourcesAndLayers) and left a bare basemap. See the
+ *     block canvas reads (anti-fingerprinting).
+ * Unguarded, either one aborted the ENTIRE /map layer setup (this was the first
+ * statement of addMapSourcesAndLayers) and left a bare basemap. See the
  * `safeBlock` doc in lib/init-map-layers.ts.
  */
 export function registerDirectionArrow(map: unknown): boolean {
@@ -36,8 +39,10 @@ export function registerDirectionArrow(map: unknown): boolean {
 function drawAndRegisterArrow(map: unknown): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const m = map as any;
-  // Already registered (a second setup pass on the same map): addImage would
-  // throw on the duplicate id, so stop here instead of redrawing.
+  // Already registered (a second setup pass on the same map). `Style.addImage`
+  // does NOT throw on a duplicate id in maplibre 4.3.2 — it fires an ErrorEvent
+  // and silently keeps the old image — so without this guard a second pass would
+  // redraw the canvas for nothing and emit a spurious map `error` event.
   if (typeof m?.hasImage === 'function' && m.hasImage('direction-arrow')) return true;
   const size = 16;
   const canvas = document.createElement('canvas');

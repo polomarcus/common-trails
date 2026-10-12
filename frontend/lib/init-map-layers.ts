@@ -50,10 +50,12 @@ export interface MapEventSetters {
  *
  * ⚠️ Why this exists (prod, 2026-10-12): `addMapSourcesAndLayers` was one long
  * straight-line function, so the FIRST statement that threw killed every block
- * after it. `registerDirectionArrow()` (canvas `getImageData` + `addImage` —
- * both of which CAN throw: hardened anti-fingerprinting browsers/extensions
- * block canvas reads, and `addImage` rejects a duplicate id) sits on line one,
- * so a failure there left `/map` with a bare basemap and ZERO custom layers:
+ * after it. `registerDirectionArrow()` sits on line one and does two things that
+ * CAN throw — `map.addImage()` raises `RangeError: mismatched image size` when
+ * the declared size disagrees with the bitmap (what actually happened, at a
+ * fractional devicePixelRatio), and `ctx.getImageData()` raises SecurityError on
+ * browsers that block canvas reads. A failure there left `/map` with a bare
+ * basemap and ZERO custom layers:
  * no heatmap, no DFCI, no user traces — and `layersReady` never set, which made
  * the "Calques" checkbox and the `H` shortcut inert. Nothing in the UI said why.
  *
@@ -133,6 +135,35 @@ function addCommunityHeatmap(m: any): void {
   const stablePmtiles = communityPmtilesUrl(window.location.origin);
   if (stablePmtiles) {
     m.addSource('community-trails', communityTrailsSourceSpec(stablePmtiles));
+
+    // ②a-err + ②-fresh FIRST, before the layer adds: diagnostics and freshness
+    // belong to the SOURCE, so a layer spec that throws must not cost us the
+    // tile-error log nor pin the map on the 24 h-cached stable PMTiles.
+    //
+    // ②a-err: log vector tile load errors for debugging (per-tile, not fatal).
+    m.on('error', (e: any) => {
+      if (e.sourceId === 'community-trails') {
+        console.warn('[heatmap] tile load error:', e.error?.message);
+      }
+    });
+
+    // ②-fresh: NON-BLOCKING freshness upgrade. The source above uses the 24 h-
+    // cached STABLE name so a returning visitor can render a day-old heatmap.
+    // Resolve the freshness pointer off the critical path and, if it yields a
+    // newer immutable snapshot, swap the source URL. Fire-and-forget: init has
+    // already completed with a working source, so a slow/failed pointer just
+    // leaves the stable name in place (never worse than today).
+    resolveCommunityPmtilesUrl(window.location.origin)
+      .then((fresh) => {
+        if (!fresh || fresh === stablePmtiles) return;
+        const src = m.getSource('community-trails');
+        if (src && typeof src.setUrl === 'function') {
+          trace('heatmap', 'source-upgrade (pointer)');
+          src.setUrl(fresh);
+        }
+      })
+      .catch(() => { /* keep the stable source */ });
+
     // ②-heat: raster-style DENSITY heatmap (maplibre `heatmap` type) over the
     // PMTiles `heat_points` point layer — the PRIMARY community visual at every
     // zoom. Overlapping traces accumulate into a clean purple→orange density
@@ -159,29 +190,6 @@ function addCommunityHeatmap(m: any): void {
       paint: { 'line-width': 16, 'line-opacity': 0 },
     });
 
-    // ②a-err: Log vector tile load errors for debugging (per-tile, not fatal)
-    m.on('error', (e: any) => {
-      if (e.sourceId === 'community-trails') {
-        console.warn('[heatmap] tile load error:', e.error?.message);
-      }
-    });
-
-    // ②-fresh: NON-BLOCKING freshness upgrade. The source above uses the 24 h-
-    // cached STABLE name so a returning visitor can render a day-old heatmap.
-    // Resolve the freshness pointer off the critical path and, if it yields a
-    // newer immutable snapshot, swap the source URL. Fire-and-forget: init has
-    // already completed with a working source, so a slow/failed pointer just
-    // leaves the stable name in place (never worse than today).
-    resolveCommunityPmtilesUrl(window.location.origin)
-      .then((fresh) => {
-        if (!fresh || fresh === stablePmtiles) return;
-        const src = m.getSource('community-trails');
-        if (src && typeof src.setUrl === 'function') {
-          trace('heatmap', 'source-upgrade (pointer)');
-          src.setUrl(fresh);
-        }
-      })
-      .catch(() => { /* keep the stable source */ });
   }
 }
 
