@@ -154,10 +154,15 @@ test.describe('Community heatmap — static PMTiles source + layers', () => {
     expect(byId['community-trails-heat']?.type).toBe('heatmap');
     expect(byId['community-trails-heat']?.sourceLayer).toBe('heat_points');
 
-    // ② crisp core line over `trails`, street-zoom floor LINE_CRISP_MINZOOM=9.
+    // ② crisp core line over `trails`. Its floor (LINE_CRISP_MINZOOM) must EQUAL
+    // the source minzoom — asserted against the live source rather than a literal,
+    // which is what went stale here. A floor ABOVE the source minzoom hides data
+    // the tileset already ships: at z8.4 over Montpellier the z9 floor drew ZERO
+    // lines out of 41 285 features in view, leaving only ~3 px raster dots
+    // (2026-10-12). Below the source minzoom there are simply no tiles.
     expect(byId['community-trails-line']?.type).toBe('line');
     expect(byId['community-trails-line']?.sourceLayer).toBe('trails');
-    expect(byId['community-trails-line']?.minzoom).toBe(9);
+    expect(byId['community-trails-line']?.minzoom).toBe(w.source!.minzoom);
 
     // ② direction arrows (one-way mtb/gravel) — symbol over `trails`.
     expect(byId['community-trails-arrows']?.type).toBe('symbol');
