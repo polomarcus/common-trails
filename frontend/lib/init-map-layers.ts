@@ -45,10 +45,35 @@ export interface MapEventSetters {
 // 1. addMapSourcesAndLayers — pure layer setup (view-only)
 // =====================================================================
 
-export function addMapSourcesAndLayers(m: any): void {
-  // Register the direction-arrow sprite used by activity arrow layers.
-  registerDirectionArrow(m);
+/**
+ * Run ONE independent block of map setup, isolating its failures.
+ *
+ * ⚠️ Why this exists (prod, 2026-10-12): `addMapSourcesAndLayers` was one long
+ * straight-line function, so the FIRST statement that threw killed every block
+ * after it. `registerDirectionArrow()` sits on line one and does two things that
+ * CAN throw — `map.addImage()` raises `RangeError: mismatched image size` when
+ * the declared size disagrees with the bitmap (what actually happened, at a
+ * fractional devicePixelRatio), and `ctx.getImageData()` raises SecurityError on
+ * browsers that block canvas reads. A failure there left `/map` with a bare
+ * basemap and ZERO custom layers:
+ * no heatmap, no DFCI, no user traces — and `layersReady` never set, which made
+ * the "Calques" checkbox and the `H` shortcut inert. Nothing in the UI said why.
+ *
+ * The blocks are independent by construction (no block reads another's state),
+ * so a failure is contained: loud in the console, non-fatal for the map. The
+ * community heatmap — the core of the product — can no longer be taken down by
+ * a decorative sprite or an optional overlay.
+ */
+function safeBlock(name: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[init-map-layers] block "${name}" failed — map continues without it:`, e);
+  }
+}
 
+function addTerrainHillshade(m: any): void {
   // ① Terrain DEM — hillshade source (Terrarium encoding, free AWS tiles)
   m.addSource('terrain-dem', {
     type: 'raster-dem',
@@ -69,7 +94,9 @@ export function addMapSourcesAndLayers(m: any): void {
       'hillshade-accent-color': '#3d2b1f',
     },
   });
+}
 
+function addWaymarkedOverlays(m: any): void {
   // ①b Waymarked Trails overlays (hiking GR/PR, cycling EuroVelo, MTB)
   for (const wl of WAYMARKED_LAYERS) {
     m.addSource(`waymarked-${wl.key}`, {
@@ -88,7 +115,9 @@ export function addMapSourcesAndLayers(m: any): void {
       paint: { 'raster-opacity': 0.85 },
     });
   }
+}
 
+function addCommunityHeatmap(m: any): void {
   // ② Community trail heatmap (ODbL, K-anonymity enforced) — PMTiles source.
   // The PMTiles binary lives on the public GCS bucket in prod (baked into
   // NEXT_PUBLIC_HEATMAP_URL); only in dev is it served same-origin. Resolve it
@@ -106,6 +135,35 @@ export function addMapSourcesAndLayers(m: any): void {
   const stablePmtiles = communityPmtilesUrl(window.location.origin);
   if (stablePmtiles) {
     m.addSource('community-trails', communityTrailsSourceSpec(stablePmtiles));
+
+    // ②a-err + ②-fresh FIRST, before the layer adds: diagnostics and freshness
+    // belong to the SOURCE, so a layer spec that throws must not cost us the
+    // tile-error log nor pin the map on the 24 h-cached stable PMTiles.
+    //
+    // ②a-err: log vector tile load errors for debugging (per-tile, not fatal).
+    m.on('error', (e: any) => {
+      if (e.sourceId === 'community-trails') {
+        console.warn('[heatmap] tile load error:', e.error?.message);
+      }
+    });
+
+    // ②-fresh: NON-BLOCKING freshness upgrade. The source above uses the 24 h-
+    // cached STABLE name so a returning visitor can render a day-old heatmap.
+    // Resolve the freshness pointer off the critical path and, if it yields a
+    // newer immutable snapshot, swap the source URL. Fire-and-forget: init has
+    // already completed with a working source, so a slow/failed pointer just
+    // leaves the stable name in place (never worse than today).
+    resolveCommunityPmtilesUrl(window.location.origin)
+      .then((fresh) => {
+        if (!fresh || fresh === stablePmtiles) return;
+        const src = m.getSource('community-trails');
+        if (src && typeof src.setUrl === 'function') {
+          trace('heatmap', 'source-upgrade (pointer)');
+          src.setUrl(fresh);
+        }
+      })
+      .catch(() => { /* keep the stable source */ });
+
     // ②-heat: raster-style DENSITY heatmap (maplibre `heatmap` type) over the
     // PMTiles `heat_points` point layer — the PRIMARY community visual at every
     // zoom. Overlapping traces accumulate into a clean purple→orange density
@@ -132,31 +190,10 @@ export function addMapSourcesAndLayers(m: any): void {
       paint: { 'line-width': 16, 'line-opacity': 0 },
     });
 
-    // ②a-err: Log vector tile load errors for debugging (per-tile, not fatal)
-    m.on('error', (e: any) => {
-      if (e.sourceId === 'community-trails') {
-        console.warn('[heatmap] tile load error:', e.error?.message);
-      }
-    });
-
-    // ②-fresh: NON-BLOCKING freshness upgrade. The source above uses the 24 h-
-    // cached STABLE name so a returning visitor can render a day-old heatmap.
-    // Resolve the freshness pointer off the critical path and, if it yields a
-    // newer immutable snapshot, swap the source URL. Fire-and-forget: init has
-    // already completed with a working source, so a slow/failed pointer just
-    // leaves the stable name in place (never worse than today).
-    resolveCommunityPmtilesUrl(window.location.origin)
-      .then((fresh) => {
-        if (!fresh || fresh === stablePmtiles) return;
-        const src = m.getSource('community-trails');
-        if (src && typeof src.setUrl === 'function') {
-          trace('heatmap', 'source-upgrade (pointer)');
-          src.setUrl(fresh);
-        }
-      })
-      .catch(() => { /* keep the stable source */ });
   }
+}
 
+function addDfciTrails(m: any): void {
   // ②b DFCI fire-prevention tracks (south France) — red & white
   m.addSource('dfci-trails', {
     type: 'geojson',
@@ -215,7 +252,9 @@ export function addMapSourcesAndLayers(m: any): void {
       'text-halo-blur': 0,
     },
   });
+}
 
+function addUserLayers(m: any): void {
   // ③ User activity traces — glow halo + main line
   m.addSource('user-activities', {
     type: 'geojson',
@@ -376,6 +415,18 @@ export function addMapSourcesAndLayers(m: any): void {
       'line-dasharray': [6, 3],
     },
   });
+}
+
+export function addMapSourcesAndLayers(m: any): void {
+  // Each block is isolated (see safeBlock): one failing block must never blank
+  // the whole map. Order is preserved because it IS the z-order — layers added
+  // later draw on top (hillshade/waymarked under the heatmap, user traces over).
+  safeBlock('direction-arrow sprite', () => registerDirectionArrow(m));
+  safeBlock('terrain + hillshade', () => addTerrainHillshade(m));
+  safeBlock('waymarked overlays', () => addWaymarkedOverlays(m));
+  safeBlock('community heatmap', () => addCommunityHeatmap(m));
+  safeBlock('DFCI trails', () => addDfciTrails(m));
+  safeBlock('user layers', () => addUserLayers(m));
 }
 
 // =====================================================================

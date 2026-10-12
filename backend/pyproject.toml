@@ -16,7 +16,18 @@ dependencies = [
     "bcrypt>=4.0.0",
     "python-multipart>=0.0.9",
     "httpx>=0.27.0",
-    "sqlalchemy>=2.0.30",
+    # ⚠️ UPPER BOUND, load-bearing: SQLAlchemy 2.1 changed the DEFAULT PostgreSQL
+    # DBAPI from psycopg2 to psycopg (v3). Every DATABASE_URL we use is written
+    # `postgresql://…` (no explicit dialect), so on 2.1 SQLAlchemy imports
+    # `psycopg` — which this image does not install — and the app dies at import
+    # with `ModuleNotFoundError: No module named 'psycopg'`. That is exactly what
+    # happened on 2026-10-12: sqlalchemy 2.1.4 floated in, the backend never
+    # answered /healthz, and ALL of CI went red (backend + both E2E shards) on
+    # every branch at once. Worse, `deploy-prod.sh` rebuilds this image on each
+    # deploy, so the next merge would have shipped a backend that cannot start.
+    # Lift this bound only together with migrating to psycopg3 (add
+    # `psycopg[binary]`, re-check the SQLAlchemy 2.1 deprecations) — never alone.
+    "sqlalchemy>=2.0.30,<2.1",
     "alembic>=1.13.1",
     "psycopg2-binary>=2.9.9",
     "geoalchemy2>=0.15.0",

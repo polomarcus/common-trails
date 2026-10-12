@@ -215,17 +215,25 @@ export default function MapPage() {
     // Pure layer/source setup (view-only) — extracted to lib/init-map-layers.ts
     addMapSourcesAndLayers(m);
 
-    // View-only event wiring (trace popup, activity select, heatmap inspect, photos)
-    wireMapEventHandlers(m, {
-      popupHideTimerRef,
-      exploreModeRef,
-      activitiesRef,
-    }, {
-      setTracePopup,
-      setSelectedActivity,
-      setHeatmapPopup,
-      setHeatHover,
-    });
+    // View-only event wiring (trace popup, activity select, heatmap inspect, photos).
+    // Isolated: the INTERACTIONS are a bonus, the LAYERS are the product. A throw
+    // here used to skip `layersReady = true` below, which left every layer stuck
+    // on its initial `visibility: none` and made the Calques checkbox + `H`
+    // shortcut inert — a blank map with no clue why.
+    try {
+      wireMapEventHandlers(m, {
+        popupHideTimerRef,
+        exploreModeRef,
+        activitiesRef,
+      }, {
+        setTracePopup,
+        setSelectedActivity,
+        setHeatmapPopup,
+        setHeatHover,
+      });
+    } catch (e) {
+      console.error('[map] event wiring failed — layers still active, interactions degraded:', e);
+    }
 
     // Finalize: mark ready + maplibre pre-cache
     layersReady.current = true;
