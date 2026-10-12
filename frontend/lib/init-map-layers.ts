@@ -45,10 +45,33 @@ export interface MapEventSetters {
 // 1. addMapSourcesAndLayers — pure layer setup (view-only)
 // =====================================================================
 
-export function addMapSourcesAndLayers(m: any): void {
-  // Register the direction-arrow sprite used by activity arrow layers.
-  registerDirectionArrow(m);
+/**
+ * Run ONE independent block of map setup, isolating its failures.
+ *
+ * ⚠️ Why this exists (prod, 2026-10-12): `addMapSourcesAndLayers` was one long
+ * straight-line function, so the FIRST statement that threw killed every block
+ * after it. `registerDirectionArrow()` (canvas `getImageData` + `addImage` —
+ * both of which CAN throw: hardened anti-fingerprinting browsers/extensions
+ * block canvas reads, and `addImage` rejects a duplicate id) sits on line one,
+ * so a failure there left `/map` with a bare basemap and ZERO custom layers:
+ * no heatmap, no DFCI, no user traces — and `layersReady` never set, which made
+ * the "Calques" checkbox and the `H` shortcut inert. Nothing in the UI said why.
+ *
+ * The blocks are independent by construction (no block reads another's state),
+ * so a failure is contained: loud in the console, non-fatal for the map. The
+ * community heatmap — the core of the product — can no longer be taken down by
+ * a decorative sprite or an optional overlay.
+ */
+function safeBlock(name: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[init-map-layers] block "${name}" failed — map continues without it:`, e);
+  }
+}
 
+function addTerrainHillshade(m: any): void {
   // ① Terrain DEM — hillshade source (Terrarium encoding, free AWS tiles)
   m.addSource('terrain-dem', {
     type: 'raster-dem',
@@ -69,7 +92,9 @@ export function addMapSourcesAndLayers(m: any): void {
       'hillshade-accent-color': '#3d2b1f',
     },
   });
+}
 
+function addWaymarkedOverlays(m: any): void {
   // ①b Waymarked Trails overlays (hiking GR/PR, cycling EuroVelo, MTB)
   for (const wl of WAYMARKED_LAYERS) {
     m.addSource(`waymarked-${wl.key}`, {
@@ -88,7 +113,9 @@ export function addMapSourcesAndLayers(m: any): void {
       paint: { 'raster-opacity': 0.85 },
     });
   }
+}
 
+function addCommunityHeatmap(m: any): void {
   // ② Community trail heatmap (ODbL, K-anonymity enforced) — PMTiles source.
   // The PMTiles binary lives on the public GCS bucket in prod (baked into
   // NEXT_PUBLIC_HEATMAP_URL); only in dev is it served same-origin. Resolve it
@@ -156,7 +183,9 @@ export function addMapSourcesAndLayers(m: any): void {
       })
       .catch(() => { /* keep the stable source */ });
   }
+}
 
+function addDfciTrails(m: any): void {
   // ②b DFCI fire-prevention tracks (south France) — red & white
   m.addSource('dfci-trails', {
     type: 'geojson',
@@ -215,7 +244,9 @@ export function addMapSourcesAndLayers(m: any): void {
       'text-halo-blur': 0,
     },
   });
+}
 
+function addUserLayers(m: any): void {
   // ③ User activity traces — glow halo + main line
   m.addSource('user-activities', {
     type: 'geojson',
@@ -376,6 +407,18 @@ export function addMapSourcesAndLayers(m: any): void {
       'line-dasharray': [6, 3],
     },
   });
+}
+
+export function addMapSourcesAndLayers(m: any): void {
+  // Each block is isolated (see safeBlock): one failing block must never blank
+  // the whole map. Order is preserved because it IS the z-order — layers added
+  // later draw on top (hillshade/waymarked under the heatmap, user traces over).
+  safeBlock('direction-arrow sprite', () => registerDirectionArrow(m));
+  safeBlock('terrain + hillshade', () => addTerrainHillshade(m));
+  safeBlock('waymarked overlays', () => addWaymarkedOverlays(m));
+  safeBlock('community heatmap', () => addCommunityHeatmap(m));
+  safeBlock('DFCI trails', () => addDfciTrails(m));
+  safeBlock('user layers', () => addUserLayers(m));
 }
 
 // =====================================================================

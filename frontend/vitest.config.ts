@@ -27,6 +27,7 @@ export default defineConfig({
       'lib/__tests__/community-pmtiles-url.test.ts',
       'lib/__tests__/env-url.test.ts',
       'lib/__tests__/cdn-pointer.test.ts',
+      'lib/__tests__/init-map-layers-resilience.test.ts',
     ],
     environment: 'node',
     globals: false,
