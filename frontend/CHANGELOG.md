@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.64.0](https://github.com/polomarcus/common-trails/compare/frontend-v0.63.0...frontend-v0.64.0) (2026-10-13)
+
+
+### Features
+
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+* **map:** 'Utiliser la heatmap pour tracer' in the account menu ([#25](https://github.com/polomarcus/common-trails/issues/25)) ([71656a2](https://github.com/polomarcus/common-trails/commit/71656a2321e6ac47f056639e8fca328931af2e6e))
+
+
+### Bug Fixes
+
+* **heatmap:** les lignes nettes s'affichent partout où la tuile a de la donnée (le plancher z9 cachait tout un réseau) ([#28](https://github.com/polomarcus/common-trails/issues/28)) ([d5543b3](https://github.com/polomarcus/common-trails/commit/d5543b3f7329ccc4c019fb5b0c915c23912f2453))
+* **map:** /map entièrement blanche quand le devicePixelRatio est fractionnaire (+ déblocage CI) ([#27](https://github.com/polomarcus/common-trails/issues/27)) ([ccb41df](https://github.com/polomarcus/common-trails/commit/ccb41df08cbd49e184e9041efaa0e2112df41d95))
+
 ## [0.63.0](https://github.com/polomarcus/common-trails/compare/frontend-v0.62.0...frontend-v0.63.0) (2026-09-05)
 
 
