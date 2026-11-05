@@ -9,7 +9,7 @@ on:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/ruff-action@v3
@@ -19,7 +19,7 @@ jobs:
 
   backend-test:
     name: Backend tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The image build (incl. the slow DEM-tile bake) + data load + ~5 min pytest
     # lands at ~12-14 min on a COLD docker cache. 12 then 18 both proved too
     # tight: cold-cache runner variance repeatedly pushed the job past the ceiling
@@ -111,7 +111,7 @@ jobs:
 
   e2e-test:
     name: E2E tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # E2E is now a REQUIRED gate (2026-08-10). The suite was pruned to
     # live-feature specs — frozen social (trips/collections/github) deleted,
