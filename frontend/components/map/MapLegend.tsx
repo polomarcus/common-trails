@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { SPORT_COLORS, SPORT_DASH, SPORT_LABELS } from '@/lib/constants';
+import { MY_TRACES_COLOR } from '@/lib/constants';
 import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import { useI18n } from '@/lib/i18n';
 import type { LayerToggles, WaymarkedToggles } from '@/hooks/useLayerToggles';
@@ -26,11 +26,20 @@ function MapLegend({ layers, waymarked }: MapLegendProps) {
       maxHeight: 'calc(100vh - 120px)', overflowY: 'auto',
     }}>
       {layers.heatmap && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div data-testid="legend-community" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {/* Was a stale hand-copied BLUE gradient that never followed the
               plum→orange retune — the swatch now derives from the ramp SSOT. */}
           <div style={{ width: 40, height: 4, borderRadius: 2, background: HEAT_RAMP_CSS }} />
           <span>{t('map.legend.popularity')}</span>
+        </div>
+      )}
+      {layers.myTraces && (
+        // ONE entry for the rider's own traces ("Ma heatmap"): they are painted
+        // in a single cyan on the map (MY_TRACES_COLOR), not per sport, so they
+        // read against the community ramp above when both are superposed.
+        <div data-testid="legend-my-activities" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: MY_TRACES_COLOR }} />
+          <span>{t('map.legend.myActivities')}</span>
         </div>
       )}
       {layers.dfci && (
@@ -38,28 +47,6 @@ function MapLegend({ layers, waymarked }: MapLegendProps) {
           <div style={{ width: 40, height: 0, borderTop: '2px dashed #cc0000' }} />
           <span>{t('map.dfciTracks')}</span>
         </div>
-      )}
-      {layers.myTraces && (
-        <>
-          {(['road', 'gravel', 'mtb', 'running'] as const).map(s => (
-            <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <svg width="40" height="6" viewBox="0 0 40 6">
-                {SPORT_DASH[s] ? (
-                  <line x1="0" y1="3" x2="40" y2="3" stroke={SPORT_COLORS[s]} strokeWidth="3" strokeDasharray={SPORT_DASH[s]!.join(',')} strokeLinecap="round" />
-                ) : (
-                  <line x1="0" y1="3" x2="40" y2="3" stroke={SPORT_COLORS[s]} strokeWidth="3" strokeLinecap="round" />
-                )}
-              </svg>
-              <span>{SPORT_LABELS[s]}</span>
-            </div>
-          ))}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <svg width="40" height="6" viewBox="0 0 40 6">
-              <line x1="0" y1="3" x2="40" y2="3" stroke={SPORT_COLORS['offroad']} strokeWidth="3" strokeDasharray="8,4,2,4" strokeLinecap="round" />
-            </svg>
-            <span>{t('map.legend.offroad')}</span>
-          </div>
-        </>
       )}
       {waymarked.hiking && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

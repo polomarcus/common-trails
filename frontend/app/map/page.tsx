@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
-import { SPORT_COLORS } from '@/lib/constants';
 import { API_URL } from '@/lib/api-client';
 import { getToken } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
@@ -294,13 +293,9 @@ export default function MapPage() {
         }
       }
 
-      geojson.features = geojson.features.map((f: any) => ({
-        ...f,
-        properties: {
-          ...f.properties,
-          color: SPORT_COLORS[f.properties?.sport] ?? '#2d6a4f',
-        },
-      }));
+      // No per-feature colour: "Ma heatmap" is painted in ONE cyan
+      // (MY_TRACES_COLOR, set on the layer in init-map-layers) so it contrasts
+      // with the community ramp instead of mimicking it with sport colours.
       m.getSource('user-activities')?.setData(geojson);
 
       // Load user cell coverage

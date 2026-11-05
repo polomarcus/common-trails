@@ -26,6 +26,7 @@ import {
   DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY,
 } from '@/lib/routing-style';
 import { communityPmtilesUrl, resolveCommunityPmtilesUrl } from '@/lib/cdn-cache';
+import { MY_TRACES_COLOR } from '@/lib/constants';
 
 // ── Event wiring interfaces (view-only) ──────────────────────────────
 export interface MapEventRefs {
@@ -255,7 +256,11 @@ function addDfciTrails(m: any): void {
 }
 
 function addUserLayers(m: any): void {
-  // ③ User activity traces — glow halo + main line
+  // ③ User activity traces ("Ma heatmap") — glow halo + main line, ONE cyan
+  // (MY_TRACES_COLOR) instead of per-sport colours so they contrast with the
+  // plum→orange community ramp. Added AFTER addCommunityHeatmap (see
+  // addMapSourcesAndLayers) so the rider's own traces always draw ON TOP of
+  // the community heatmap when both are superposed.
   m.addSource('user-activities', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -267,7 +272,7 @@ function addUserLayers(m: any): void {
     source: 'user-activities',
     layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-color': ['coalesce', ['get', 'color'], '#2d6a4f'],
+      'line-color': MY_TRACES_COLOR,
       'line-width': 14,
       'line-opacity': 0.18,
       'line-blur': 6,
@@ -280,7 +285,7 @@ function addUserLayers(m: any): void {
     source: 'user-activities',
     layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-color': ['coalesce', ['get', 'color'], '#2d6a4f'],
+      'line-color': MY_TRACES_COLOR,
       'line-width': 3,
       'line-opacity': 0.92,
     },
@@ -424,6 +429,9 @@ export function addMapSourcesAndLayers(m: any): void {
   safeBlock('direction-arrow sprite', () => registerDirectionArrow(m));
   safeBlock('terrain + hillshade', () => addTerrainHillshade(m));
   safeBlock('waymarked overlays', () => addWaymarkedOverlays(m));
+  // ORDER MATTERS: MapLibre draws later layers on top. The user's traces
+  // ("Ma heatmap") must come after the community heatmap so they stay readable
+  // when both are toggled on — pinned by init-map-layers-my-heatmap.test.ts.
   safeBlock('community heatmap', () => addCommunityHeatmap(m));
   safeBlock('DFCI trails', () => addDfciTrails(m));
   safeBlock('user layers', () => addUserLayers(m));

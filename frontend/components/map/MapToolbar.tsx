@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useI18n } from '@/lib/i18n';
 import { BASEMAPS, WAYMARKED_LAYERS } from '@/lib/basemap-styles';
 import { getToken } from '@/lib/auth';
+import { MY_TRACES_COLOR } from '@/lib/constants';
+import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import PlaceSearch from '@/components/PlaceSearch';
 import LanguageToggle from '@/components/LanguageToggle';
 import type { LayerToggles, WaymarkedToggles } from '@/hooks/useLayerToggles';
@@ -162,7 +164,32 @@ export default function MapToolbar(props: MapToolbarProps) {
           }}>
             {/* Essential layer toggles */}
             <div style={{ padding: '4px 8px', fontSize: 10, color: '#aaa', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('map.layers')}</div>
-            {/* Heatmap toggle + inline sport filter */}
+            {/* "Ma heatmap" vs "Heatmap commune" — two INDEPENDENT checkboxes,
+                side by side, so a rider can show either or superpose both and
+                tell the paths HE rode (cyan) from the paths others rode (ramp).
+                "Ma heatmap" only exists for a signed-in rider: gated on the
+                post-mount authToken (never getToken() in render — React #418). */}
+            {authToken && (
+              <label
+                data-testid="toggle-my-traces"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '7px 14px', cursor: 'pointer', fontSize: 13, color: '#333',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#f5f5f5'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              >
+                <input
+                  type="checkbox"
+                  checked={layers.myTraces}
+                  onChange={() => setLayers(prev => ({ ...prev, myTraces: !prev.myTraces }))}
+                  style={{ accentColor: '#2d6a4f', width: 16, height: 16, flexShrink: 0 }}
+                />
+                <span aria-hidden="true" data-testid="swatch-my-traces" style={{ width: 18, height: 5, borderRadius: 3, background: MY_TRACES_COLOR, flexShrink: 0 }} />
+                <span>{t('map.toolbar.myHeatmap')}</span>
+              </label>
+            )}
+            {/* Community heatmap toggle + inline sport filter */}
             <div>
               <label
                 data-testid="toggle-heatmap"
@@ -179,6 +206,7 @@ export default function MapToolbar(props: MapToolbarProps) {
                   onChange={() => setLayers(prev => ({ ...prev, heatmap: !prev.heatmap }))}
                   style={{ accentColor: '#2d6a4f', width: 16, height: 16, flexShrink: 0 }}
                 />
+                <span aria-hidden="true" data-testid="swatch-community" style={{ width: 18, height: 5, borderRadius: 3, background: HEAT_RAMP_CSS, flexShrink: 0 }} />
                 <span>{t('map.toolbar.heatmapLayer')}</span>
               </label>
               {layers.heatmap && (
@@ -237,11 +265,10 @@ export default function MapToolbar(props: MapToolbarProps) {
                 </div>
               )}
             </div>
-            {/* DFCI + Mes traces toggles */}
+            {/* DFCI toggle */}
             {(
               [
                 { key: 'dfci', label: dfciCount ? t('map.dfciTracksCount', { count: dfciCount.toLocaleString(dateLocale) }) : t('map.dfciTracks'), testId: 'toggle-dfci', icon: '🌲' },
-                { key: 'myTraces', label: t('map.account.myTraces'), testId: 'toggle-my-traces', icon: '📍' },
               ] as { key: keyof LayerToggles; label: string; testId: string; icon: string }[]
             ).map(({ key, label, testId, icon }) => (
               <label
