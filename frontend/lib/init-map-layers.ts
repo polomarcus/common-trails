@@ -27,6 +27,10 @@ import {
 } from '@/lib/routing-style';
 import { communityPmtilesUrl, resolveCommunityPmtilesUrl } from '@/lib/cdn-cache';
 import { MY_TRACES_COLOR } from '@/lib/constants';
+import {
+  USER_TRACE_GLOW_WIDTH, USER_TRACE_GLOW_BLUR, USER_TRACE_GLOW_OPACITY,
+  USER_TRACE_LINE_WIDTH, USER_TRACE_LINE_OPACITY,
+} from '@/lib/user-traces-layers';
 
 // ── Event wiring interfaces (view-only) ──────────────────────────────
 export interface MapEventRefs {
@@ -273,9 +277,9 @@ function addUserLayers(m: any): void {
     layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': MY_TRACES_COLOR,
-      'line-width': 14,
-      'line-opacity': 0.18,
-      'line-blur': 6,
+      'line-width': USER_TRACE_GLOW_WIDTH,
+      'line-opacity': USER_TRACE_GLOW_OPACITY,
+      'line-blur': USER_TRACE_GLOW_BLUR,
     },
   });
   // Main line on top
@@ -286,8 +290,8 @@ function addUserLayers(m: any): void {
     layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': MY_TRACES_COLOR,
-      'line-width': 3,
-      'line-opacity': 0.92,
+      'line-width': USER_TRACE_LINE_WIDTH,
+      'line-opacity': USER_TRACE_LINE_OPACITY,
     },
   });
   // Wide transparent hit area — makes traces easy to click/hover

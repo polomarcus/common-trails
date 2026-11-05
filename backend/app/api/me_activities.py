@@ -18,6 +18,7 @@ from app.api.auth import AuthenticatedUser, get_current_user
 from app.db.models import Activity, ActivityPhoto
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
+from app.services.geo import haversine_m
 from app.services.ingest import (
     count_user_map_activities,
     get_activity_by_id,
@@ -35,9 +36,52 @@ class ActivitiesResponse(BaseModel):
     total: int
 
 
+# A jump larger than this between two consecutive fixes is drawn as a break,
+# not a straight line. Beta bug (Sète/Montpellier, 2026-11): GPS dropouts and
+# stray fixes drew long straight segments across the sea on "Mes traces".
+DISPLAY_GAP_BREAK_M = 500.0
+
+
+def _split_at_gaps(geometry: dict, max_gap_m: float = DISPLAY_GAP_BREAK_M) -> dict:
+    """Split a LineString into a MultiLineString wherever two consecutive
+    points are more than ``max_gap_m`` apart.
+
+    DISPLAY-ONLY (trace integrity, Crouzet): every point is emitted verbatim
+    and in order — no simplification, no snapping, no interpolation; the stored
+    ``geometry_geojson`` is never touched. Only the pen is lifted across the gap.
+    A part reduced to a single isolated fix (an outlier between two jumps)
+    cannot be drawn as a line and is left out of the display geometry. If no
+    drawable part remains, the geometry is returned unchanged.
+    """
+    if geometry.get("type") != "LineString":
+        return geometry
+    coords = geometry.get("coordinates") or []
+    if len(coords) < 2:
+        return geometry
+    parts: list[list] = [[coords[0]]]
+    for prev, cur in zip(coords, coords[1:], strict=False):
+        if haversine_m(prev[0], prev[1], cur[0], cur[1]) > max_gap_m:
+            parts.append([cur])
+        else:
+            parts[-1].append(cur)
+    if len(parts) == 1:
+        return geometry
+    drawable = [p for p in parts if len(p) >= 2]
+    if not drawable:
+        return geometry
+    if len(drawable) == 1:
+        return {"type": "LineString", "coordinates": drawable[0]}
+    return {"type": "MultiLineString", "coordinates": drawable}
+
+
 def _activity_to_feature(act: dict) -> dict:
-    """Shape a single activity dict into a GeoJSON Feature."""
-    geometry = json.loads(act["geometry_geojson"])
+    """Shape a single activity dict into a GeoJSON Feature.
+
+    The geometry is split at GPS gaps (``_split_at_gaps``) so the map never
+    draws a straight line across a dropout — it may therefore be a
+    ``MultiLineString``.
+    """
+    geometry = _split_at_gaps(json.loads(act["geometry_geojson"]))
     return {
         "type": "Feature",
         "geometry": geometry,
