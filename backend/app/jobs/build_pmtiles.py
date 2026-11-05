@@ -772,6 +772,14 @@ def _pointer_is_ours(bucket, snapshot_started_at: str) -> bool:
     return bool(current) and current.get("snapshot_started_at") == snapshot_started_at
 
 
+def _carries(current: dict | None, pointer: dict) -> bool:
+    """The live pointer already IS ours (same snapshot timestamp + version)."""
+    return bool(current) and (
+        current.get("snapshot_started_at") == pointer["snapshot_started_at"]
+        and current.get("latest") == pointer["latest"]
+    )
+
+
 def _publish_pointer_cas(bucket, pointer: dict) -> bool:
     """Compare-and-set publish of ``heatmap-display.json``.
 
@@ -787,6 +795,11 @@ def _publish_pointer_cas(bucket, pointer: dict) -> bool:
     = "must not exist yet"). A precondition failure (another build published
     between our read and our write) is retried ONCE with a fresh read.
     Returns True when the pointer now references our snapshot.
+
+    ⚠️ ``Blob.rewrite`` with ``if_generation_match`` is AUTO-RETRIED by the
+    client (DEFAULT_RETRY_IF_GENERATION_SPECIFIED): if our first write landed
+    but its response was lost, the retry gets a 412 although the pointer IS
+    ours. So every read first checks "already carries our snapshot" → success.
     """
     import json as _json
     import uuid
@@ -796,6 +809,8 @@ def _publish_pointer_cas(bucket, pointer: dict) -> bool:
     ours = _parse_iso(pointer["snapshot_started_at"])
     for attempt in (1, 2):
         generation, current = _read_pointer(bucket)
+        if _carries(current, pointer):
+            return True  # our earlier write landed (lost response + 412 retry)
         theirs = _parse_iso((current or {}).get("snapshot_started_at"))
         if theirs is not None and ours is not None and theirs >= ours:
             log.info(
@@ -813,6 +828,8 @@ def _publish_pointer_cas(bucket, pointer: dict) -> bool:
             return True
         except PreconditionFailed:
             if attempt == 2:
+                if _carries(_read_pointer(bucket)[1], pointer):
+                    return True
                 log.warning("pointer CAS lost twice in a row — leaving the live pointer as is")
                 return False
             log.info("pointer CAS precondition failed (concurrent publish) — retrying once")
@@ -842,8 +859,11 @@ def _upload_to_export_bucket(pmtiles_path: str, snapshot_started_at: str | None 
     Overlapping builds (2026-11): the order is snapshot → pointer CAS →
     mutable copy → prune. ``snapshot_started_at`` (recorded by ``main`` BEFORE
     the export query) drives ``_publish_pointer_cas``: a build OLDER than the
-    live pointer skips the pointer, the mutable copy and the prune, and
-    deletes its own orphan snapshot. The mutable copy is only rewritten while
+    live pointer skips the pointer, the mutable copy and the prune. It NEVER
+    deletes its pinned snapshot: two builds with the same bytes in the same
+    hour share the same ``pinned_name`` (``v{epoch_hour}-{sha8}``), so "our
+    orphan" can be the winner's LIVE snapshot — the next build's prune cleans
+    real orphans. The mutable copy is only rewritten while
     the pointer still carries our timestamp (re-checked right before the
     rewrite) — a residual sub-second race there self-heals on the next build,
     and /map follows the pointer anyway. The raster pyramid / geojsonl
@@ -932,12 +952,10 @@ def _upload_to_export_bucket(pmtiles_path: str, snapshot_started_at: str | None 
         )
 
         if not _publish_pointer_cas(bucket, pointer):
-            # An overlapping NEWER build already published: our snapshot is
-            # stale — drop it (nothing references it) and touch nothing else.
-            try:
-                pinned_blob.delete()
-            except Exception:  # noqa: BLE001
-                log.debug("could not delete orphan snapshot %s", pinned_name)
+            # An overlapping NEWER build already published: touch nothing else.
+            # Do NOT delete our pinned snapshot — with identical bytes in the
+            # same hour it IS the live one (same version_id); the next build's
+            # prune removes it if it is really an orphan.
             return
         log.info("Updated pointer JSON (latest=%s)", version_id)
 
@@ -964,14 +982,27 @@ def _upload_to_export_bucket(pmtiles_path: str, snapshot_started_at: str | None 
         # "on doit l'écraser par la dernière version à chaque fois"). They used
         # to accumulate forever, so a GDPR-deleted trace stayed retrievable in a
         # frozen old snapshot indefinitely (right-to-erasure gap). Only while the
-        # pointer is still ours — a newer build's snapshot must never be pruned
-        # from under its pointer. Matches heatmap-display-<version>.pmtiles ONLY
-        # (the mutable name has no trailing '-'; geojsonl end in .geojsonl.gz).
-        if not _pointer_is_ours(bucket, snapshot_started_at):
+        # pointer is still ours, and NEVER: the snapshot the live pointer
+        # references, nor one created after OUR start (an overlapping newer
+        # build may have uploaded it and not published its pointer yet — or
+        # time_created unknown). Leftovers go at the next build's prune.
+        # Matches heatmap-display-<version>.pmtiles ONLY (the mutable name has
+        # no trailing '-'; geojsonl end in .geojsonl.gz).
+        _gen, live = _read_pointer(bucket)
+        if not live or live.get("snapshot_started_at") != snapshot_started_at:
             return
+        keep = {pinned_name, str(live.get("latest_url") or "").rsplit("/", 1)[-1]}
+        started = _parse_iso(snapshot_started_at)
         pruned = 0
         for old in bucket.list_blobs(prefix="heatmap-display-"):
-            if old.name.endswith(".pmtiles") and old.name != pinned_name:
+            created = getattr(old, "time_created", None)
+            if (
+                old.name.endswith(".pmtiles")
+                and old.name not in keep
+                and created is not None
+                and started is not None
+                and created < started
+            ):
                 try:
                     old.delete()
                     pruned += 1

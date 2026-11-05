@@ -11,6 +11,7 @@ fake GCS bucket that honours ``if_generation_match`` like GCS does.
 """
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from google.api_core.exceptions import PreconditionFailed
@@ -23,7 +24,13 @@ T_NEW = "2026-11-05T10:05:00+00:00"
 
 class _Store:
     def __init__(self):
-        self.objects: dict[str, tuple[bytes, int]] = {}
+        self.objects: dict[str, tuple[bytes, int, datetime]] = {}
+        # time_created stamped on every write (GCS sets it per generation).
+        # Default = BEFORE every test snapshot start, i.e. "an old build".
+        self.clock = datetime(2026, 11, 5, 9, 0, tzinfo=UTC)
+        # Simulates the client's auto-retry after a LOST response: the pointer
+        # rewrite is APPLIED, then the retried request gets a 412.
+        self.lose_pointer_rewrite_response = False
         self._gen = 0
         self.rewrites: list[str] = []
         self.written_names: list[str] = []
@@ -33,7 +40,7 @@ class _Store:
 
     def put(self, name: str, data: bytes) -> None:
         self._gen += 1
-        self.objects[name] = (data, self._gen)
+        self.objects[name] = (data, self._gen, self.clock)
         self.written_names.append(name)
 
     def pointer(self) -> dict:
@@ -45,6 +52,11 @@ class _Blob:
         self.store = store
         self.name = name
         self.cache_control = None
+
+    @property
+    def time_created(self):
+        obj = self.store.objects.get(self.name)
+        return obj[2] if obj else None
 
     @property
     def generation(self):
@@ -59,7 +71,7 @@ class _Blob:
         self.store.put(self.name, data.encode() if isinstance(data, str) else data)
 
     def download_as_bytes(self, if_generation_match=None):
-        data, gen = self.store.objects[self.name]
+        data, gen, _created = self.store.objects[self.name]
         if if_generation_match is not None and gen != if_generation_match:
             raise PreconditionFailed("generation mismatch")
         return data
@@ -72,6 +84,9 @@ class _Blob:
         if if_generation_match is not None and (self.generation or 0) != if_generation_match:
             raise PreconditionFailed("generation mismatch")
         self.store.put(self.name, self.store.objects[source.name][0])
+        if self.name == "heatmap-display.json" and self.store.lose_pointer_rewrite_response:
+            self.store.lose_pointer_rewrite_response = False
+            raise PreconditionFailed("412 on the auto-retry of an applied write")
 
     def delete(self):
         self.store.objects.pop(self.name, None)
@@ -120,6 +135,10 @@ def _pmtiles(tmp_path, name: str, body: bytes) -> str:
     return str(path)
 
 
+def _referenced(store) -> str:
+    return store.pointer()["latest_url"].rsplit("/", 1)[1]
+
+
 def _pinned(store) -> list[str]:
     return sorted(n for n in store.objects if n.startswith("heatmap-display-") and n.endswith(".pmtiles"))
 
@@ -137,8 +156,9 @@ def test_older_snapshot_finishing_last_never_overwrites_newer_pointer(store, tmp
 
     assert store.pointer() == published
     assert store.objects["heatmap-display.pmtiles"][0] == b"NEW-SNAPSHOT"
-    # The newer pinned snapshot survives; the older one is cleaned up.
-    assert _pinned(store) == [published["latest_url"].rsplit("/", 1)[1]]
+    # The live snapshot survives. The loser NEVER deletes its own pinned
+    # snapshot (it may share the live name) — the next prune handles it.
+    assert _referenced(store) in store.objects
 
 
 def test_newer_snapshot_replaces_older_pointer_and_prunes(store, tmp_path):
@@ -197,3 +217,44 @@ def test_tmp_blob_names_are_unique_per_run(store, tmp_path):
     assert len(tmps) == len(set(tmps)) == 4, tmps
     # Every tmp is cleaned up.
     assert not [n for n in store.objects if ".tmp" in n]
+
+
+def test_same_bytes_same_hour_overlap_keeps_live_snapshot(store, tmp_path):
+    """Two builds with IDENTICAL bytes in the same hour share one version_id /
+    pinned name. The losing (older) one must not delete "its" snapshot — it is
+    the winner's live one, /map would 404."""
+    same = b"IDENTICAL-BYTES"
+    bp._upload_to_export_bucket(_pmtiles(tmp_path, "a", same), snapshot_started_at=T_NEW)
+    bp._upload_to_export_bucket(_pmtiles(tmp_path, "b", same), snapshot_started_at=T_OLD)
+
+    assert store.pointer()["snapshot_started_at"] == T_NEW
+    assert store.objects[_referenced(store)][0] == same
+
+
+def test_applied_write_then_412_retry_counts_as_success(store, tmp_path):
+    """The client auto-retries ``rewrite(if_generation_match=…)``: if the first
+    write landed but its response was lost, the retry raises 412 although the
+    pointer IS ours. That is a success — mutable copy written, nothing deleted."""
+    store.put("heatmap-display.json", json.dumps({"snapshot_started_at": T_OLD}).encode())
+    store.lose_pointer_rewrite_response = True
+
+    bp._upload_to_export_bucket(_pmtiles(tmp_path, "a", b"MINE"), snapshot_started_at=T_NEW)
+
+    assert store.pointer()["snapshot_started_at"] == T_NEW
+    assert store.objects[_referenced(store)][0] == b"MINE"
+    assert store.objects["heatmap-display.pmtiles"][0] == b"MINE"
+
+
+def test_prune_spares_referenced_and_newer_pending_snapshots(store, tmp_path):
+    """Prune deletes only OLD snapshots (created before our start): never the
+    one the live pointer references, never a snapshot an overlapping newer
+    build uploaded after our start and has not published yet."""
+    store.put("heatmap-display-v1-oldold.pmtiles", b"ANCIENT")  # clock 09:00 < T_NEW
+    store.clock = datetime(2026, 11, 5, 10, 6, tzinfo=UTC)  # after T_NEW
+    store.put("heatmap-display-v2-pending.pmtiles", b"NEWER-BUILD-NOT-YET-PUBLISHED")
+
+    bp._upload_to_export_bucket(_pmtiles(tmp_path, "a", b"MINE"), snapshot_started_at=T_NEW)
+
+    assert "heatmap-display-v1-oldold.pmtiles" not in store.objects
+    assert "heatmap-display-v2-pending.pmtiles" in store.objects
+    assert _referenced(store) in store.objects
