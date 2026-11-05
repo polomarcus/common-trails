@@ -549,7 +549,7 @@ class TestMeActivitiesGapSplit:
     """Non-regression: "Mes traces" drew long straight lines across the sea
     (beta report, Sète/Montpellier 2026-11) because ``_activity_to_feature``
     emitted the stored LineString verbatim, bridging GPS dropouts. The display
-    geometry must now break at gaps > 500 m — without altering any point."""
+    geometry must now break at gaps > 2500 m (the ingest bridge) — without altering any point."""
 
     def test_feature_splits_at_5km_jump(self):
         coords = _gap_coords()
@@ -562,6 +562,21 @@ class TestMeActivitiesGapSplit:
     def test_continuous_trace_stays_linestring(self):
         coords = [[3.87 + i * 0.001, 43.62 + i * 0.001] for i in range(10)]
         assert _feature_for(coords)["geometry"] == {"type": "LineString", "coordinates": coords}
+
+    def test_downsampled_1500m_stride_stays_linestring(self):
+        """A downsampled export (≈1.5 km between fixes) is a real ride, not a
+        dropout: it must stay one drawn line, with no holes."""
+        # Dense run, one 1.5 km stride (0.0185° of longitude at 43.4°N), dense run.
+        run_a = [[3.69 + i * 0.001, 43.40] for i in range(4)]
+        run_b = [[3.7215 + i * 0.001, 43.40] for i in range(4)]
+        coords = run_a + run_b
+        assert _feature_for(coords)["geometry"] == {"type": "LineString", "coordinates": coords}
+
+    def test_threshold_matches_ingest_bridge(self):
+        from app.api.me_activities import DISPLAY_GAP_BREAK_M
+        from app.services.ingest import _DENSIFY_MAX_BRIDGE_M
+
+        assert DISPLAY_GAP_BREAK_M == _DENSIFY_MAX_BRIDGE_M == 2500.0
 
     def test_isolated_outlier_fix_is_not_drawn(self):
         """A single stray fix far out at sea (jump out + jump back) must not

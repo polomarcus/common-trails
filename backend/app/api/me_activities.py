@@ -20,6 +20,7 @@ from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
 from app.services.geo import haversine_m
 from app.services.ingest import (
+    _DENSIFY_MAX_BRIDGE_M,
     count_user_map_activities,
     get_activity_by_id,
     iter_user_map_activities,
@@ -39,7 +40,10 @@ class ActivitiesResponse(BaseModel):
 # A jump larger than this between two consecutive fixes is drawn as a break,
 # not a straight line. Beta bug (Sète/Montpellier, 2026-11): GPS dropouts and
 # stray fixes drew long straight segments across the sea on "Mes traces".
-DISPLAY_GAP_BREAK_M = 500.0
+# Same threshold as the community pipeline's densifier bridge: below it, a gap
+# is a downsampled export stride (measured up to ~1.5 km on real rides) and
+# must stay drawn, or sparse traces get holes; above it, a real dropout.
+DISPLAY_GAP_BREAK_M = _DENSIFY_MAX_BRIDGE_M
 
 
 def _split_at_gaps(geometry: dict, max_gap_m: float = DISPLAY_GAP_BREAK_M) -> dict:
