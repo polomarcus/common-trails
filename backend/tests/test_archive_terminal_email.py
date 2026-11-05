@@ -165,15 +165,14 @@ def test_done_archive_sends_summary_email():
     send.assert_called_once()
     to, subject, html = send.call_args.args
     assert to == email
-    assert "carte" in subject
+    assert subject == "Votre archive est importée 🚴"
     assert "<strong>2</strong> importées" in html
     assert "https://chemins-communs.fr/map" in html
 
 
 def test_done_archive_zero_imported_adapts_wording():
     """Draining the SAME archive content twice: second pass dedups everything
-    → imported == 0 → the "nothing new" wording, not "vos traces sont sur la
-    carte"."""
+    → imported == 0 → the "nothing new" wording, not the "importée" one."""
     email = f"rider_{uuid.uuid4().hex[:8]}@example.com"
     uid = _mk_user(email)
     _mk_uploaded_archive(uid)
@@ -201,7 +200,7 @@ def test_consent_locale_en_switches_language():
 
     send.assert_called_once()
     _to, subject, _html = send.call_args.args
-    assert subject == "Your rides are on the map 🚴"
+    assert subject == "Your archive has been imported 🚴"
 
 
 # ── (b) synthetic @strava.local user → no email ──────────────────────────────
@@ -302,7 +301,7 @@ def test_send_email_raising_leaves_row_terminal_and_summary_intact():
 
 
 def test_done_email_promotes_the_gpxstudio_visugpx_calque():
-    """The "your traces are on the map" email must invite the user to add the
+    """The "your archive is imported" email must invite the user to add the
     community heatmap as a custom overlay ("calque") in gpx.studio / VisuGPX,
     with the public raster TileJSON URL. Both locales."""
     from app.services.email import render_archive_done_email

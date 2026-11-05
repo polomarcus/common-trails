@@ -153,20 +153,30 @@ def render_archive_done_email(
 ) -> tuple[str, str]:
     """Return ``(subject, html)`` for the "your archive finished draining" email.
 
-    Two wordings: the happy path (>=1 trace imported → "vos traces sont sur la
-    carte") and the nothing-new path (``imported == 0`` — typically every member
-    was a duplicate of already-imported activities or out-of-scope).
+    Two wordings: the happy path (>=1 trace imported) and the nothing-new path
+    (``imported == 0`` — typically every member was a duplicate of
+    already-imported activities or out-of-scope).
+
+    The happy path must stay TRUTHFUL about timing (Thierry Crouzet, 2026-11):
+    the user's own rides show up at once in the "Mes traces" layer (served live
+    from the DB), but the community heatmap is a static PMTiles rebuilt by a
+    job (~5-30 min + pointer cache) — so never claim the traces are already on
+    the heatmap.
     """
     map_url = "https://chemins-communs.fr/map"
     # The community heatmap is also published as a raster XYZ tile pyramid on
     # public GCS, so it can be added as a custom OVERLAY ("calque") in gpx.studio
     # / VisuGPX via one URL. Promote it in the done email — closes the loop
-    # ("your traces are live → here's how to plan on top of the whole heatmap").
+    # ("your archive is in → here's how to plan on top of the whole heatmap").
     calque_url = f"{_heatmap_public_base_url()}/raster/tiles.json"
     if locale == "en":
         if imported > 0:
-            subject = "Your rides are on the map 🚴"
-            intro = "Your Strava archive has been processed — your traces are now part of the community heatmap."
+            subject = "Your archive has been imported 🚴"
+            intro = (
+                f"Your archive has been processed: {imported} trace{'s' if imported > 1 else ''} imported. "
+                "Your own rides are visible right away in the <strong>My traces</strong> layer on the map; "
+                "the community heatmap will include them within about 30 minutes."
+            )
         else:
             subject = "Your archive has been processed"
             intro = (
@@ -188,8 +198,13 @@ def render_archive_done_email(
         )
     else:
         if imported > 0:
-            subject = "Vos traces sont sur la carte 🚴"
-            intro = "Votre archive Strava a été traitée — vos traces font maintenant partie de la carte communautaire."
+            subject = "Votre archive est importée 🚴"
+            intro = (
+                f"Votre archive a été traitée : {imported} trace{'s' if imported > 1 else ''} "
+                f"importée{'s' if imported > 1 else ''}. Vos sorties sont visibles dès maintenant "
+                "dans le calque <strong>Mes traces</strong> de la carte ; la heatmap communautaire "
+                "les intégrera d'ici une trentaine de minutes."
+            )
         else:
             subject = "Votre archive a été traitée"
             intro = (

@@ -270,6 +270,59 @@ def _ping_pmtiles_rebuild(imported: int, skip_heat_computation: bool) -> None:
         log.warning("pmtiles rebuild ping failed after drain", exc_info=True)
 
 
+def _pmtiles_reping_seconds() -> float:
+    """Minimum gap between two rebuild pings within ONE archive batch
+    (``DRAIN_PMTILES_REPING_S``, default 1800 s ≈ a full build-pmtiles run).
+    Bounds the batch to ~one build in flight at a time: the build job has no
+    concurrency guard, so two overlapping builds could finish out of order and
+    publish the OLDER snapshot last."""
+    try:
+        return max(0.0, float(os.environ.get("DRAIN_PMTILES_REPING_S", "1800")))
+    except ValueError:
+        return 1800.0
+
+
+class _ArchiveRebuildPinger:
+    """Per-ARCHIVE PMTiles rebuild ping for ``drain_pending_archives``.
+
+    Bug (Thierry Crouzet, 2026-11): the single ping fired only after the WHOLE
+    batch (up to 5 archives, possibly hours), while each archive's "done" email
+    went out as soon as THAT archive finished — the email arrived long before
+    the traces reached the heatmap. Now ``archive_finished`` runs right after
+    the archive's agg recompute and BEFORE its terminal email:
+
+    * first contributing archive of the batch → ping immediately;
+    * a later one → ping again only if the previous ping is older than
+      ``_pmtiles_reping_seconds()`` (that build has likely already read the DB),
+      otherwise DEFER — the build in flight may miss this archive, so
+      ``batch_finished`` fires one catch-up ping at the end of the batch.
+
+    Fire-and-forget like ``_ping_pmtiles_rebuild`` (never raises); no-op when
+    heat computation is skipped or the archive imported nothing.
+    """
+
+    def __init__(self, skip_heat_computation: bool) -> None:
+        self._skip = skip_heat_computation
+        self._last_ping: float | None = None
+        self._deferred = 0
+
+    def archive_finished(self, imported: int) -> None:
+        if self._skip or imported < 1:
+            return
+        now = time.monotonic()
+        if self._last_ping is None or (now - self._last_ping) >= _pmtiles_reping_seconds():
+            _ping_pmtiles_rebuild(imported + self._deferred, False)
+            self._last_ping = now
+            self._deferred = 0
+        else:
+            self._deferred += imported
+
+    def batch_finished(self) -> None:
+        if self._deferred:
+            _ping_pmtiles_rebuild(self._deferred, False)
+            self._deferred = 0
+
+
 # ── Spatial-locality ordering (2026-07-20 perf) ──────────────────────────────
 # A user's archive lists activities in UPLOAD/date order, so consecutive members
 # jump between regions (a 2015 Spain trip, then 2016 Montpellier rides, …). The
@@ -825,6 +878,7 @@ def drain_pending_archives(
     finally:
         db.close()
 
+    pinger = _ArchiveRebuildPinger(skip_heat_computation)
     for arch in batch:
         summary["archives"] += 1
         counts = {"members_total": 0, "imported": 0, "skipped": 0, "failed": 0}
@@ -915,6 +969,9 @@ def drain_pending_archives(
             # End-of-archive: ONE deduplicated agg recompute, BEFORE the
             # terminal transition so status='done' implies a fresh aggregate.
             _recompute_heat_agg_batched(touched_ways)
+            # Rebuild ping BEFORE the email: the email promises the heatmap
+            # update within ~30 min, so the build must already be requested.
+            pinger.archive_finished(counts["imported"])
             _finish_archive_now(arch["id"], "done", counts)
             _notify_archive_terminal(arch["id"], "done", counts)
         except archive_intake.StorageConfigError as exc:
@@ -954,6 +1011,7 @@ def drain_pending_archives(
             # Members ingested before the cap tripped already wrote heat_edges —
             # recompute their ways so the aggregate doesn't drift.
             _recompute_heat_agg_batched(touched_ways)
+            pinger.archive_finished(counts["imported"])
             try:
                 _finish_archive_now(arch["id"], "failed", counts, error=reason[:1000])
             except Exception:
@@ -968,6 +1026,7 @@ def drain_pending_archives(
             # members are committed — the agg must not drift (golden asserts
             # agg freshness for every touched way).
             _recompute_heat_agg_batched(touched_ways)
+            pinger.archive_finished(counts["imported"])
             try:
                 _finish_archive_now(arch["id"], "failed", counts, error=str(exc)[:1000])
             except Exception:
@@ -978,7 +1037,7 @@ def drain_pending_archives(
         summary["skipped"] += counts["skipped"]
         summary["failed"] += counts["failed"]
 
-    _ping_pmtiles_rebuild(summary["imported"], skip_heat_computation)
+    pinger.batch_finished()
     log.info("drain_pending_archives summary: %s", summary)
     return summary
 
