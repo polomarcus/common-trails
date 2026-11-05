@@ -149,7 +149,12 @@ def _wrap_html(body: str) -> str:
 
 
 def render_archive_done_email(
-    *, imported: int, skipped: int, failed: int, locale: str = "fr"
+    *,
+    imported: int,
+    skipped: int,
+    failed: int,
+    locale: str = "fr",
+    contribute_heatmap: bool = True,
 ) -> tuple[str, str]:
     """Return ``(subject, html)`` for the "your archive finished draining" email.
 
@@ -160,8 +165,10 @@ def render_archive_done_email(
     The happy path must stay TRUTHFUL about timing (Thierry Crouzet, 2026-11):
     the user's own rides show up at once in the "Mes traces" layer (served live
     from the DB), but the community heatmap is a static PMTiles rebuilt by a
-    job (~5-30 min + pointer cache) — so never claim the traces are already on
-    the heatmap.
+    job (~30 min build + cold start + pointer cache) — so never claim the
+    traces are already on the heatmap, and promise "within the hour". When the
+    archive does NOT contribute to the heatmap (``contribute_heatmap=False``)
+    no rebuild is triggered, so the copy only points to "Mes traces".
     """
     map_url = "https://chemins-communs.fr/map"
     # The community heatmap is also published as a raster XYZ tile pyramid on
@@ -174,8 +181,8 @@ def render_archive_done_email(
             subject = "Your archive has been imported 🚴"
             intro = (
                 f"Your archive has been processed: {imported} trace{'s' if imported > 1 else ''} imported. "
-                "Your own rides are visible right away in the <strong>My traces</strong> layer on the map; "
-                "the community heatmap will include them within about 30 minutes."
+                "Your own rides are visible right away in the <strong>My traces</strong> layer on the map"
+                + ("; the community heatmap will include them within the hour." if contribute_heatmap else ".")
             )
         else:
             subject = "Your archive has been processed"
@@ -202,8 +209,8 @@ def render_archive_done_email(
             intro = (
                 f"Votre archive a été traitée : {imported} trace{'s' if imported > 1 else ''} "
                 f"importée{'s' if imported > 1 else ''}. Vos sorties sont visibles dès maintenant "
-                "dans le calque <strong>Mes traces</strong> de la carte ; la heatmap communautaire "
-                "les intégrera d'ici une trentaine de minutes."
+                "dans le calque <strong>Mes traces</strong> de la carte"
+                + (" ; la heatmap communautaire les intégrera dans l'heure." if contribute_heatmap else ".")
             )
         else:
             subject = "Votre archive a été traitée"

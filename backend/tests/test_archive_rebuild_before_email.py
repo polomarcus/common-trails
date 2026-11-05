@@ -17,6 +17,8 @@ the rebuild pings and the emails.
 
 import contextlib
 import io
+import time
+import types
 import zipfile
 from unittest.mock import MagicMock
 
@@ -25,6 +27,7 @@ import pytest
 from app.jobs import ingest_pending_archives as drain_mod
 from app.services import archive_intake
 from app.services import email as email_service
+from app.services import gpx as gpx_service
 
 
 def _zip_bytes(n: int) -> bytes:
@@ -71,8 +74,8 @@ def harness(monkeypatch):
         calls.append(("ping", ""))
         return True
 
-    def fake_send(to, subject, _html):
-        calls.append(("email", subject))
+    def fake_send(to, subject, html):
+        calls.append(("email", f"{subject}\n{html}"))
         return True
 
     monkeypatch.setattr(drain_mod, "_apply_drain_statement_timeout", lambda: None)
@@ -88,7 +91,7 @@ def harness(monkeypatch):
     monkeypatch.setattr("app.db.session.SessionLocal", _FakeSession)
     monkeypatch.delenv("DRAIN_PMTILES_REPING_S", raising=False)
 
-    def set_archives(member_counts: list[int]) -> None:
+    def set_archives(member_counts: list[int], *, contribute_heatmap: bool = True) -> None:
         state["members"] = {f"k{i}": n for i, n in enumerate(member_counts)}
         state["archives"] = [
             {
@@ -97,7 +100,7 @@ def harness(monkeypatch):
                 "storage_backend": "local",
                 "bucket_key": f"k{i}",
                 "fallback_sport": "road",
-                "contribute_heatmap": True,
+                "contribute_heatmap": contribute_heatmap,
                 "source": "manual_upload_archive",
             }
             for i in range(len(member_counts))
@@ -125,7 +128,7 @@ def test_single_archive_pings_rebuild_before_done_email(harness):
 def test_batch_pings_first_archive_then_one_catch_up_ping(harness):
     """Two archives finishing within the re-ping window: ONE build requested
     before the first email, the second archive's ping is deferred (no two
-    overlapping builds) and fired once at batch end — never N builds."""
+    overlapping builds in this run) and flushed at batch end — never N builds."""
     calls, set_archives = harness
     set_archives([2, 3])
 
@@ -167,6 +170,84 @@ def test_no_ping_when_heat_skipped(harness):
     assert _kinds(calls) == ["email"], calls
 
 
+def test_deferred_ping_fires_as_soon_as_window_expires_mid_batch(harness, monkeypatch):
+    """A deferred ping must NOT wait for batch end: it fires from the member
+    loop of a LATER archive once the re-ping window has expired. Fake clock:
+    every member ingest takes 40 s, window = 100 s.
+
+    A (1 member) ends t=40 → ping. B (1) ends t=80 → deferred. C (3 members):
+    window expires before its 3rd member (t=160) → B's ping fires mid-C, then C
+    ends t=200 → deferred → flushed at batch end."""
+    calls, set_archives = harness
+    clock = {"t": 0.0}
+    fake_time = types.SimpleNamespace(monotonic=lambda: clock["t"], sleep=lambda _s: None, time=time.time)
+
+    def slow_ingest(**_kw):
+        clock["t"] += 40.0
+        calls.append(("ingest", ""))
+        return "imported", "act-id", None
+
+    monkeypatch.setattr(drain_mod, "time", fake_time)
+    monkeypatch.setattr(drain_mod, "_ingest_member_bytes", slow_ingest)
+    monkeypatch.setenv("DRAIN_PMTILES_REPING_S", "100")
+    set_archives([1, 1, 3])
+
+    drain_mod.drain_pending_archives(limit=5, pace_seconds=0.0)
+
+    assert _kinds(calls) == [
+        "ingest",
+        "ping",
+        "email",  # A
+        "ingest",
+        "email",  # B (deferred)
+        "ingest",
+        "ingest",
+        "ping",
+        "ingest",
+        "email",  # C: B's ping mid-archive
+        "ping",  # C's deferred ping flushed at batch end
+    ], calls
+
+
+def test_non_contributing_archive_no_ping_and_no_heatmap_promise(harness):
+    """contribute_heatmap=False → nothing new on the heatmap: no rebuild, and
+    the email only points to "Mes traces" (no community-heatmap promise)."""
+    calls, set_archives = harness
+    set_archives([2], contribute_heatmap=False)
+
+    drain_mod.drain_pending_archives(limit=5, pace_seconds=0.0)
+
+    assert _kinds(calls) == ["email"], calls
+    body = calls[0][1].lower()
+    assert "mes traces" in body
+    assert "dans l'heure" not in body
+    assert "intégrera" not in body
+
+
+@pytest.mark.parametrize(
+    "boom",
+    [gpx_service.ZipBombError("too many members"), RuntimeError("storage hiccup")],
+    ids=["zipbomb", "generic"],
+)
+def test_failed_archive_after_partial_import_still_pings(harness, monkeypatch, boom):
+    """Members ingested before the archive blew up are committed heat — the
+    failure paths must request the rebuild too (before the failure email)."""
+    calls, set_archives = harness
+
+    def iter_then_boom(_zf):
+        yield "activities/0.gpx", b"<?xml version='1.0'?><gpx/>", "road"
+        raise boom
+
+    monkeypatch.setattr(archive_intake, "iter_zip_members", iter_then_boom)
+    set_archives([1])
+
+    summary = drain_mod.drain_pending_archives(limit=5, pace_seconds=0.0)
+
+    assert summary["archives_failed"] == 1, summary
+    assert summary["imported"] == 1, summary
+    assert _kinds(calls) == ["ping", "email"], calls
+
+
 # ── Copy: truthful about WHEN the traces appear ──────────────────────────────
 
 
@@ -182,8 +263,20 @@ def test_done_email_does_not_claim_traces_already_on_the_map(locale):
         "now part of the community heatmap",
     ):
         assert claim not in text, (locale, claim)
-    # Truthful copy: own rides now in "Mes traces", heatmap within ~30 min.
+    # Truthful copy: own rides now in "Mes traces", heatmap within the hour
+    # (build ~30 min + cold start + pointer cache — "~30 min" was optimistic).
     assert ("mes traces" if locale == "fr" else "my traces") in text
-    assert ("trentaine de minutes" if locale == "fr" else "30 minutes") in text
+    assert ("dans l'heure" if locale == "fr" else "within the hour") in text
+    assert "30 minutes" not in text and "trentaine" not in text
     assert "https://chemins-communs.fr/map" in html
     assert ("voir la carte" if locale == "fr" else "see the map") in text
+
+
+@pytest.mark.parametrize("locale", ["fr", "en"])
+def test_done_email_without_heatmap_contribution_only_points_to_my_traces(locale):
+    _subject, html = email_service.render_archive_done_email(
+        imported=3, skipped=0, failed=0, locale=locale, contribute_heatmap=False
+    )
+    text = html.lower()
+    assert ("mes traces" if locale == "fr" else "my traces") in text
+    assert ("dans l'heure" if locale == "fr" else "within the hour") not in text
