@@ -165,26 +165,73 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
   });
 });
 
-describe('MapLegend — one cyan "Mes sorties" entry next to the community ramp', () => {
+describe('MapLegend — one cyan "Mes sorties" entry next to the community ramp, signed-in only', () => {
   const waymarked = { hiking: false, cycling: false, mtb: false };
+  const legend = (layers: LayerToggles = INITIAL_LAYERS) => (
+    <I18nProvider><MapLegend layers={layers} waymarked={waymarked} /></I18nProvider>
+  );
+  let container: HTMLDivElement;
+  let root: Root | null = null;
 
-  it('renders a single "Mes sorties" swatch (no per-sport list) after the community ramp', () => {
-    const html = renderToString(
-      <I18nProvider><MapLegend layers={INITIAL_LAYERS} waymarked={waymarked} /></I18nProvider>,
-    );
-    expect(html).toContain('Mes sorties');
-    expect(html).toContain(MY_TRACES_COLOR);
-    expect(html).not.toContain('Gravel');
-    expect(html.indexOf('legend-community')).toBeLessThan(html.indexOf('legend-my-activities'));
+  beforeEach(() => {
+    auth.token = null;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container.remove();
   });
 
-  it('hides "Mes sorties" when "Ma heatmap" is off', () => {
-    const html = renderToString(
-      <I18nProvider>
-        <MapLegend layers={{ ...INITIAL_LAYERS, myTraces: false }} waymarked={waymarked} />
-      </I18nProvider>,
-    );
+  it('static render has NO "Mes sorties" even for a signed-in rider (render never reads auth)', () => {
+    auth.token = 'cookie-auth';
+    const html = renderToString(legend());
     expect(html).not.toContain('Mes sorties');
+    expect(html).not.toContain('legend-my-activities');
     expect(html).toContain('legend-community');
+  });
+
+  it('logged out after mount: no "Mes sorties" (a visitor has no traces and no toggle to hide it)', async () => {
+    await act(async () => { root = createRoot(container); root.render(legend()); });
+    expect(container.querySelector('[data-testid="legend-my-activities"]')).toBeNull();
+    expect(container.textContent).not.toContain('Mes sorties');
+    expect(container.querySelector('[data-testid="legend-community"]')).not.toBeNull();
+  });
+
+  it('signed in: hydrating the logged-out HTML does not mismatch, then ONE cyan "Mes sorties" appears right after the community ramp', async () => {
+    container.innerHTML = renderToString(legend()); // the static export (logged out)
+    auth.token = 'cookie-auth';
+    const { hydrateRoot } = await import('react-dom/client');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await act(async () => { root = hydrateRoot(container, legend()); });
+    const hydrationErrors = errors.mock.calls.filter((c) =>
+      /hydrat|did not match|#418/i.test(String(c[0])));
+    errors.mockRestore();
+    expect(hydrationErrors).toEqual([]);
+
+    const community = container.querySelector('[data-testid="legend-community"]');
+    const mine = container.querySelector('[data-testid="legend-my-activities"]') as HTMLElement | null;
+    expect(community).not.toBeNull();
+    expect(mine).not.toBeNull();
+    expect(mine!.textContent).toContain('Mes sorties');
+    // Exactly one entry for my traces — no per-sport list.
+    expect(container.querySelectorAll('[data-testid="legend-my-activities"]').length).toBe(1);
+    expect(container.textContent).not.toContain('Gravel');
+    // ORDER: "Mes sorties" is the very next legend row after the community ramp.
+    expect(community!.nextElementSibling).toBe(mine);
+    const swatch = mine!.firstElementChild as HTMLElement;
+    expect(swatch.style.background).toMatch(/rgb\(6, 182, 212\)|#06b6d4/i);
+    expect(MY_TRACES_COLOR).toBe('#06b6d4');
+  });
+
+  it('signed in but "Ma heatmap" off: no "Mes sorties"', async () => {
+    auth.token = 'cookie-auth';
+    await act(async () => {
+      root = createRoot(container);
+      root.render(legend({ ...INITIAL_LAYERS, myTraces: false }));
+    });
+    expect(container.querySelector('[data-testid="legend-my-activities"]')).toBeNull();
+    expect(container.querySelector('[data-testid="legend-community"]')).not.toBeNull();
   });
 });

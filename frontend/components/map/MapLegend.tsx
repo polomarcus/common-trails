@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { MY_TRACES_COLOR } from '@/lib/constants';
+import { getToken } from '@/lib/auth';
 import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import { useI18n } from '@/lib/i18n';
 import type { LayerToggles, WaymarkedToggles } from '@/hooks/useLayerToggles';
@@ -13,7 +14,15 @@ interface MapLegendProps {
 
 function MapLegend({ layers, waymarked }: MapLegendProps) {
   const { t } = useI18n();
-  const show = layers.heatmap || layers.dfci || layers.myTraces || waymarked.hiking || waymarked.cycling || waymarked.mtb;
+  // "Mes sorties" is for a signed-in rider only. Auth is read AFTER mount, never
+  // during render: /map is a static export built logged out, so reading
+  // getToken() here would make a signed-in client's first render differ from
+  // the HTML → hydration mismatch (React #418, see MapToolbar). null/false on
+  // first paint = identical static render for everyone; the effect upgrades it.
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  useEffect(() => { setIsLoggedIn(getToken() !== null); }, []);
+  const showMine = layers.myTraces && isLoggedIn;
+  const show = layers.heatmap || layers.dfci || showMine || waymarked.hiking || waymarked.cycling || waymarked.mtb;
   if (!show) return null;
 
   return (
@@ -33,7 +42,7 @@ function MapLegend({ layers, waymarked }: MapLegendProps) {
           <span>{t('map.legend.popularity')}</span>
         </div>
       )}
-      {layers.myTraces && (
+      {showMine && (
         // ONE entry for the rider's own traces ("Ma heatmap"): they are painted
         // in a single cyan on the map (MY_TRACES_COLOR), not per sport, so they
         // read against the community ramp above when both are superposed.
