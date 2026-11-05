@@ -109,6 +109,12 @@ def harness(monkeypatch):
     return calls, set_archives
 
 
+def _intro(html: str) -> str:
+    """The email's first paragraph (the intro, before the counts list)."""
+    start = html.index("<p ")
+    return html[start : html.index("</p>", start)]
+
+
 def _kinds(calls):
     return [kind for kind, _ in calls]
 
@@ -219,7 +225,7 @@ def test_non_contributing_archive_no_ping_and_no_heatmap_promise(harness):
 
     assert _kinds(calls) == ["email"], calls
     body = calls[0][1].lower()
-    assert "mes traces" in body
+    assert "ma heatmap" in body
     assert "dans l'heure" not in body
     assert "intégrera" not in body
 
@@ -248,6 +254,45 @@ def test_failed_archive_after_partial_import_still_pings(harness, monkeypatch, b
     assert _kinds(calls) == ["ping", "email"], calls
 
 
+def test_unfired_ping_does_not_open_the_window(harness, monkeypatch):
+    """A ping whose trigger did NOT fire (falsy ``jobs:run``) must not start the
+    re-ping window — no build is running. The next archive pings again (and
+    that one fires), with nothing left over for the batch end."""
+    calls, set_archives = harness
+    results = iter([False, True])
+
+    def flaky_trigger():
+        calls.append(("ping", ""))
+        return next(results)
+
+    monkeypatch.setattr(drain_mod, "trigger_build_pmtiles_job", flaky_trigger)
+    set_archives([2, 3])
+
+    drain_mod.drain_pending_archives(limit=5, pace_seconds=0.0)
+
+    assert _kinds(calls) == ["ping", "email", "ping", "email"], calls
+
+
+def test_archive_counted_once_when_finish_raises_on_done_path(harness, monkeypatch):
+    """``_finish_archive_now`` raising on the done path falls through to the
+    generic ``except``, which calls ``archive_finished`` again — the archive
+    must still be pinged ONCE (window 0 would expose a double count)."""
+    calls, set_archives = harness
+
+    def finish(_db, _archive_id, status, *_a, **_k):
+        if status == "done":
+            raise RuntimeError("db hiccup on the terminal UPDATE")
+
+    monkeypatch.setattr(drain_mod, "_finish_archive", finish)
+    monkeypatch.setenv("DRAIN_PMTILES_REPING_S", "0")
+    set_archives([2])
+
+    summary = drain_mod.drain_pending_archives(limit=5, pace_seconds=0.0)
+
+    assert summary["archives_failed"] == 1, summary
+    assert _kinds(calls) == ["ping", "email"], calls
+
+
 # ── Copy: truthful about WHEN the traces appear ──────────────────────────────
 
 
@@ -263,10 +308,13 @@ def test_done_email_does_not_claim_traces_already_on_the_map(locale):
         "now part of the community heatmap",
     ):
         assert claim not in text, (locale, claim)
-    # Truthful copy: own rides now in "Mes traces", heatmap within the hour
+    # Truthful copy: own rides now in "Ma heatmap", heatmap usually within the hour
     # (build ~30 min + cold start + pointer cache — "~30 min" was optimistic).
-    assert ("mes traces" if locale == "fr" else "my traces") in text
-    assert ("dans l'heure" if locale == "fr" else "within the hour") in text
+    assert ("ma heatmap" if locale == "fr" else "my heatmap") in text
+    assert ("en général dans l'heure" if locale == "fr" else "usually within the hour") in text
+    # The count lives in the list only — not duplicated in the intro.
+    assert "<strong>3</strong>" in html
+    assert "3" not in _intro(html), _intro(html)
     assert "30 minutes" not in text and "trentaine" not in text
     assert "https://chemins-communs.fr/map" in html
     assert ("voir la carte" if locale == "fr" else "see the map") in text
@@ -278,5 +326,7 @@ def test_done_email_without_heatmap_contribution_only_points_to_my_traces(locale
         imported=3, skipped=0, failed=0, locale=locale, contribute_heatmap=False
     )
     text = html.lower()
-    assert ("mes traces" if locale == "fr" else "my traces") in text
+    assert ("ma heatmap" if locale == "fr" else "my heatmap") in text
     assert ("dans l'heure" if locale == "fr" else "within the hour") not in text
+    intro = _intro(html).lower()
+    assert "heatmap communautaire" not in intro and "community heatmap" not in intro, intro

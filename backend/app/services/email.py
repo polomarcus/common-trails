@@ -163,12 +163,14 @@ def render_archive_done_email(
     already-imported activities or out-of-scope).
 
     The happy path must stay TRUTHFUL about timing (Thierry Crouzet, 2026-11):
-    the user's own rides show up at once in the "Mes traces" layer (served live
+    the user's own rides show up at once in the "Ma heatmap" layer (served live
     from the DB), but the community heatmap is a static PMTiles rebuilt by a
-    job (~30 min build + cold start + pointer cache) — so never claim the
-    traces are already on the heatmap, and promise "within the hour". When the
-    archive does NOT contribute to the heatmap (``contribute_heatmap=False``)
-    no rebuild is triggered, so the copy only points to "Mes traces".
+    job (~30 min build + cold start + pointer cache, more for an archive whose
+    rebuild ping was deferred) — so never claim the traces are already on the
+    heatmap; promise "usually within the hour". When the archive does NOT
+    contribute to the heatmap (``contribute_heatmap=False``) no rebuild is
+    triggered, so the copy only points to "Ma heatmap". The count is NOT
+    repeated in the intro — the list below already carries it.
     """
     map_url = "https://chemins-communs.fr/map"
     # The community heatmap is also published as a raster XYZ tile pyramid on
@@ -180,9 +182,9 @@ def render_archive_done_email(
         if imported > 0:
             subject = "Your archive has been imported 🚴"
             intro = (
-                f"Your archive has been processed: {imported} trace{'s' if imported > 1 else ''} imported. "
-                "Your own rides are visible right away in the <strong>My traces</strong> layer on the map"
-                + ("; the community heatmap will include them within the hour." if contribute_heatmap else ".")
+                "Your archive has been processed. Your rides are visible right away in the "
+                "<strong>My heatmap</strong> layer on the map"
+                + ("; the community heatmap will include them, usually within the hour." if contribute_heatmap else ".")
             )
         else:
             subject = "Your archive has been processed"
@@ -207,10 +209,9 @@ def render_archive_done_email(
         if imported > 0:
             subject = "Votre archive est importée 🚴"
             intro = (
-                f"Votre archive a été traitée : {imported} trace{'s' if imported > 1 else ''} "
-                f"importée{'s' if imported > 1 else ''}. Vos sorties sont visibles dès maintenant "
-                "dans le calque <strong>Mes traces</strong> de la carte"
-                + (" ; la heatmap communautaire les intégrera dans l'heure." if contribute_heatmap else ".")
+                "Votre archive a été traitée. Vos sorties sont visibles dès maintenant "
+                "dans le calque <strong>Ma heatmap</strong> de la carte"
+                + (" ; la heatmap communautaire les intégrera, en général dans l'heure." if contribute_heatmap else ".")
             )
         else:
             subject = "Votre archive a été traitée"

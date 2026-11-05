@@ -246,7 +246,7 @@ def _recompute_heat_agg_batched(touched_ways: set[int]) -> None:
         db.close()
 
 
-def _ping_pmtiles_rebuild(imported: int, skip_heat_computation: bool) -> None:
+def _ping_pmtiles_rebuild(imported: int, skip_heat_computation: bool) -> bool:
     """After a drain that ingested >=1 activity WITH heat computation on, fire a
     single best-effort PMTiles rebuild so the new contribution appears on the
     public heatmap (the small ``/imports/files`` path already does the
@@ -256,18 +256,21 @@ def _ping_pmtiles_rebuild(imported: int, skip_heat_computation: bool) -> None:
     NEVER raises: the ``heat_edges``/``heat_edges_agg`` writes are already
     committed, so a failed ping must not fail the drain (the row stays ``done``);
     the next drain or an unrelated rebuild catches up. No-ops when heat was
-    skipped (nothing new to display) or nothing was imported.
+    skipped (nothing new to display) or nothing was imported. Returns whether a
+    build execution was actually requested (truthy ``jobs:run``).
     """
     if skip_heat_computation or imported < 1:
-        return
+        return False
     try:
         fired = trigger_build_pmtiles_job()
         log.info(
             "pmtiles rebuild ping after drain: fired=%s (imported=%d)",
             fired, imported,
         )
+        return bool(fired)
     except Exception:
         log.warning("pmtiles rebuild ping failed after drain", exc_info=True)
+        return False
 
 
 def _pmtiles_reping_seconds() -> float:
@@ -310,16 +313,35 @@ class _ArchiveRebuildPinger:
         self._skip = skip_heat_computation
         self._last_ping: float | None = None
         self._deferred = 0
+        # Archives already counted — the done path can fall through to the
+        # generic ``except`` (e.g. ``_finish_archive_now`` raising) and call
+        # ``archive_finished`` a second time for the same archive.
+        self._seen: set[str] = set()
+        # A ping that did NOT fire keeps its count deferred; tick() retries it
+        # at most once per _PING_RETRY_S, not on every member.
+        self._retry_after = 0.0
+
+    _PING_RETRY_S = 60.0
 
     def _window_open(self, now: float) -> bool:
         return self._last_ping is None or (now - self._last_ping) >= _pmtiles_reping_seconds()
 
     def _ping(self, imported: int, now: float) -> None:
-        _ping_pmtiles_rebuild(imported, False)
-        self._last_ping = now
-        self._deferred = 0
+        # ``_last_ping`` only moves when a build was REALLY requested — a failed
+        # or disabled trigger must not open a window during which nothing runs.
+        if _ping_pmtiles_rebuild(imported, False):
+            self._last_ping = now
+            self._deferred = 0
+        else:
+            self._deferred = imported
+            self._retry_after = now + self._PING_RETRY_S
 
-    def archive_finished(self, imported: int, contribute_heatmap: bool = True) -> None:
+    def archive_finished(
+        self, archive_id: str, imported: int, contribute_heatmap: bool = True
+    ) -> None:
+        if archive_id in self._seen:
+            return
+        self._seen.add(archive_id)
         if self._skip or imported < 1 or not contribute_heatmap:
             return
         now = time.monotonic()
@@ -332,7 +354,7 @@ class _ArchiveRebuildPinger:
         """Fire a deferred ping once the re-ping window has expired."""
         if self._deferred:
             now = time.monotonic()
-            if self._window_open(now):
+            if self._window_open(now) and now >= self._retry_after:
                 self._ping(self._deferred, now)
 
     def batch_finished(self) -> None:
@@ -997,7 +1019,7 @@ def drain_pending_archives(
             _recompute_heat_agg_batched(touched_ways)
             # Rebuild ping BEFORE the email: the email promises the heatmap
             # update within ~30 min, so the build must already be requested.
-            pinger.archive_finished(counts["imported"], bool(arch["contribute_heatmap"]))
+            pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
             _finish_archive_now(arch["id"], "done", counts)
             _notify_archive_terminal(
                 arch["id"], "done", counts,
@@ -1040,7 +1062,7 @@ def drain_pending_archives(
             # Members ingested before the cap tripped already wrote heat_edges —
             # recompute their ways so the aggregate doesn't drift.
             _recompute_heat_agg_batched(touched_ways)
-            pinger.archive_finished(counts["imported"], bool(arch["contribute_heatmap"]))
+            pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
             try:
                 _finish_archive_now(arch["id"], "failed", counts, error=reason[:1000])
             except Exception:
@@ -1055,7 +1077,7 @@ def drain_pending_archives(
             # members are committed — the agg must not drift (golden asserts
             # agg freshness for every touched way).
             _recompute_heat_agg_batched(touched_ways)
-            pinger.archive_finished(counts["imported"], bool(arch["contribute_heatmap"]))
+            pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
             try:
                 _finish_archive_now(arch["id"], "failed", counts, error=str(exc)[:1000])
             except Exception:

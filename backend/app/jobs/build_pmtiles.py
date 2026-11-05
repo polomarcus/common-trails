@@ -280,6 +280,11 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
         raw_mode = raw_display_enabled()
 
         t0 = time.time()
+        # Snapshot start, recorded BEFORE the export query: the pointer publish
+        # is a compare-and-set on this timestamp, so a build that started
+        # earlier (older DB snapshot) and finishes LATER can never overwrite a
+        # newer pointer (overlapping builds — see _publish_pointer_cas).
+        snapshot_started_at = _utc_now_iso()
         geojson_path = "/tmp/heat_edges_display.geojsonl"
         # RAW mode also emits a companion heat_points GeoJSONL → a second
         # tippecanoe layer rendered as a maplibre `heatmap` density field
@@ -367,7 +372,7 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
             # re-materialises the whole corpus in RAM for ~8-10 min and could be
             # OOM-SIGKILL'd — which no try/except can catch — so if it ran first a
             # kill would strand /map on the PREVIOUS build with no error surfaced.
-            _upload_to_export_bucket(output)
+            _upload_to_export_bucket(output, snapshot_started_at=snapshot_started_at)
             # RAW mode only: also publish the un-tiled geojsonl (gzipped) so the
             # community-EXPORT endpoints (export._query_aggregated_heat_edges)
             # can STREAM + bbox-clip this pre-built artifact instead of
@@ -726,30 +731,127 @@ def _build_and_upload_raster_pyramid(geojson_path: str) -> None:
         log.warning("raster pyramid build/upload failed (best-effort)", exc_info=True)
 
 
-def _upload_to_export_bucket(pmtiles_path: str) -> None:
+_POINTER_NAME = "heatmap-display.json"
+_MUTABLE_NAME = "heatmap-display.pmtiles"
+
+
+def _parse_iso(value):
+    """``datetime`` from an ISO string, or None (missing / unparseable)."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _read_pointer(bucket) -> tuple[int, dict | None]:
+    """Return ``(generation, pointer_dict)`` of the live pointer — ``(0, None)``
+    when absent. Downloads with ``if_generation_match`` so the body matches the
+    generation we will compare-and-set against."""
+    import json as _json
+
+    blob = bucket.get_blob(_POINTER_NAME)
+    if blob is None:
+        return 0, None
+    generation = int(blob.generation or 0)
+    try:
+        body = _json.loads(blob.download_as_bytes(if_generation_match=generation))
+    except Exception:  # noqa: BLE001 — unreadable pointer ≡ no timestamp (older)
+        body = None
+    return generation, body if isinstance(body, dict) else None
+
+
+def _pointer_is_ours(bucket, snapshot_started_at: str) -> bool:
+    """True while the live pointer still carries OUR snapshot timestamp (no
+    newer build has published since)."""
+    try:
+        _gen, current = _read_pointer(bucket)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(current) and current.get("snapshot_started_at") == snapshot_started_at
+
+
+def _publish_pointer_cas(bucket, pointer: dict) -> bool:
+    """Compare-and-set publish of ``heatmap-display.json``.
+
+    build-pmtiles executions CAN overlap (the archive drain pings per archive,
+    ``/imports/files`` pings too, and the job has no concurrency guard). The
+    pointer used to be last-writer-wins, and every run shared ONE
+    ``heatmap-display.json.tmp`` — so an older build (older DB snapshot)
+    finishing last re-published stale data and the newer rides vanished.
+
+    Now: publish ONLY if our ``snapshot_started_at`` is strictly newer than the
+    live pointer's (a missing/unparseable field counts as older), via a per-run
+    unique tmp blob + ``rewrite(if_generation_match=<generation read>)`` (``0``
+    = "must not exist yet"). A precondition failure (another build published
+    between our read and our write) is retried ONCE with a fresh read.
+    Returns True when the pointer now references our snapshot.
+    """
+    import json as _json
+    import uuid
+
+    from google.api_core.exceptions import PreconditionFailed
+
+    ours = _parse_iso(pointer["snapshot_started_at"])
+    for attempt in (1, 2):
+        generation, current = _read_pointer(bucket)
+        theirs = _parse_iso((current or {}).get("snapshot_started_at"))
+        if theirs is not None and ours is not None and theirs >= ours:
+            log.info(
+                "pointer NOT updated: live snapshot %s is not older than ours %s "
+                "(an overlapping build published first)",
+                (current or {}).get("snapshot_started_at"),
+                pointer["snapshot_started_at"],
+            )
+            return False
+        tmp = bucket.blob(f"{_POINTER_NAME}.tmp-{uuid.uuid4().hex}")
+        tmp.cache_control = "no-store"
+        tmp.upload_from_string(_json.dumps(pointer, indent=2), content_type="application/json")
+        try:
+            bucket.blob(_POINTER_NAME).rewrite(tmp, if_generation_match=generation)
+            return True
+        except PreconditionFailed:
+            if attempt == 2:
+                log.warning("pointer CAS lost twice in a row — leaving the live pointer as is")
+                return False
+            log.info("pointer CAS precondition failed (concurrent publish) — retrying once")
+        finally:
+            try:
+                tmp.delete()
+            except Exception:  # noqa: BLE001
+                log.debug("could not delete pointer tmp blob (already gone?)")
+    return False
+
+
+def _upload_to_export_bucket(pmtiles_path: str, snapshot_started_at: str | None = None) -> None:
     """Best-effort upload of the freshly-built PMTiles to the public
     heatmap-export GCS bucket.
 
     Phase 1 (PRD #391): published the mutable ``heatmap-display.pmtiles``
-    object only. Phase 3 (this commit) ADDS:
+    object only. Phase 3 ADDS:
 
-    1. ``heatmap-display-{v{N}}.pmtiles`` — immutable per-day snapshot
-       so consumers can pin to an exact version (Garmin-Connect-style
-       "click here to reproduce the exact map I downloaded last week").
+    1. ``heatmap-display-{v{N}}.pmtiles`` — immutable per-build snapshot
+       so consumers can pin to an exact version.
     2. ``heatmap-display.json`` — pointer file listing the latest
-       version, size, captured_at, k_anonymity, edge_count. Clients
-       hit this JSON first, then ``heatmap-display-v{N}.pmtiles`` to
-       follow the pointer (Garmin-style 2-hop), OR hit the mutable
-       ``heatmap-display.pmtiles`` for the "always latest" semantic.
+       version, size, captured_at, snapshot_started_at, k_anonymity,
+       edge_count. /map resolves the PMTiles URL THROUGH this pointer
+       (``frontend/lib/cdn-cache.ts``); the mutable
+       ``heatmap-display.pmtiles`` is the "always latest" fallback.
 
-    The mutable file stays the primary path (Phase 1 backwards compat
-    + the in-app heatmap reads it). The versioned snapshots are
-    additive — no consumer is required to switch.
+    Overlapping builds (2026-11): the order is snapshot → pointer CAS →
+    mutable copy → prune. ``snapshot_started_at`` (recorded by ``main`` BEFORE
+    the export query) drives ``_publish_pointer_cas``: a build OLDER than the
+    live pointer skips the pointer, the mutable copy and the prune, and
+    deletes its own orphan snapshot. The mutable copy is only rewritten while
+    the pointer still carries our timestamp (re-checked right before the
+    rewrite) — a residual sub-second race there self-heals on the next build,
+    and /map follows the pointer anyway. The raster pyramid / geojsonl
+    secondaries are NOT guarded (best-effort, last-writer-wins: a late older
+    build can leave them one build behind until the next one).
 
     Env-gated on ``HEATMAP_GCS_BUCKET``. Never raises — a transient
-    GCS hiccup must not break the build: the local file still exists
-    and the next ingest burst will trigger another rebuild via the
-    existing internal_artefacts handler.
+    GCS hiccup must not break the build.
     """
     bucket_name = os.environ.get("HEATMAP_GCS_BUCKET", "").strip()
     if not bucket_name:
@@ -762,48 +864,24 @@ def _upload_to_export_bucket(pmtiles_path: str) -> None:
         log.warning("google-cloud-storage not installed; cannot upload PMTiles to %s", bucket_name)
         return
 
+    if not snapshot_started_at:
+        snapshot_started_at = _utc_now_iso()
+
     try:
+        import uuid
+
         client = storage.Client()
         bucket = client.bucket(bucket_name)
         size = os.path.getsize(pmtiles_path)
-        # Read the bytes once for content-hashing the version id (S1 #2).
-        # PMTiles binaries are ~10 MB; the read cost is dwarfed by the
-        # GCS upload immediately after. Reading lets us pass the bytes
-        # to _pmtiles_version_id so the pinned-snapshot URL is unique
-        # per-build (epoch_hour + sha8) and the immutable cache
-        # contract holds across same-day rebuilds.
+        # Read the bytes once for content-hashing the version id (S1 #2): the
+        # pinned-snapshot URL is unique per build (epoch_hour + sha8).
         with open(pmtiles_path, "rb") as fh:
             pmtiles_bytes = fh.read()
         version_id = _pmtiles_version_id(pmtiles_bytes)
+        mutable_url = f"{_public_base_url(bucket_name)}/{_MUTABLE_NAME}"
 
-        # Step 1: Atomic upload of the MUTABLE name (Phase 1 — keeps
-        # all existing consumers working). Upload to a `.tmp` name,
-        # then `rewrite()` into the canonical name. Browsers mid-poll
-        # either see the OLD object (rewrite hasn't completed) or the
-        # NEW object — never a half-written body.
-        tmp_blob = bucket.blob("heatmap-display.pmtiles.tmp")
-        canonical_blob = bucket.blob("heatmap-display.pmtiles")
-        # 24 h browser/CDN cache. CDN purge happens on every upload
-        # because GCS object versions update the Last-Modified / ETag.
-        tmp_blob.cache_control = "public, max-age=86400"
-        tmp_blob.upload_from_filename(pmtiles_path, content_type="application/vnd.pmtiles")
-        canonical_blob.rewrite(tmp_blob)
-        try:
-            tmp_blob.delete()
-        except Exception:  # noqa: BLE001
-            log.debug("could not delete tmp blob (already gone?)")
-        mutable_url = f"{_public_base_url(bucket_name)}/heatmap-display.pmtiles"
-        log.info("Uploaded PMTiles atomically (%d bytes) → %s", size, mutable_url)
-
-        # Step 2: IMMUTABLE per-day snapshot (Phase 3). Upload to
-        # `heatmap-display-{v{N}}.pmtiles` with a 1 y cache header
-        # (immutable filename → safe to cache forever). Skipping the
-        # atomic-rename trick because a torn read on a versioned name
-        # is harmless — the file is identified by its NAME, so a
-        # consumer that read a half-written `v20606` would still
-        # re-fetch the right complete bytes on retry (same name, just
-        # done uploading). And we don't want to double the upload cost
-        # for the no-readers case (most snapshots are never pinned to).
+        # Step 1: IMMUTABLE per-build snapshot, 1 y cache (immutable name). No
+        # tmp+rewrite: nothing references this name until the pointer does.
         pinned_name = f"heatmap-display-{version_id}.pmtiles"
         pinned_blob = bucket.blob(pinned_name)
         pinned_blob.cache_control = "public, max-age=31536000, immutable"
@@ -812,28 +890,23 @@ def _upload_to_export_bucket(pmtiles_path: str) -> None:
         log.info("Published immutable snapshot %s (%d bytes) → %s",
                  version_id, size, pinned_url)
 
-        # Step 3: pointer JSON. Written LAST so a partial upload
-        # (steps 1–2 failed but step 3 succeeded) is impossible — the
-        # pointer always references a snapshot we already pushed.
-        # Cache: 5 min so consumers see new versions within a short
-        # window without thundering-herding the JSON endpoint.
+        # Step 2: pointer JSON, compare-and-set. Written AFTER the snapshot so
+        # the pointer always references bytes already pushed. 5 min cache
+        # (cdn-cache.ts) so consumers see new versions quickly.
         pointer = {
             "latest": version_id,
             "latest_url": pinned_url,
             "mutable_url": mutable_url,
             "size_bytes": size,
             "captured_at": _utc_now_iso(),
+            "snapshot_started_at": snapshot_started_at,
             "license": "ODbL-1.0",
             "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
             "attribution": "© CHEMINS COMMUNS contributors — ODbL 1.0",
         }
-        # Best-effort edge count + k_anonymity from env / DB — optional
-        # fields so this branch doesn't fail the whole upload on a
-        # transient DB hiccup. Count the light ``heat_edges_agg`` table (one
-        # row per (osm_way_id, sport), ~45 k rows), NOT raw ``heat_edges`` —
-        # a full 5 M-row COUNT would sever the db-f1-micro connection, and
-        # this runs AFTER the PMTiles upload (steps 1-2 above) where the
-        # aggregated-way count is the meaningful number anyway.
+        # Best-effort edge count from the light ``heat_edges_agg`` table (one
+        # row per (osm_way_id, sport), ~45 k rows), NOT raw ``heat_edges`` — a
+        # full 5 M-row COUNT would sever the db-f1-micro connection.
         try:
             from sqlalchemy import text as _sa_text
 
@@ -858,35 +931,44 @@ def _upload_to_export_bucket(pmtiles_path: str) -> None:
             else int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
         )
 
-        # Atomic write: .tmp → rewrite() into the canonical pointer name
-        # so a mid-flight discovery request never reads a torn JSON
-        # body (same posture as the mutable PMTiles step above). The
-        # JSON is small (~300 B) so the tear window was narrow, but
-        # the inconsistency with the rest of this pipeline was
-        # intentional sloppiness — PR #400 review S2 #1.
-        import json as _json
-        pointer_tmp = bucket.blob("heatmap-display.json.tmp")
-        pointer_canonical = bucket.blob("heatmap-display.json")
-        pointer_tmp.cache_control = "no-store"
-        pointer_tmp.upload_from_string(
-            _json.dumps(pointer, indent=2),
-            content_type="application/json",
-        )
-        pointer_canonical.rewrite(pointer_tmp)
-        try:
-            pointer_tmp.delete()
-        except Exception:  # noqa: BLE001
-            log.debug("could not delete pointer tmp blob (already gone?)")
+        if not _publish_pointer_cas(bucket, pointer):
+            # An overlapping NEWER build already published: our snapshot is
+            # stale — drop it (nothing references it) and touch nothing else.
+            try:
+                pinned_blob.delete()
+            except Exception:  # noqa: BLE001
+                log.debug("could not delete orphan snapshot %s", pinned_name)
+            return
         log.info("Updated pointer JSON (latest=%s)", version_id)
+
+        # Step 3: MUTABLE "always latest" copy (Phase 1 consumers), atomic via a
+        # per-run unique tmp + rewrite(). The pointer is re-checked right before
+        # the rewrite so a slower OLDER build never lands last.
+        tmp_blob = bucket.blob(f"{_MUTABLE_NAME}.tmp-{uuid.uuid4().hex}")
+        # 24 h browser/CDN cache — /map reads the pinned URL via the pointer.
+        tmp_blob.cache_control = "public, max-age=86400"
+        tmp_blob.upload_from_filename(pmtiles_path, content_type="application/vnd.pmtiles")
+        try:
+            if _pointer_is_ours(bucket, snapshot_started_at):
+                bucket.blob(_MUTABLE_NAME).rewrite(tmp_blob)
+                log.info("Uploaded PMTiles atomically (%d bytes) → %s", size, mutable_url)
+            else:
+                log.info("mutable copy NOT updated: a newer build published meanwhile")
+        finally:
+            try:
+                tmp_blob.delete()
+            except Exception:  # noqa: BLE001
+                log.debug("could not delete tmp blob (already gone?)")
 
         # Prune OLD immutable snapshots — keep ONLY the latest (Paul 2026-08-07:
         # "on doit l'écraser par la dernière version à chaque fois"). They used
         # to accumulate forever, so a GDPR-deleted trace stayed retrievable in a
-        # frozen old snapshot indefinitely (right-to-erasure gap). The pointer
-        # above now references the new snapshot, so deleting the rest is safe.
-        # Matches heatmap-display-<version>.pmtiles ONLY (the mutable
-        # "heatmap-display.pmtiles" has no trailing '-' and the per-sport
-        # geojsonl end in .geojsonl.gz — neither is touched). Best-effort.
+        # frozen old snapshot indefinitely (right-to-erasure gap). Only while the
+        # pointer is still ours — a newer build's snapshot must never be pruned
+        # from under its pointer. Matches heatmap-display-<version>.pmtiles ONLY
+        # (the mutable name has no trailing '-'; geojsonl end in .geojsonl.gz).
+        if not _pointer_is_ours(bucket, snapshot_started_at):
+            return
         pruned = 0
         for old in bucket.list_blobs(prefix="heatmap-display-"):
             if old.name.endswith(".pmtiles") and old.name != pinned_name:
