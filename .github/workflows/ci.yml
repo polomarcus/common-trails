@@ -68,7 +68,11 @@ jobs:
 
       - name: Save Docker image for cache
         if: steps.docker-cache.outputs.cache-hit != 'true'
-        run: docker save $(docker compose -f docker-compose.backend.yml images -q backend) -o /tmp/docker-image.tar
+        # Recent Docker engines reject a bare 64-hex id as a repository name;
+        # `images -q` returns one, so re-prefix it with `sha256:`.
+        run: |
+          IMAGE_ID=$(docker compose -f docker-compose.backend.yml images -q backend)
+          docker save "sha256:${IMAGE_ID#sha256:}" -o /tmp/docker-image.tar
 
       - name: Wait for API /healthz
         run: |
@@ -162,7 +166,11 @@ jobs:
 
       - name: Save Docker image for cache
         if: steps.docker-cache.outputs.cache-hit != 'true'
-        run: docker save $(docker compose -f docker-compose.backend.yml images -q backend) -o /tmp/docker-image.tar
+        # Recent Docker engines reject a bare 64-hex id as a repository name;
+        # `images -q` returns one, so re-prefix it with `sha256:`.
+        run: |
+          IMAGE_ID=$(docker compose -f docker-compose.backend.yml images -q backend)
+          docker save "sha256:${IMAGE_ID#sha256:}" -o /tmp/docker-image.tar
 
       # ── Frontend build (parallel with Docker startup) ──────────────────
       - name: Setup Node.js
