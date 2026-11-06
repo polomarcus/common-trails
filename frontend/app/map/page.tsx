@@ -16,6 +16,7 @@ import ExportHeatmapModal from '@/components/ExportHeatmapModal';
 import MapToolbar from '@/components/map/MapToolbar';
 import MapLegend from '@/components/map/MapLegend';
 import SelectedActivityCard from '@/components/map/SelectedActivityCard';
+import MapActivitiesNotice, { MAP_ACTIVITIES_LIMIT } from '@/components/map/MapActivitiesNotice';
 import ElevationProfile from '@/components/ElevationProfile';
 import PublicRoutesPanel from '@/components/PublicRoutesPanel';
 import { useLayerToggles } from '@/hooks/useLayerToggles';
@@ -94,7 +95,7 @@ export default function MapPage() {
   const reloadActivitiesRef = useRef<(() => void) | null>(null);
   const {
     showUserMenu, setShowUserMenu,
-    userEmail, stravaName, lastSyncedAt,
+    userEmail, isAdmin, stravaName, lastSyncedAt,
     stravaSyncing, stravaSyncMsg,
     handleLogout,
   } = useUserMenu(reloadActivitiesRef);
@@ -139,6 +140,12 @@ export default function MapPage() {
   // submittable). 'idle' | 'importing' | 'done' | 'error'.
   const [gpxImport, setGpxImport] = useState<'idle' | 'importing' | 'done' | 'error'>('idle');
   const [gpxDragOver, setGpxDragOver] = useState(false);
+  // Sport of the dropped trace — REQUIRED, no preselection (a silent "VTT"
+  // default mislabelled road rides in the common heatmap).
+  const [gpxSport, setGpxSport] = useState<string | null>(null);
+  // "N file(s) ignored" — the drop previews ONE .gpx; say so instead of
+  // silently dropping the rest / a non-.gpx file.
+  const [gpxDropNote, setGpxDropNote] = useState<string | null>(null);
 
   const layersReady = useRef(false);
   const maplibreModuleRef = useRef<any>(null);
@@ -150,6 +157,8 @@ export default function MapPage() {
   // sidebar empty (a 500 used to be swallowed → invisible blank). Non-fatal:
   // the rest of the map still works.
   const [activitiesError, setActivitiesError] = useState<boolean>(false);
+  // null until /me/activities answered (never shown for logged-out visitors).
+  const [activitiesReturned, setActivitiesReturned] = useState<number | null>(null);
   const activitiesRef = useRef<ActivityItem[]>([]);
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null);
   const layersBeforeActivityRef = useRef<LayerToggles | null>(null);
@@ -247,7 +256,7 @@ export default function MapPage() {
     if (!token) return;
     const m = map as any;
     try {
-      const resp = await fetch(`${API_URL}/me/activities?limit=5000`, {
+      const resp = await fetch(`${API_URL}/me/activities?limit=${MAP_ACTIVITIES_LIMIT}`, {
         credentials: 'include',
       });
       if (!resp.ok) {
@@ -259,6 +268,9 @@ export default function MapPage() {
       }
       setActivitiesError(false);
       const geojson = await resp.json();
+      // Raw count returned by the API: 0 → empty-state card, = limit → "N most
+      // recent shown" (MapActivitiesNotice).
+      setActivitiesReturned(geojson.features?.length ?? 0);
 
       // Populate sidebar activity list
       // Geometry is a LineString, or a MultiLineString when the API broke the
@@ -531,6 +543,7 @@ export default function MapPage() {
         setShowImportModal={setShowImportModal}
         setShowExportModal={setShowExportModal}
         activitiesCount={activities.length}
+        isAdmin={isAdmin}
         mapInstance={mapInstance}
         dateLocale={dateLocale}
       />
@@ -554,12 +567,17 @@ export default function MapPage() {
         onDrop={(e) => {
           if (!e.dataTransfer.types.includes('Files')) return;
           e.preventDefault(); e.stopPropagation(); setGpxDragOver(false);
-          const file = e.dataTransfer.files[0];
-          if (!file || !file.name.toLowerCase().endsWith('.gpx')) return;
+          const dropped = Array.from(e.dataTransfer.files);
+          const file = dropped.find((f) => f.name.toLowerCase().endsWith('.gpx'));
+          const ignoredCount = dropped.length - (file ? 1 : 0);
+          setGpxDropNote(ignoredCount > 0 ? t('map.dropIgnored', { count: ignoredCount }) : null);
+          if (!file) return;
           const reader = new FileReader();
           reader.onload = () => {
             const data = parseGpxFile(reader.result as string);
             if (!data) return;
+            setGpxSport(null);
+            setGpxImport('idle');
             setGpxPreview(data);
             // Fit map to GPX bounds
             const m = mapInstance as any;
@@ -610,10 +628,13 @@ export default function MapPage() {
         {/* Map legend — contextual, shows only active layers */}
         <MapLegend layers={layers} waymarked={waymarked} />
 
+        {/* Signed-in rider with 0 activities → import CTA; 5000 → cap note */}
+        <MapActivitiesNotice count={activitiesReturned} />
+
         {/* ── GPX Preview panel (dropped-file preview + contribute) ── */}
         {gpxPreview && (
           <div style={{
-            position: 'absolute', bottom: 56, left: '50%', transform: 'translateX(-50%)',
+            position: 'absolute', bottom: 'calc(var(--beta-banner-h, 0px) + 16px)', left: '50%', transform: 'translateX(-50%)',
             zIndex: 50, background: '#fff', borderRadius: 12,
             boxShadow: '0 4px 20px rgba(0,0,0,0.15)', border: '1px solid #e5e7eb',
             padding: '14px 18px', maxWidth: 380, width: '90%',
@@ -637,10 +658,37 @@ export default function MapPage() {
               >&times;</button>
             </div>
             <ElevationProfile coords={gpxPreview.coords as number[][]} width={340} height={64} />
+            <div data-testid="gpx-drop-sport" style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11.5, color: '#4b5563', fontWeight: 600, marginBottom: 5 }}>
+                {t('map.dropSportLabel')}
+              </div>
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                {(['road', 'gravel', 'mtb', 'offroad', 'running'] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    data-testid={`gpx-drop-sport-${s}`}
+                    aria-pressed={gpxSport === s}
+                    onClick={() => setGpxSport(s)}
+                    style={{
+                      padding: '3px 10px', borderRadius: 14, fontSize: 11.5, cursor: 'pointer',
+                      border: gpxSport === s ? '1px solid #7c3aed' : '1px solid #e5e7eb',
+                      background: gpxSport === s ? '#7c3aed' : '#f9fafb',
+                      color: gpxSport === s ? '#fff' : '#4b5563',
+                      fontWeight: gpxSport === s ? 700 : 500,
+                    }}
+                  >
+                    {t(`sport.${s}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <button
-                disabled={gpxImport === 'importing'}
+                disabled={gpxImport === 'importing' || gpxSport === null}
+                title={gpxSport === null ? t('map.dropSportRequired') : undefined}
                 onClick={async () => {
+                  if (!gpxSport) return;
                   const tok = getToken();
                   if (!tok) {
                     router.push('/?redirect=/map');
@@ -655,7 +703,7 @@ export default function MapPage() {
                   const blob = new Blob([gpxStr], { type: 'application/gpx+xml' });
                   const form = new FormData();
                   form.append('file', blob, `${gpxPreview.name}.gpx`);
-                  form.append('sport', 'mtb');
+                  form.append('sport', gpxSport);
                   form.append('contribute_heatmap', 'true');
                   // ODbL consent: importing IS the consent act — send the standard
                   // wording so the backend records the audit row and actually
@@ -682,8 +730,8 @@ export default function MapPage() {
                   flex: 1, padding: '7px 0', borderRadius: 8, border: 'none',
                   background: gpxImport === 'done' ? '#16a34a' : gpxImport === 'error' ? '#dc2626' : '#7c3aed',
                   color: '#fff', fontWeight: 600, fontSize: 12,
-                  cursor: gpxImport === 'importing' ? 'wait' : 'pointer',
-                  opacity: gpxImport === 'importing' ? 0.7 : 1,
+                  cursor: gpxImport === 'importing' ? 'wait' : gpxSport === null ? 'not-allowed' : 'pointer',
+                  opacity: gpxImport === 'importing' ? 0.7 : gpxSport === null ? 0.45 : 1,
                 }}
               >
                 {gpxImport === 'importing' ? t('map.importing')
@@ -691,11 +739,40 @@ export default function MapPage() {
                   : t('map.import')}
               </button>
             </div>
+            {gpxSport === null && (
+              <p data-testid="gpx-drop-sport-hint" style={{ color: '#b45309', fontSize: 11.5, margin: '6px 0 0', textAlign: 'center' }}>
+                {t('map.dropSportRequired')}
+              </p>
+            )}
             {gpxImport === 'error' && (
               <p style={{ color: '#dc2626', fontSize: 11.5, margin: '8px 0 0', textAlign: 'center' }}>
                 {t('map.importError')}
               </p>
             )}
+          </div>
+        )}
+
+        {/* Ignored-files note for the drop-on-map (only one .gpx is previewed) */}
+        {gpxDropNote && (
+          <div
+            data-testid="gpx-drop-ignored"
+            role="status"
+            style={{
+              position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+              zIndex: 51, background: '#fffbeb', color: '#92400e', border: '1px solid #fcd34d',
+              borderRadius: 8, padding: '6px 10px', fontSize: 12, maxWidth: 'calc(100vw - 32px)',
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}
+          >
+            <span>{gpxDropNote}</span>
+            <button
+              type="button"
+              onClick={() => setGpxDropNote(null)}
+              aria-label={t('common.close')}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', fontSize: 14, padding: 0 }}
+            >
+              ×
+            </button>
           </div>
         )}
 

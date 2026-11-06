@@ -9,6 +9,8 @@ export interface UserMenuState {
   showUserMenu: boolean;
   setShowUserMenu: React.Dispatch<React.SetStateAction<boolean>>;
   userEmail: string | null;
+  /** is_admin from GET /auth/me — gates the toolbar's Admin entry. */
+  isAdmin: boolean;
   stravaName: string | null;
   lastSyncedAt: string | null;
   stravaSyncing: boolean;
@@ -22,6 +24,7 @@ export function useUserMenu(reloadActivitiesRef: React.RefObject<(() => void) | 
   const router = useRouter();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [stravaName, setStravaName] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [stravaSyncing, setStravaSyncing] = useState(false);
@@ -33,10 +36,13 @@ export function useUserMenu(reloadActivitiesRef: React.RefObject<(() => void) | 
     if (!token) return;
     (async () => {
       try {
-        const resp = await fetch(`${API_URL}/me`, { credentials: 'include' });
+        // /auth/me is the real endpoint (a bare /me never existed → the email
+        // and admin flag silently stayed empty).
+        const resp = await fetch(`${API_URL}/auth/me`, { credentials: 'include' });
         if (!resp.ok) return;
         const data = await resp.json();
         setUserEmail(data.email ?? null);
+        setIsAdmin(data.is_admin === true);
         setStravaName(data.strava_name ?? localStorage.getItem('strava_name'));
         setLastSyncedAt(data.last_synced_at ?? null);
       } catch { /* ignore */ }
@@ -80,7 +86,7 @@ export function useUserMenu(reloadActivitiesRef: React.RefObject<(() => void) | 
 
   return {
     showUserMenu, setShowUserMenu,
-    userEmail, stravaName, lastSyncedAt,
+    userEmail, isAdmin, stravaName, lastSyncedAt,
     stravaSyncing, stravaSyncMsg,
     handleStravaConnect,
     handleStravaSync,

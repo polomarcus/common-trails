@@ -31,8 +31,16 @@ test.describe('ContributionDropzone — no consent gate, uploads enabled', () =>
     // The passive ODbL note stays (transparency).
     await expect(page.getByTestId('hero-consent-note')).toBeVisible();
 
-    // Uploads are enabled immediately — no tick required.
+    // No consent tick required: the archive picker is enabled immediately.
     await expect(page.getByTestId('archive-block').locator('input[type="file"]')).toBeEnabled();
-    await expect(page.getByTestId('files-block').locator('input[type="file"]')).toBeEnabled();
+    // Loose GPX/FIT need an explicit SPORT (no silent "VTT" default): that
+    // picker is disabled with a hint until a sport chip is chosen — the only
+    // required choice, and it is not a consent gate.
+    const filesInput = page.getByTestId('files-block').locator('input[type="file"]');
+    await expect(filesInput).toBeDisabled();
+    await expect(page.getByTestId('files-sport-hint')).toBeVisible();
+    await page.getByTestId('sport-chip-road').click();
+    await expect(filesInput).toBeEnabled();
+    await expect(page.getByTestId('files-sport-hint')).toHaveCount(0);
   });
 });

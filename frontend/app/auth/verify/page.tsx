@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useI18n } from '@/lib/i18n';
 import { verifyMagicLink } from '@/lib/email-auth';
 import { setAuthState } from '@/lib/auth';
+import { postLoginTarget } from '@/lib/safe-redirect';
 
 /**
  * Magic-link landing page. Reads ?token from the URL (client-side, so it is
@@ -25,7 +26,8 @@ export default function VerifyMagicLinkPage() {
     if (ranRef.current) return;
     ranRef.current = true;
 
-    const token = new URLSearchParams(window.location.search).get('token');
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
     if (!token) {
       setState('missing');
       return;
@@ -35,7 +37,9 @@ export default function VerifyMagicLinkPage() {
       if (res.ok && res.userId) {
         setAuthState(res.userId);
         setState('success');
-        router.push(res.redirect || '/strava');
+        // Honour ?redirect= carried by the emailed link (sanitized: same-origin
+        // relative paths only), else the server default (/strava).
+        router.push(postLoginTarget(params.get('redirect'), res.redirect));
       } else {
         setState('error');
       }

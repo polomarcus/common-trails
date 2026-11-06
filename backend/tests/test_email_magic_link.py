@@ -97,8 +97,10 @@ class TestRequest:
         assert r_existing.json() == r_new.json()
 
     def test_request_rate_limited_per_email(self, client, capture_send):
-        """4th request for the same email in the window returns generic 200 but
-        does NOT send (the DB rate-limiter blocks it)."""
+        """4th request for the same email in the window → HTTP 429 and NO send
+        (the DB rate-limiter blocks it). It used to be a silent generic 200:
+        the user waited for a link that never came. A 429 leaks nothing —
+        accounts are auto-created, so every address behaves the same."""
         email = _unique_email()
         ip = _unique_ip()  # fixed IP + fixed email → deterministic limit
         for _ in range(3):
@@ -107,9 +109,54 @@ class TestRequest:
             assert r.status_code == 200
         r4 = client.post("/auth/email/request", json={"email": email},
                          headers={"X-Forwarded-For": ip})
-        assert r4.status_code == 200  # still generic — no enumeration signal
-        assert r4.json()["ok"] is True
+        assert r4.status_code == 429
+        assert r4.headers.get("Retry-After")
         assert capture_send.call_count == 3  # 4th was suppressed
+
+    def test_request_rate_limited_per_ip_any_email_429(self, client, capture_send):
+        """Same IP, different (even brand-new) emails → also 429 on the 4th:
+        the answer depends on the request rate, never on account existence."""
+        ip = _unique_ip()
+        for _ in range(3):
+            r = client.post("/auth/email/request", json={"email": _unique_email()},
+                            headers={"X-Forwarded-For": ip})
+            assert r.status_code == 200
+        r4 = client.post("/auth/email/request", json={"email": _unique_email()},
+                         headers={"X-Forwarded-For": ip})
+        assert r4.status_code == 429
+        assert capture_send.call_count == 3
+
+    def _sent_html(self, capture_send) -> str:
+        html = capture_send.call_args.kwargs.get("html")
+        return html if html is not None else capture_send.call_args.args[2]
+
+    def test_request_redirect_is_carried_into_the_link(self, client, capture_send):
+        resp = client.post(
+            "/auth/email/request",
+            json={"email": _unique_email(), "redirect": "/map"},
+            headers={"X-Forwarded-For": _unique_ip()},
+        )
+        assert resp.status_code == 200
+        html = self._sent_html(capture_send)
+        assert "/auth/verify?token=" in html
+        assert "&redirect=%2Fmap" in html
+        # The token is still extractable (the redirect is a separate param).
+        assert _extract_token(html)
+
+    @pytest.mark.parametrize("evil", [
+        "//evil.com", "https://evil.com", "javascript:alert(1)", "/\\evil.com",
+        "evil.com", "/map\nSet-Cookie:x",
+    ])
+    def test_request_unsafe_redirect_is_dropped(self, client, capture_send, evil):
+        resp = client.post(
+            "/auth/email/request",
+            json={"email": _unique_email(), "redirect": evil},
+            headers={"X-Forwarded-For": _unique_ip()},
+        )
+        assert resp.status_code == 200
+        html = self._sent_html(capture_send)
+        assert "redirect=" not in html
+        assert "evil" not in html
 
     def test_request_invalid_email_422(self, client, capture_send):
         resp = client.post("/auth/email/request", json={"email": "not-an-email"},

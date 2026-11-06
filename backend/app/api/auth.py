@@ -5,6 +5,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from urllib.parse import quote
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -120,6 +121,9 @@ class UserOut(BaseModel):
     user_id: str
     email: str
     username: str
+    # Lets the frontend show admin-only entries (the /map Admin menu item) to
+    # admins only. Not a security boundary — /admin endpoints enforce it.
+    is_admin: bool = False
 
 
 class AuthenticatedUser(BaseModel):
@@ -135,6 +139,9 @@ class MagicLinkRequest(BaseModel):
     email: EmailStr
     # Optional UI locale so the email is sent in the user's language.
     locale: str | None = None
+    # Optional post-login path (e.g. "/map"), carried into the emailed link.
+    # Sanitized by ``_safe_redirect`` — only same-origin relative paths.
+    redirect: str | None = Field(default=None, max_length=512)
 
 
 class MagicLinkRequestResponse(BaseModel):
@@ -193,6 +200,24 @@ def _create_token(user_id: str, email: str) -> str:
     expire = datetime.now(UTC) + timedelta(minutes=JWT_EXPIRE_MINUTES)
     payload = {"sub": user_id, "email": email, "exp": expire}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _safe_redirect(raw: str | None) -> str | None:
+    """Return ``raw`` if it is a same-origin RELATIVE path, else ``None``.
+
+    Open-redirect guard for the magic link's ``redirect`` param: it must start
+    with exactly one "/" — "//evil.com" (protocol-relative), any backslash
+    (browsers fold "\\" into "/"), schemes ("https:", "javascript:") and
+    control characters are rejected. Mirrors frontend/lib/safe-redirect.ts.
+    """
+    if not raw:
+        return None
+    v = raw.strip()
+    if not v.startswith("/") or v.startswith("//") or "\\" in v:
+        return None
+    if len(v) > 512 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in v):
+        return None
+    return v
 
 
 def _normalize_email(email: str) -> str:
@@ -422,12 +447,16 @@ async def request_magic_link(
     """Passwordless login step 1 — email a single-use magic link.
 
     Security posture:
-    * ALWAYS returns the same generic 200 body — never reveals whether an
-      account exists (no enumeration).
+    * Returns the same generic 200 body whether or not the account existed.
     * Rate-limited per IP (the slowapi decorator) AND per email + per IP in the
       DB (``_MAGIC_LINK_MAX_PER_WINDOW`` per ``_MAGIC_LINK_WINDOW_MIN`` min).
-      When over the limit we still return the generic 200 but send nothing.
+      Over the limit → HTTP 429, nothing sent. The 429 reveals nothing about
+      account existence: accounts are auto-created (find-or-create), so every
+      address behaves the same. (It used to be a silent 200 — the user waited
+      for a link that never came.)
     * find-or-create: a first-time email becomes a full account.
+    * ``redirect`` (sanitized by ``_safe_redirect``) is appended to the emailed
+      link so the user lands back on the page they came from (e.g. /map).
     """
     email = _normalize_email(body.email)
     ip = _get_real_ip(request)
@@ -447,8 +476,12 @@ async def request_magic_link(
         .count()
     )
     if recent >= _MAGIC_LINK_MAX_PER_WINDOW:
-        logger.info("Magic-link rate-limited (email/ip) — returning generic 200")
-        return generic
+        logger.info("Magic-link rate-limited (email/ip) — returning 429")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login link requests. Please try again in a few minutes.",
+            headers={"Retry-After": str(_MAGIC_LINK_WINDOW_MIN * 60)},
+        )
 
     # find-or-create the user by email. A magic-link account has no password.
     user = db.query(User).filter(User.email == email).first()
@@ -480,6 +513,9 @@ async def request_magic_link(
     # the generic 200 is returned regardless of the email backend's health.
     locale = (body.locale or "fr").lower()
     verify_url = f"{FRONTEND_URL}/auth/verify?token={token}"
+    safe_redirect = _safe_redirect(body.redirect)
+    if safe_redirect:
+        verify_url += f"&redirect={quote(safe_redirect, safe='')}"
     subject, html = render_magic_link_email(verify_url, locale=locale)
     send_email(email, subject, html)
 
@@ -561,6 +597,7 @@ async def me(
         user_id=current_user.user_id,
         email=current_user.email,
         username=current_user.username,
+        is_admin=current_user.is_admin,
     )
 
 

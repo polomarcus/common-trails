@@ -27,14 +27,15 @@
  * big-ZIP path (sending X% → finalizing → received ✓) and the simple
  * "Import de N fichier(s)…" line for GPX/FIT — shared area below the blocks.
  */
-import { useState, type CSSProperties, type DragEvent } from 'react';
+import { useEffect, useState, type CSSProperties, type DragEvent } from 'react';
+import Link from 'next/link';
 
 import { API_URL } from '@/lib/api-client';
 import { getToken } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { buildUploadSummary } from '@/lib/strava-upload-summary';
-import { chooseUploadPath } from '@/lib/upload-route';
-import { uploadArchive } from '@/lib/strava-archive-upload';
+import { partitionUpload } from '@/lib/upload-route';
+import { archiveErrorKey, checkArchiveSize, uploadArchive } from '@/lib/strava-archive-upload';
 import { buildFilesConsentFields, CONTRIBUTION_CONSENT_VERSION } from '@/lib/strava-archive-consent';
 import { describeUpload, phaseForStage, type UploadPhase } from '@/lib/upload-progress';
 
@@ -61,7 +62,11 @@ function describeApiError(detail: unknown, status: number): string {
 
 export default function ContributionDropzone() {
   const { t, locale } = useI18n();
-  const [sport, setSport] = useState('mtb');
+  // NO preselected sport for loose GPX/FIT (a silent "VTT" default mislabelled
+  // road rides in the common heatmap). The user must pick one before the files
+  // block uploads anything; archives don't need it (activities.csv / the
+  // server classifier decides).
+  const [sport, setSport] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<'archive' | 'files' | null>(null);
 
   // Archive (.zip → direct-to-storage) progress phase + byte fraction.
@@ -80,11 +85,33 @@ export default function ContributionDropzone() {
   // server-side on every upload (the backend community gate needs it), and a
   // passive ODbL note stays visible — but nothing blocks the picker.
   const canPick = !busy;
+  const canPickFiles = canPick && sport !== null;
+  const [ignoredMsg, setIgnoredMsg] = useState<string | null>(null);
+
+  // Leaving the page mid-upload silently kills a multi-GB archive transfer —
+  // warn while (and only while) an upload is in flight.
+  useEffect(() => {
+    if (!busy) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = t('strava.archive.leaveWarning');
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [busy, t]);
 
   const runArchiveUpload = async (file: File, token: string) => {
     setFilesMsg(null);
     setErrMsg(null);
     setFraction(0);
+    // Refuse a too-big export BEFORE uploading GBs the backend would 413.
+    const tooBig = checkArchiveSize(file);
+    if (tooBig) {
+      setErrMsg(t(archiveErrorKey(tooBig)));
+      setPhase('error');
+      return;
+    }
     setPhase('uploading');
     try {
       await uploadArchive({
@@ -92,7 +119,9 @@ export default function ContributionDropzone() {
         token,
         blob: file,
         payload: {
-          sport, // fallback only; a Strava archive's activities.csv is authoritative
+          // Fallback only (unchanged): a Strava archive's activities.csv / the
+          // server classifier is authoritative.
+          sport: sport ?? 'mtb',
           consent: true,
           consent_version: CONTRIBUTION_CONSENT_VERSION,
           consent_text: t('strava.archive.consentLabel'),
@@ -104,12 +133,13 @@ export default function ContributionDropzone() {
       });
       setPhase('done');
     } catch (err) {
-      setErrMsg(err instanceof Error ? err.message : t('strava.archive.failed'));
+      // Translated message — never the raw English server/XHR text.
+      setErrMsg(t(archiveErrorKey(err)));
       setPhase('error');
     }
   };
 
-  const runFilesUpload = async (files: File[]) => {
+  const runFilesUpload = async (files: File[], fileSport: string) => {
     setErrMsg(null);
     setFilesBusy(true);
     setFilesMsg(t('strava.importingFiles', { count: files.length }));
@@ -124,7 +154,7 @@ export default function ContributionDropzone() {
     for (let i = 0; i < files.length; i++) {
       const formData = new FormData();
       formData.append('file', files[i]);
-      formData.append('sport', sport);
+      formData.append('sport', fileSport);
       formData.append('contribute_heatmap', 'true');
       // Fire the PMTiles display rebuild ONCE per batch — on the last file only
       // — so a multi-file drop refreshes the community map a single time instead
@@ -169,10 +199,14 @@ export default function ContributionDropzone() {
     setErrMsg(null);
     const token = getToken();
     if (!token) { setErrMsg(t('strava.loginToImport')); return; }
-    const route = chooseUploadPath(fileList);
+    const { route, ignored } = partitionUpload(fileList);
+    setIgnoredMsg(ignored.length
+      ? t('strava.filesIgnored', { count: ignored.length, names: ignored.map((f) => f.name).join(', ') })
+      : null);
     if (route.kind === 'empty') return;
     if (route.kind === 'archive') await runArchiveUpload(route.file, token);
-    else await runFilesUpload(route.files);
+    else if (sport === null) setErrMsg(t('strava.pickSportFirst'));
+    else await runFilesUpload(route.files, sport);
   };
 
   // Reveal + scroll to the collapsed "get your Strava archive" how-to that
@@ -189,6 +223,7 @@ export default function ContributionDropzone() {
     setFraction(0);
     setFilesMsg(null);
     setErrMsg(null);
+    setIgnoredMsg(null);
   };
 
   const blockStyle = (kind: 'archive' | 'files'): CSSProperties => ({
@@ -240,6 +275,15 @@ export default function ContributionDropzone() {
         </div>
         <p data-testid="strava-gpx-msg" style={{ color: '#2ecc71', fontSize: 14, fontWeight: 700, margin: '0 0 8px' }}>
           {t('strava.archive.acceptedQueued')}
+        </p>
+        <p style={{ margin: '0 0 12px' }}>
+          <Link
+            href="/map"
+            data-testid="archive-see-map"
+            style={{ color: '#2ecc71', fontSize: 13, fontWeight: 700, textDecoration: 'underline' }}
+          >
+            {t('strava.archive.seeMap')}
+          </Link>
         </p>
         <button
           data-testid="hero-reset"
@@ -309,6 +353,9 @@ export default function ContributionDropzone() {
             />
             {t('strava.chooseArchive')}
           </label>
+          <p data-testid="archive-max-size" style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10.5, margin: 0 }}>
+            {t('strava.archive.maxSize')}
+          </p>
           <a
             role="button"
             tabIndex={0}
@@ -351,17 +398,31 @@ export default function ContributionDropzone() {
               </button>
             ))}
           </div>
-          <label style={pickButtonStyle}>
+          <label
+            data-testid="files-pick"
+            aria-disabled={!canPickFiles}
+            style={{
+              ...pickButtonStyle,
+              cursor: canPickFiles ? 'pointer' : 'not-allowed',
+              opacity: canPickFiles ? 1 : 0.45,
+            }}
+          >
             <input
               type="file"
               accept=".gpx,.fit"
               multiple
-              disabled={!canPick}
+              data-testid="files-input"
+              disabled={!canPickFiles}
               style={{ display: 'none' }}
               onChange={async (e) => { await dispatch(e.target.files); e.target.value = ''; }}
             />
             {t('strava.chooseFiles')}
           </label>
+          {sport === null && (
+            <p data-testid="files-sport-hint" style={{ color: '#fcd34d', fontSize: 11, margin: 0 }}>
+              {t('strava.pickSportFirst')}
+            </p>
+          )}
           <p style={{ color: 'rgba(255,255,255,0.25)', fontSize: 10, margin: 0 }}>
             {t('strava.compatible')}
           </p>
@@ -410,6 +471,12 @@ export default function ContributionDropzone() {
       {filesMsg && (
         <p data-testid="strava-gpx-msg" style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, margin: '10px 0 0', fontWeight: 500 }}>
           {filesMsg}
+        </p>
+      )}
+
+      {ignoredMsg && (
+        <p data-testid="upload-ignored-files" style={{ color: '#fcd34d', fontSize: 12, margin: '10px 0 0', fontWeight: 500 }}>
+          ⚠ {ignoredMsg}
         </p>
       )}
 

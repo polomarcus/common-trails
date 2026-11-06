@@ -27,7 +27,7 @@ function MapLegend({ layers, waymarked }: MapLegendProps) {
 
   return (
     <div style={{
-      position: 'absolute', bottom: 48, left: 8, zIndex: 16,
+      position: 'absolute', bottom: 'calc(var(--beta-banner-h, 0px) + 12px)', left: 8, zIndex: 16,
       background: 'rgba(255,255,255,0.92)', borderRadius: 8,
       padding: '6px 10px', fontSize: 11, color: '#444',
       display: 'flex', flexDirection: 'column', gap: 4,

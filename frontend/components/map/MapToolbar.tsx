@@ -56,6 +56,8 @@ export interface MapToolbarProps {
   setShowImportModal: (v: boolean) => void;
   setShowExportModal: (v: boolean) => void;
   activitiesCount: number;
+  /** From GET /auth/me (fetched post-mount by useUserMenu). Gates the Admin entry. */
+  isAdmin?: boolean;
 
   // Map
   mapInstance: unknown;
@@ -82,6 +84,7 @@ export default function MapToolbar(props: MapToolbarProps) {
     handleLogout, setShowImportModal,
     setShowExportModal,
     activitiesCount, mapInstance, dateLocale,
+    isAdmin = false,
   } = props;
 
   // Read auth AFTER mount, not during render. Calling getToken() (reads
@@ -92,13 +95,17 @@ export default function MapToolbar(props: MapToolbarProps) {
   // updates it post-hydration.
   const [authToken, setAuthToken] = useState<string | null>(null);
   useEffect(() => { setAuthToken(getToken()); }, []);
+  const accountLabel = !authToken
+    ? t('map.account.createOrLogin')
+    : stravaName ? t('map.account.accountOf', { name: stravaName.split(' ')[0] }) : userEmail || t('map.menuButton');
 
   return (
     <nav
       role="navigation"
       aria-label={t('nav.ariaLabel')}
+      className="map-toolbar"
       style={{
-        height: 44,
+        minHeight: 44,
         padding: '0 16px',
         background: '#fff',
         borderBottom: '1px solid #e5e5e5',
@@ -108,10 +115,27 @@ export default function MapToolbar(props: MapToolbarProps) {
         zIndex: 30,
       }}
     >
-      <Link href="/" style={{ fontWeight: 700, color: '#2d6a4f', fontSize: 14, textDecoration: 'none', flexShrink: 0, letterSpacing: '-0.01em' }}>
+      {/* Phone widths (≤640px): the one-line toolbar overflowed and cut off
+          "Explorer la heatmap". Drop the redundant bits (separators, the "Carte"
+          link — we ARE on the map — the spacer, the account label: the 👤 button
+          still opens the account menu) and let the search wrap onto a 2nd row. */}
+      <style>{`
+        @media (max-width: 640px) {
+          .map-toolbar { flex-wrap: wrap; padding: 6px 10px !important; gap: 6px 8px !important; }
+          .map-toolbar .mt-hide-mobile { display: none !important; }
+          .map-toolbar .mt-brand { font-size: 12px !important; }
+          .map-toolbar .mt-search { display: block !important; flex: 1 1 160px; min-width: 0; }
+          .map-toolbar .mt-account-label { display: none; }
+          .map-toolbar .mt-label-long { display: none; }
+        }
+        @media (min-width: 641px) {
+          .map-toolbar .mt-label-short { display: none; }
+        }
+      `}</style>
+      <Link href="/" className="mt-brand" style={{ fontWeight: 700, color: '#2d6a4f', fontSize: 14, textDecoration: 'none', flexShrink: 0, letterSpacing: '-0.01em' }}>
         CHEMINS COMMUNS
       </Link>
-      <span style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
+      <span className="mt-hide-mobile" style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
 
       {/* ── Page nav links (same top-level set as TopNav: Carte) ── */}
       {([
@@ -120,6 +144,7 @@ export default function MapToolbar(props: MapToolbarProps) {
         <Link
           key={href}
           href={href}
+          className="mt-hide-mobile"
           style={{
             color: href === '/map' ? '#333' : '#777',
             fontWeight: href === '/map' ? 600 : 400,
@@ -131,7 +156,7 @@ export default function MapToolbar(props: MapToolbarProps) {
         </Link>
       ))}
 
-      <span style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
+      <span className="mt-hide-mobile" style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
 
       {/* ── Couches dropdown — single entry that folds in Fond de carte + Exporter ── */}
       <div ref={layersMenuRef} style={{ position: 'relative' }}>
@@ -452,7 +477,7 @@ export default function MapToolbar(props: MapToolbarProps) {
         )}
       </div>
 
-      <span style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
+      <span className="mt-hide-mobile" style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
 
       {/* Explore mode toggle — read-only heatmap inspection */}
       <button
@@ -477,20 +502,29 @@ export default function MapToolbar(props: MapToolbarProps) {
           cursor: 'pointer',
           fontSize: 12,
           fontWeight: 600,
+          whiteSpace: 'nowrap',
+          flexShrink: 0,
         }}
       >
-        {exploreMode ? t('map.toolbar.exploreModeOn') : t('map.toolbar.exploreModeOff')}
+        <span className="mt-label-long">
+          {exploreMode ? t('map.toolbar.exploreModeOn') : t('map.toolbar.exploreModeOff')}
+        </span>
+        <span className="mt-label-short">
+          {exploreMode ? t('map.toolbar.exploreModeOnShort') : t('map.toolbar.exploreModeOffShort')}
+        </span>
       </button>
 
       {/* ── Place search ── */}
-      <PlaceSearch
-        onSelect={(lon, lat) => {
-          if (mapInstance) (mapInstance as any).flyTo({ center: [lon, lat], zoom: 14, speed: 1.2 });
-        }}
-        biasCenter={mapInstance ? [(mapInstance as any).getCenter().lng, (mapInstance as any).getCenter().lat] : undefined}
-      />
+      <div className="mt-search" style={{ display: 'contents' }}>
+        <PlaceSearch
+          onSelect={(lon, lat) => {
+            if (mapInstance) (mapInstance as any).flyTo({ center: [lon, lat], zoom: 14, speed: 1.2 });
+          }}
+          biasCenter={mapInstance ? [(mapInstance as any).getCenter().lng, (mapInstance as any).getCenter().lat] : undefined}
+        />
+      </div>
 
-      <div style={{ flex: 1 }} />
+      <div className="mt-hide-mobile" style={{ flex: 1 }} />
 
       {/* Language toggle */}
       <LanguageToggle />
@@ -506,6 +540,8 @@ export default function MapToolbar(props: MapToolbarProps) {
             }
           }}
           data-testid="map-import-btn"
+          aria-label={accountLabel}
+          title={accountLabel}
           style={{
             padding: '3px 10px',
             background: showUserMenu ? '#1a4731' : '#2d6a4f',
@@ -520,7 +556,10 @@ export default function MapToolbar(props: MapToolbarProps) {
             gap: 5,
           }}
         >
-          👤 {!authToken ? t('map.account.createOrLogin') : stravaName ? t('map.account.accountOf', { name: stravaName.split(' ')[0] }) : userEmail || t('map.menuButton')}
+          <span aria-hidden="true">👤</span>
+          <span className="mt-account-label" style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {accountLabel}
+          </span>
         </button>
 
         {showUserMenu && authToken && (
@@ -551,7 +590,7 @@ export default function MapToolbar(props: MapToolbarProps) {
                 <div style={{ padding: '6px 10px 10px', borderBottom: '1px solid #f0f0f0', marginBottom: 4 }}>
                   <div style={{ fontSize: 11, color: '#aaa', marginBottom: 2 }}>{t('map.account.loggedAs')}</div>
                   <div style={{ fontWeight: 700, color: '#1a4731' }}>{stravaName || userEmail}</div>
-                  {userEmail && <div style={{ fontSize: 11, color: '#999', marginTop: 1 }}>{userEmail}</div>}
+                  {userEmail && stravaName && <div style={{ fontSize: 11, color: '#999', marginTop: 1 }}>{userEmail}</div>}
                 </div>
               )}
 
@@ -618,9 +657,12 @@ export default function MapToolbar(props: MapToolbarProps) {
               {/* Divider */}
               <div style={{ height: 1, background: '#f0f0f0', margin: '4px 0' }} />
 
-              {/* Admin */}
+              {/* Admin — only for an admin account (is_admin from /auth/me,
+                  fetched post-mount); every other rider used to see it. */}
+              {isAdmin && (
               <a
                 href="/admin"
+                data-testid="map-menu-admin"
                 onClick={() => setShowUserMenu(false)}
                 style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', background: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 13, textAlign: 'left', width: '100%', color: '#374151', textDecoration: 'none' }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = '#f3f4f6')}
@@ -632,6 +674,7 @@ export default function MapToolbar(props: MapToolbarProps) {
                   <div style={{ fontSize: 11, color: '#888' }}>{t('map.account.adminDesc')}</div>
                 </div>
               </a>
+              )}
 
               {/* Logout */}
               <button

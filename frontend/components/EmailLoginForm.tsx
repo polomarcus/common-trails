@@ -16,7 +16,7 @@ import { requestMagicLink } from '@/lib/email-auth';
 export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' | 'light' }) {
   const { t, locale } = useI18n();
   const [email, setEmail] = useState('');
-  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error' | 'rateLimited'>('idle');
 
   const dark = variant === 'dark';
   const textColor = dark ? '#fff' : '#1a4731';
@@ -26,8 +26,11 @@ export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' 
     e.preventDefault();
     if (!email.trim()) return;
     setState('sending');
-    const res = await requestMagicLink(email.trim(), locale);
-    setState(res.ok ? 'sent' : 'error');
+    // Carry ?redirect= (e.g. /?redirect=/map from the map's login buttons) into
+    // the emailed link. Read in the handler, never at render (static export).
+    const redirect = new URLSearchParams(window.location.search).get('redirect');
+    const res = await requestMagicLink(email.trim(), locale, redirect);
+    setState(res.ok ? 'sent' : res.rateLimited ? 'rateLimited' : 'error');
   };
 
   if (state === 'sent') {
@@ -37,7 +40,7 @@ export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' 
           {t('emailAuth.sentTitle')}
         </p>
         <p style={{ color: subColor, fontSize: 13, lineHeight: 1.5, margin: '0 0 12px' }}>
-          {t('emailAuth.sentBody')}
+          {t('emailAuth.sentBody', { email: email.trim() })}
         </p>
         <button
           type="button"
@@ -71,9 +74,9 @@ export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' 
           color: textColor,
         }}
       />
-      {state === 'error' && (
+      {(state === 'error' || state === 'rateLimited') && (
         <p data-testid="email-login-error" style={{ color: '#ff6b6b', fontSize: 12, margin: 0 }}>
-          {t('emailAuth.error')}
+          {state === 'rateLimited' ? t('emailAuth.rateLimited') : t('emailAuth.error')}
         </p>
       )}
       <button

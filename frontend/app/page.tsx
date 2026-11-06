@@ -451,9 +451,11 @@ export default function HomePage() {
             position: relative !important;
             bottom: auto !important;
             left: auto !important;
-            padding: 0 20px 12px !important;
+            /* No negative margin: pulling the stack up over the map put the
+               sport chips on top of the OpenStreetMap attribution. */
+            padding: 16px 20px 12px !important;
             max-width: 100% !important;
-            margin-top: -60px;
+            margin-top: 0;
             z-index: 8;
           }
           .hero-content h1 { font-size: 26px !important; margin-bottom: 6px !important; }

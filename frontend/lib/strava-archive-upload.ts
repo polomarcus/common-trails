@@ -42,7 +42,56 @@ export interface ArchiveCompleteResult {
   enqueue: string;
 }
 
-export class ArchiveUploadError extends Error {}
+/**
+ * Max archive size accepted by the backend — mirrors ``MAX_ARCHIVE_BYTES`` set
+ * on the API service + importer job in ``scripts/deploy-prod.sh`` (2 GiB,
+ * 2147483648). Keep the two in sync: the browser pre-checks against this so a
+ * too-big export is refused BEFORE a multi-GB upload, not after it.
+ */
+export const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** Machine-readable failure class, mapped to a translated message in the UI
+ *  (`archiveErrorKey`) — never show the raw English server/XHR text. */
+export type ArchiveErrorCode =
+  | 'too_large'
+  | 'init_failed'
+  | 'upload_failed'
+  | 'network'
+  | 'complete_failed';
+
+export class ArchiveUploadError extends Error {
+  code: ArchiveErrorCode;
+  constructor(message: string, code: ArchiveErrorCode = 'upload_failed') {
+    super(message);
+    this.code = code;
+  }
+}
+
+/** True when the backend's detail is its "archive too large" reason
+ *  (`archive_intake.too_large_message`) or the status is 413. */
+function isTooLarge(status: number, detail: unknown): boolean {
+  return status === 413 || (typeof detail === 'string' && /archive too large/i.test(detail));
+}
+
+/** Pre-upload guard: returns an error for a file over MAX_ARCHIVE_BYTES, else null. */
+export function checkArchiveSize(file: { size: number }): ArchiveUploadError | null {
+  return file.size > MAX_ARCHIVE_BYTES
+    ? new ArchiveUploadError(`archive too large (${file.size} bytes)`, 'too_large')
+    : null;
+}
+
+/** Translation key for an upload failure (FR/EN in lib/translations). */
+export function archiveErrorKey(err: unknown): string {
+  const code = err instanceof ArchiveUploadError ? err.code : null;
+  switch (code) {
+    case 'too_large': return 'strava.archive.err.tooLarge';
+    case 'network': return 'strava.archive.err.network';
+    case 'init_failed':
+    case 'upload_failed':
+    case 'complete_failed': return 'strava.archive.err.server';
+    default: return 'strava.archive.failed';
+  }
+}
 
 interface AuthCtx {
   apiUrl: string;
@@ -81,7 +130,12 @@ export async function initArchiveUpload(
     body: JSON.stringify(payload),
   });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new ArchiveUploadError(data.detail || `init failed (${resp.status})`);
+  if (!resp.ok) {
+    throw new ArchiveUploadError(
+      data.detail || `init failed (${resp.status})`,
+      isTooLarge(resp.status, data.detail) ? 'too_large' : 'init_failed',
+    );
+  }
   return data as ArchiveInitResult;
 }
 
@@ -115,8 +169,11 @@ export const putArchive: PutFn = (init, blob, { apiUrl, token, onProgress }) =>
     xhr.onload = () =>
       xhr.status >= 200 && xhr.status < 300
         ? resolve()
-        : reject(new ArchiveUploadError(`upload failed (${xhr.status})`));
-    xhr.onerror = () => reject(new ArchiveUploadError('upload network error'));
+        : reject(new ArchiveUploadError(
+          `upload failed (${xhr.status})`,
+          xhr.status === 413 ? 'too_large' : 'upload_failed',
+        ));
+    xhr.onerror = () => reject(new ArchiveUploadError('upload network error', 'network'));
     xhr.send(blob);
   });
 
@@ -131,7 +188,12 @@ export async function completeArchiveUpload(
     body: JSON.stringify({ archive_id: init.archive_id, key: init.bucket_key }),
   });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new ArchiveUploadError(data.detail || `complete failed (${resp.status})`);
+  if (!resp.ok) {
+    throw new ArchiveUploadError(
+      data.detail || `complete failed (${resp.status})`,
+      isTooLarge(resp.status, data.detail) ? 'too_large' : 'complete_failed',
+    );
+  }
   return data as ArchiveCompleteResult;
 }
 
@@ -152,6 +214,8 @@ export interface UploadArchiveArgs extends AuthCtx {
 export async function uploadArchive(args: UploadArchiveArgs): Promise<ArchiveCompleteResult> {
   const { apiUrl, token, blob, payload, onProgress, onStage, put = putArchive } = args;
   const ctx: AuthCtx = { apiUrl, token };
+  const tooBig = checkArchiveSize(blob);
+  if (tooBig) throw tooBig;
   onStage?.('init');
   const init = await initArchiveUpload(ctx, payload);
   onStage?.('uploading');
