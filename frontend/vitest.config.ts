@@ -28,6 +28,8 @@ export default defineConfig({
       'lib/__tests__/env-url.test.ts',
       'lib/__tests__/cdn-pointer.test.ts',
       'lib/__tests__/init-map-layers-resilience.test.ts',
+      'lib/__tests__/init-map-layers-my-heatmap.test.ts',
+      'lib/__tests__/map-toolbar-my-heatmap.test.tsx',
     ],
     environment: 'node',
     globals: false,

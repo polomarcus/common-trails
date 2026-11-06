@@ -273,7 +273,7 @@ describe('Map surface — every routed string exists in both locales', () => {
     // the visible offenders called out on the toolbar
     'map.layers', 'map.menuButton', 'placeSearch.placeholder',
     // toolbar
-    'map.toolbar.heatmapLayer', 'map.offroadCombined', 'map.toolbar.timeAll',
+    'map.toolbar.heatmapLayer', 'map.toolbar.myHeatmap', 'map.offroadCombined', 'map.toolbar.timeAll',
     'map.toolbar.moreLayers', 'map.toolbar.cellCoverage', 'map.toolbar.hillshade',
     'map.toolbar.stravaPhotos', 'map.toolbar.waymarkedHeader', 'map.toolbar.basemap',
     'map.toolbar.exportBtn', 'map.toolbar.exportTitle',
@@ -298,7 +298,7 @@ describe('Map surface — every routed string exists in both locales', () => {
     'map.passes', 'map.directionOfTravel', 'map.traceFromHere', 'map.sportFilter.all',
     'map.sportFilter.running', 'map.comparison', 'map.openOnPanoramax', 'map.linkCopied',
     // panels
-    'map.legend.popularity', 'map.legend.offroad',
+    'map.legend.popularity', 'map.legend.myActivities',
     'map.activity.distance', 'map.activity.viewDetails', 'map.photos.stripLabel', 'map.photos.stravaPhoto',
   ];
 
@@ -323,7 +323,8 @@ describe('Map component sources — no hardcoded FR copy leaked back into the JS
     ['Fond de carte', 'map.toolbar.basemap'],
     ['Plus de calques', 'map.toolbar.moreLayers'],
     ['Sentiers balisés', 'map.toolbar.waymarkedHeader'],
-    ['Heatmap communautaire', 'map.toolbar.heatmapLayer'],
+    ['Heatmap commune', 'map.toolbar.heatmapLayer'],
+    ['Ma heatmap', 'map.toolbar.myHeatmap'],
     ['🔍 Explorer la heatmap', 'map.toolbar.exploreModeOff'],
     ['⬇️ Exporter', 'map.toolbar.exportBtn'],
     ['Couverture cellules', 'map.toolbar.cellCoverage'],

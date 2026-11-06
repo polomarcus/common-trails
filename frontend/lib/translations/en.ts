@@ -889,7 +889,6 @@ const en: Translations = {
   'map.layers': 'Layers',
   'map.account.loggedAs': 'Logged in as',
   'map.account.viewStats': 'View my stats',
-  'map.account.myTraces': 'My traces',
   'map.account.importGarmin': 'Import from Garmin',
   'map.account.importKomoot': 'Import from Komoot',
   'map.account.komootDesc': 'Export your GPX → import here',
@@ -980,7 +979,8 @@ const en: Translations = {
 
   // ── MAP i18n consolidation (fix/map-i18n-consolidation) ──────────────────────
   // Toolbar
-  'map.toolbar.heatmapLayer': '🔥 Community heatmap',
+  'map.toolbar.heatmapLayer': 'Community heatmap',
+  'map.toolbar.myHeatmap': 'My heatmap',
   'map.offroadCombined': 'Off-road (MTB+Gravel)',
   'map.toolbar.timeAll': 'All',
   'map.toolbar.time1y': '1 yr',
@@ -1051,7 +1051,7 @@ const en: Translations = {
   'map.linkCopied': 'Link copied!',
   // Legend
   'map.legend.popularity': 'Popularity',
-  'map.legend.offroad': 'Off-road (MTB + Gravel)',
+  'map.legend.myActivities': 'My rides',
   // Selected activity card
   'map.activity.distance': 'Distance',
   'map.activity.elevGain': 'Elev.',

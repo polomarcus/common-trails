@@ -7,6 +7,16 @@ export const SPORT_COLORS: Record<string, string> = {
   running: '#dc2626',
 };
 
+/**
+ * "Ma heatmap" — the signed-in rider's OWN traces on /map, drawn in ONE colour
+ * (not per sport) so they read at a glance against the community heat ramp
+ * (plum → pink → orange, HEAT_RAMP_STOPS). Cyan is the hue farthest from that
+ * ramp, so "chemins que j'ai roulés" vs "chemins roulés par les autres" stays
+ * legible when both layers are superposed (Crouzet beta request). Sport colours
+ * (SPORT_COLORS) remain for lists, cards and the selected-activity highlight.
+ */
+export const MY_TRACES_COLOR = '#06b6d4';
+
 /** Canonical sport → emoji icon mapping. */
 export const SPORT_ICONS: Record<string, string> = {
   road: '🚴',
