@@ -43,7 +43,7 @@ const ENV_INDEPENDENT_LAYERS = [
 
 test.describe('/map layer setup @ fractional devicePixelRatio', () => {
   test('builds every env-independent layer and registers the arrow sprite', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto(`${FRONTEND_URL}/map?lat=43.612&lon=3.875&zoom=13`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => !!(window as unknown as Record<string, unknown>).__mapInstance, { timeout: 30000 });
@@ -67,7 +67,7 @@ test.describe('/map layer setup @ fractional devicePixelRatio', () => {
   });
 
   test('the heatmap toggle stays responsive (layersReady was reached)', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto(`${FRONTEND_URL}/map?lat=43.612&lon=3.875&zoom=13`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => !!(window as unknown as Record<string, unknown>).__mapInstance, { timeout: 30000 });

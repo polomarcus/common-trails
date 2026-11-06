@@ -1054,6 +1054,7 @@ const en: Translations = {
   'map.dropIgnored': '{count} file(s) ignored: only one .gpx file can be dropped on the map.',
   'map.empty.title': 'Import your traces to see your heatmap',
   'map.empty.cta': 'Import my traces',
+  'map.empty.processing': 'Processing — your rides will show up here, and an email will let you know.',
   'map.empty.dismiss': 'Close',
   'map.activitiesCapped': '{count} most recent rides shown',
   'map.addAnnotation': 'Add annotation',

@@ -113,18 +113,31 @@ class TestRequest:
         assert r4.headers.get("Retry-After")
         assert capture_send.call_count == 3  # 4th was suppressed
 
-    def test_request_rate_limited_per_ip_any_email_429(self, client, capture_send):
-        """Same IP, different (even brand-new) emails → also 429 on the 4th:
-        the answer depends on the request rate, never on account existence."""
+    def test_shared_ip_distinct_emails_are_not_locked_out(self, client, capture_send):
+        """A club / campus NAT shares one IP: 4 riders with distinct emails
+        must ALL get their link (the old per-IP cap of 3 locked out the 4th)."""
         ip = _unique_ip()
-        for _ in range(3):
+        for _ in range(4):
             r = client.post("/auth/email/request", json={"email": _unique_email()},
                             headers={"X-Forwarded-For": ip})
             assert r.status_code == 200
-        r4 = client.post("/auth/email/request", json={"email": _unique_email()},
-                         headers={"X-Forwarded-For": ip})
-        assert r4.status_code == 429
-        assert capture_send.call_count == 3
+        assert capture_send.call_count == 4
+
+    def test_request_rate_limited_per_ip_after_20(self, client, capture_send):
+        """Same IP, 20 distinct emails OK; the 21st → 429. The answer depends on
+        the request rate, never on account existence."""
+        from app.api.auth import _MAGIC_LINK_MAX_PER_IP
+
+        assert _MAGIC_LINK_MAX_PER_IP == 20
+        ip = _unique_ip()
+        for _ in range(20):
+            r = client.post("/auth/email/request", json={"email": _unique_email()},
+                            headers={"X-Forwarded-For": ip})
+            assert r.status_code == 200
+        r21 = client.post("/auth/email/request", json={"email": _unique_email()},
+                          headers={"X-Forwarded-For": ip})
+        assert r21.status_code == 429
+        assert capture_send.call_count == 20
 
     def _sent_html(self, capture_send) -> str:
         html = capture_send.call_args.kwargs.get("html")

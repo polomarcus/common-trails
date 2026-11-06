@@ -22,6 +22,7 @@ vi.mock('next/link', () => ({
 
 import MapActivitiesNotice, { MAP_ACTIVITIES_LIMIT } from '@/components/map/MapActivitiesNotice';
 import { I18nProvider } from '@/lib/i18n';
+import { markArchivePending, ARCHIVE_PENDING_WINDOW_MS } from '@/lib/archive-pending';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -33,6 +34,7 @@ describe('MapActivitiesNotice', () => {
 
   beforeEach(() => {
     auth.token = null;
+    localStorage.clear();
     container = document.createElement('div');
     document.body.appendChild(container);
   });
@@ -84,6 +86,38 @@ describe('MapActivitiesNotice', () => {
     await act(async () => { root!.render(el(12)); });
     expect(container.querySelector('[data-testid="map-empty-state"]')).toBeNull();
     expect(container.querySelector('[data-testid="map-activities-capped"]')).toBeNull();
+  });
+
+  it('archive accepted < 2 h ago: "processing" variant instead of the import CTA', async () => {
+    markArchivePending(Date.now() - 10 * 60 * 1000);
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(el(0)); });
+    expect(container.querySelector('[data-testid="map-empty-state-processing"]')!.textContent)
+      .toContain('Traitement en cours — vos sorties apparaîtront ici, un email vous préviendra');
+    expect(container.querySelector('[data-testid="map-empty-state-cta"]')).toBeNull();
+    expect(container.textContent).not.toContain('Importez vos traces');
+  });
+
+  it('marker older than 2 h: back to the import CTA', async () => {
+    markArchivePending(Date.now() - ARCHIVE_PENDING_WINDOW_MS - 1000);
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(el(0)); });
+    expect(container.querySelector('[data-testid="map-empty-state-processing"]')).toBeNull();
+    expect(container.querySelector('[data-testid="map-empty-state-cta"]')).not.toBeNull();
+  });
+
+  it('storage throwing (private mode) → plain import CTA, no crash', async () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied'); });
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(el(0)); });
+    expect(container.querySelector('[data-testid="map-empty-state-cta"]')).not.toBeNull();
+    spy.mockRestore();
+  });
+
+  it('static render with a fresh marker still renders nothing (marker read post-mount only)', () => {
+    markArchivePending();
+    auth.token = 'cookie-auth';
+    expect(renderToString(el(0))).not.toContain('map-empty-state');
   });
 
   it(`exactly ${MAP_ACTIVITIES_LIMIT} activities → discreet "most recent shown" note`, async () => {

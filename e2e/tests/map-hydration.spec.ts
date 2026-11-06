@@ -20,7 +20,7 @@ test('/map hydrates cleanly for a logged-in visitor (no React #418)', async ({ p
   // The trigger: a stored user_id makes the app render the logged-in account UI.
   await page.addInitScript(() => {
     localStorage.setItem('user_id', 'e2e-hydration');
-    localStorage.setItem('cc_beta_dismissed', '1');
+    localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1');
   });
   await page.goto('/map?lat=43.62&lon=3.877&zoom=12', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);

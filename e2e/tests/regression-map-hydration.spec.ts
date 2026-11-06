@@ -27,7 +27,7 @@ test.describe('regression: /map hydration', () => {
     // the post-hydration state and React #418 fires synchronously.
     await context.addInitScript(() => {
       try {
-        localStorage.setItem('cc_beta_dismissed', '1');
+        localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1');
         localStorage.setItem('ct_preferred_sport', 'gravel'); // not the SSG default 'road'
         localStorage.setItem('cc_basemap', 'satellite'); // not the SSG default 'ign'
         localStorage.setItem('cc_waymarked', JSON.stringify({ hiking: true, cycling: false, mtb: true }));

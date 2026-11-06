@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getToken } from '@/lib/auth';
+import { isArchivePending } from '@/lib/archive-pending';
 import { useT } from '@/lib/i18n';
 
 /** `/me/activities?limit=` used by /map — the API returns at most this many. */
@@ -27,7 +28,13 @@ export default function MapActivitiesNotice({ count }: MapActivitiesNoticeProps)
   const t = useT();
   const [loggedIn, setLoggedIn] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  useEffect(() => { setLoggedIn(getToken() !== null); }, []);
+  // An archive was accepted < 2 h ago and is still draining → "processing"
+  // variant instead of the import CTA (read post-mount, like auth).
+  const [processing, setProcessing] = useState(false);
+  useEffect(() => {
+    setLoggedIn(getToken() !== null);
+    setProcessing(isArchivePending());
+  }, []);
 
   if (!loggedIn || count === null) return null;
 
@@ -46,8 +53,14 @@ export default function MapActivitiesNotice({ count }: MapActivitiesNoticeProps)
           fontSize: 13, color: '#1f2937',
         }}
       >
-        <span style={{ fontWeight: 600, flex: '1 1 180px' }}>{t('map.empty.title')}</span>
-        <Link
+        {processing ? (
+          <span data-testid="map-empty-state-processing" style={{ fontWeight: 600, flex: '1 1 180px' }}>
+            ⏳ {t('map.empty.processing')}
+          </span>
+        ) : (
+          <span style={{ fontWeight: 600, flex: '1 1 180px' }}>{t('map.empty.title')}</span>
+        )}
+        {!processing && <Link
           href="/strava"
           data-testid="map-empty-state-cta"
           style={{
@@ -56,7 +69,7 @@ export default function MapActivitiesNotice({ count }: MapActivitiesNoticeProps)
           }}
         >
           {t('map.empty.cta')}
-        </Link>
+        </Link>}
         <button
           type="button"
           data-testid="map-empty-state-dismiss"

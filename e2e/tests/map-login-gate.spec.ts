@@ -30,7 +30,7 @@ test.describe('Community map — public map, members-only export', () => {
   test.setTimeout(60000);
 
   test('an anonymous visitor to /map sees the map, not a login gate', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto('/map/');
     await page.waitForLoadState('domcontentloaded');
 
@@ -43,7 +43,7 @@ test.describe('Community map — public map, members-only export', () => {
   });
 
   test('an anonymous visitor opening the community export gets the login CTA', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto('/map?lat=43.612&lon=3.875&zoom=13');
     await page.waitForLoadState('domcontentloaded');
 
@@ -59,7 +59,7 @@ test.describe('Community map — public map, members-only export', () => {
 
   test('a logged-in visitor reaches the export form', async ({ page }) => {
     await page.addInitScript(() => {
-      localStorage.setItem('cc_beta_dismissed', '1');
+      localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1');
       localStorage.setItem('user_id', 'e2e-export-member');
     });
     await page.goto('/map?lat=43.612&lon=3.875&zoom=13');

@@ -28,6 +28,16 @@ class TestSafeRedirect:
         assert _safe_redirect(bad) is None
 
 
+class TestMagicLinkLimits:
+    def test_per_email_3_per_ip_20_both_layers_consistent(self):
+        from app.api import auth
+
+        assert auth._MAGIC_LINK_MAX_PER_EMAIL == 3
+        assert auth._MAGIC_LINK_MAX_PER_IP == 20
+        # The slowapi per-IP decorator uses the same figure as the DB layer.
+        assert auth._MAGIC_LINK_IP_LIMIT_STR == "20/15minute"
+
+
 class TestArchiveDoneEmailWording:
     @pytest.mark.parametrize("locale", ["fr", "en"])
     @pytest.mark.parametrize("imported", [0, 3])

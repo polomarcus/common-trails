@@ -1055,6 +1055,7 @@ const fr: Translations = {
   'map.dropIgnored': '{count} fichier(s) ignoré(s) : seul un fichier .gpx peut être déposé sur la carte.',
   'map.empty.title': 'Importez vos traces pour voir votre heatmap',
   'map.empty.cta': 'Importer mes traces',
+  'map.empty.processing': 'Traitement en cours — vos sorties apparaîtront ici, un email vous préviendra.',
   'map.empty.dismiss': 'Fermer',
   'map.activitiesCapped': '{count} sorties les plus récentes affichées',
   'map.addAnnotation': 'Ajouter une annotation',

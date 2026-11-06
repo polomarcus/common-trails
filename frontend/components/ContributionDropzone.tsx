@@ -35,6 +35,7 @@ import { getToken } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { buildUploadSummary } from '@/lib/strava-upload-summary';
 import { partitionUpload } from '@/lib/upload-route';
+import { markArchivePending } from '@/lib/archive-pending';
 import { archiveErrorKey, checkArchiveSize, uploadArchive } from '@/lib/strava-archive-upload';
 import { buildFilesConsentFields, CONTRIBUTION_CONSENT_VERSION } from '@/lib/strava-archive-consent';
 import { describeUpload, phaseForStage, type UploadPhase } from '@/lib/upload-progress';
@@ -131,6 +132,9 @@ export default function ContributionDropzone() {
         onProgress: (f) => { setPhase('uploading'); setFraction(f); },
         onStage: (s) => setPhase(phaseForStage(s)),
       });
+      // /map then shows "processing…" instead of « Importez vos traces »
+      // while the background drain runs.
+      markArchivePending();
       setPhase('done');
     } catch (err) {
       // Translated message — never the raw English server/XHR text.

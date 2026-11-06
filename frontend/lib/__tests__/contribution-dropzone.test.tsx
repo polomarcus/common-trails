@@ -24,6 +24,7 @@ vi.mock('next/link', () => ({
 import ContributionDropzone from '@/components/ContributionDropzone';
 import { I18nProvider } from '@/lib/i18n';
 import { MAX_ARCHIVE_BYTES } from '@/lib/strava-archive-upload';
+import { isArchivePending } from '@/lib/archive-pending';
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -116,6 +117,31 @@ describe('ContributionDropzone', () => {
     const err = q(container, 'hero-upload-error')!.textContent!;
     expect(err).not.toContain('boom');
     expect(err).toContain('serveur');
+  });
+
+  it('an accepted archive stamps the "processing" marker read by /map', async () => {
+    localStorage.clear();
+    class OkXHR {
+      status = 200;
+      upload = {};
+      onload: null | (() => void) = null;
+      onerror: null | (() => void) = null;
+      open() {}
+      setRequestHeader() {}
+      send() { queueMicrotask(() => this.onload?.()); }
+    }
+    vi.stubGlobal('XMLHttpRequest', OkXHR as unknown as typeof XMLHttpRequest);
+    fetchSpy
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({
+        archive_id: 'a1', consent_id: 'c1', bucket_key: 'k', upload_url: 'https://gcs/put',
+        upload_method: 'PUT', content_type: 'application/zip', max_bytes: 1, storage_backend: 'gcs',
+      }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ archive_id: 'a1', status: 'uploaded', enqueue: 'ok' }) });
+    expect(isArchivePending()).toBe(false);
+    await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(q(container, 'archive-see-map')).not.toBeNull();
+    expect(isArchivePending()).toBe(true);
   });
 
   it('warns on beforeunload only while an upload is in flight', async () => {

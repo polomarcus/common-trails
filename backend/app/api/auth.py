@@ -13,6 +13,7 @@ from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import func
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -60,10 +61,14 @@ _MAGIC_LINK_PURPOSE = "magic_link"
 #    session credential — `_decode_token` rejects any token carrying `purpose`.
 _EMAIL_CHANGE_PURPOSE = "email_change"
 _SYNTHETIC_EMAIL_DOMAIN = "@strava.local"
-# Rate-limit: at most N magic-link requests per email AND per IP within the
-# rolling window. Belt-and-suspenders with the slowapi per-IP decorator below.
-_MAGIC_LINK_MAX_PER_WINDOW = 3
+# Rate-limit within the rolling window: at most 3 requests per EMAIL (stops
+# mail-bombing one inbox) and 20 per IP (a club / campus / CGNAT shares one IP —
+# a 3-per-IP cap locked out the 4th rider). The slowapi decorator below uses
+# the same per-IP figure (keep _MAGIC_LINK_IP_LIMIT_STR in sync).
+_MAGIC_LINK_MAX_PER_EMAIL = 3
+_MAGIC_LINK_MAX_PER_IP = 20
 _MAGIC_LINK_WINDOW_MIN = 15
+_MAGIC_LINK_IP_LIMIT_STR = f"{_MAGIC_LINK_MAX_PER_IP}/{_MAGIC_LINK_WINDOW_MIN}minute"
 # Generic, non-enumerating response text (SSOT so both the success and the
 # rate-limited/unknown-email paths return the exact same body).
 _MAGIC_LINK_GENERIC_MSG = (
@@ -438,7 +443,7 @@ async def logout(response: Response) -> None:
 
 
 @router.post("/email/request", response_model=MagicLinkRequestResponse)
-@limiter.limit("3/15minute")
+@limiter.limit(_MAGIC_LINK_IP_LIMIT_STR)
 async def request_magic_link(
     request: Request,
     body: MagicLinkRequest,
@@ -448,8 +453,10 @@ async def request_magic_link(
 
     Security posture:
     * Returns the same generic 200 body whether or not the account existed.
-    * Rate-limited per IP (the slowapi decorator) AND per email + per IP in the
-      DB (``_MAGIC_LINK_MAX_PER_WINDOW`` per ``_MAGIC_LINK_WINDOW_MIN`` min).
+    * Rate-limited per IP (the slowapi decorator) AND in the DB: at most
+      ``_MAGIC_LINK_MAX_PER_EMAIL`` per email and ``_MAGIC_LINK_MAX_PER_IP``
+      per IP per ``_MAGIC_LINK_WINDOW_MIN`` min (riders behind one NAT are
+      not locked out by each other).
       Over the limit → HTTP 429, nothing sent. The 429 reveals nothing about
       account existence: accounts are auto-created (find-or-create), so every
       address behaves the same. (It used to be a silent 200 — the user waited
@@ -465,17 +472,21 @@ async def request_magic_link(
     now = datetime.now(UTC)
     window_start = now - timedelta(minutes=_MAGIC_LINK_WINDOW_MIN)
 
-    # Rate-limit by email OR IP (DB-backed, testable regardless of slowapi).
-    recent = (
-        db.query(MagicLinkToken)
+    # Rate-limit per email AND per IP (DB-backed, testable regardless of
+    # slowapi) — ONE query, two conditional counts.
+    per_email, per_ip = (
+        db.query(
+            func.count().filter(MagicLinkToken.email == email),
+            func.count().filter(MagicLinkToken.request_ip == ip),
+        )
         .filter(
             MagicLinkToken.purpose == _MAGIC_LINK_PURPOSE,
             MagicLinkToken.created_at >= window_start,
             (MagicLinkToken.email == email) | (MagicLinkToken.request_ip == ip),
         )
-        .count()
+        .one()
     )
-    if recent >= _MAGIC_LINK_MAX_PER_WINDOW:
+    if per_email >= _MAGIC_LINK_MAX_PER_EMAIL or per_ip >= _MAGIC_LINK_MAX_PER_IP:
         logger.info("Magic-link rate-limited (email/ip) — returning 429")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
