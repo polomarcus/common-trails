@@ -149,24 +149,43 @@ def _wrap_html(body: str) -> str:
 
 
 def render_archive_done_email(
-    *, imported: int, skipped: int, failed: int, locale: str = "fr"
+    *,
+    imported: int,
+    skipped: int,
+    failed: int,
+    locale: str = "fr",
+    contribute_heatmap: bool = True,
 ) -> tuple[str, str]:
     """Return ``(subject, html)`` for the "your archive finished draining" email.
 
-    Two wordings: the happy path (>=1 trace imported → "vos traces sont sur la
-    carte") and the nothing-new path (``imported == 0`` — typically every member
-    was a duplicate of already-imported activities or out-of-scope).
+    Two wordings: the happy path (>=1 trace imported) and the nothing-new path
+    (``imported == 0`` — typically every member was a duplicate of
+    already-imported activities or out-of-scope).
+
+    The happy path must stay TRUTHFUL about timing (Thierry Crouzet, 2026-11):
+    the user's own rides show up at once in the "Ma heatmap" layer (served live
+    from the DB), but the community heatmap is a static PMTiles rebuilt by a
+    job (~30 min build + cold start + pointer cache, more for an archive whose
+    rebuild ping was deferred) — so never claim the traces are already on the
+    heatmap; promise "usually within the hour". When the archive does NOT
+    contribute to the heatmap (``contribute_heatmap=False``) no rebuild is
+    triggered, so the copy only points to "Ma heatmap". The count is NOT
+    repeated in the intro — the list below already carries it.
     """
     map_url = "https://chemins-communs.fr/map"
     # The community heatmap is also published as a raster XYZ tile pyramid on
     # public GCS, so it can be added as a custom OVERLAY ("calque") in gpx.studio
     # / VisuGPX via one URL. Promote it in the done email — closes the loop
-    # ("your traces are live → here's how to plan on top of the whole heatmap").
+    # ("your archive is in → here's how to plan on top of the whole heatmap").
     calque_url = f"{_heatmap_public_base_url()}/raster/tiles.json"
     if locale == "en":
         if imported > 0:
-            subject = "Your rides are on the map 🚴"
-            intro = "Your Strava archive has been processed — your traces are now part of the community heatmap."
+            subject = "Your archive has been imported 🚴"
+            intro = (
+                "Your archive has been processed. Your rides are visible right away in the "
+                "<strong>My heatmap</strong> layer on the map"
+                + ("; the community heatmap will include them, usually within the hour." if contribute_heatmap else ".")
+            )
         else:
             subject = "Your archive has been processed"
             intro = (
@@ -188,8 +207,12 @@ def render_archive_done_email(
         )
     else:
         if imported > 0:
-            subject = "Vos traces sont sur la carte 🚴"
-            intro = "Votre archive Strava a été traitée — vos traces font maintenant partie de la carte communautaire."
+            subject = "Votre archive est importée 🚴"
+            intro = (
+                "Votre archive a été traitée. Vos sorties sont visibles dès maintenant "
+                "dans le calque <strong>Ma heatmap</strong> de la carte"
+                + (" ; la heatmap communautaire les intégrera, en général dans l'heure." if contribute_heatmap else ".")
+            )
         else:
             subject = "Votre archive a été traitée"
             intro = (
