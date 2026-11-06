@@ -175,18 +175,19 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
       aria-label={t('nav.ariaLabel')}
       style={{ background: '#fff', borderBottom: '1px solid #e5e5e5', position: 'relative' }}
     >
-      <div style={{
+      <div className="topnav-bar" style={{
         height: 44,
         padding: '0 16px',
         display: 'flex',
         alignItems: 'center',
         gap: 12,
       }}>
-        {/* LEFT: Logo */}
-        <Link href="/" style={{ fontWeight: 700, fontSize: 14, color: '#2d6a4f', textDecoration: 'none', flexShrink: 0, letterSpacing: '-0.01em' }}>
+        {/* LEFT: Logo — may shrink (ellipsis) so burger + language + login
+            always stay visible on narrow phones. */}
+        <Link href="/" className="topnav-brand" style={{ fontWeight: 700, fontSize: 14, color: '#2d6a4f', textDecoration: 'none', flexShrink: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.01em' }}>
           CHEMINS COMMUNS
         </Link>
-        <span style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
+        <span className="topnav-sep" style={{ color: '#e0e0e0', fontSize: 14 }}>|</span>
 
         {/* CENTER */}
         {!isMobile && centerContent}
@@ -230,6 +231,7 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
           fontSize: 12,
           fontWeight: 600,
           flexShrink: 0,
+          whiteSpace: 'nowrap',
         }}>
           {isLoggedIn ? `👤 ${t('nav.account')}` : t('nav.login')}
         </Link>
@@ -274,6 +276,16 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
         nav[role="navigation"] button:focus-visible {
           outline: 2px solid #2d6a4f;
           outline-offset: 2px;
+        }
+        /* Phones: the bar overflowed at 375px and clipped the login button. */
+        @media (max-width: 480px) {
+          .topnav-bar { padding: 0 10px !important; gap: 8px !important; }
+          .topnav-sep { display: none; }
+          .topnav-brand { font-size: 12px !important; }
+        }
+        @media (max-width: 340px) {
+          .topnav-bar { padding: 0 8px !important; gap: 4px !important; }
+          .topnav-brand { font-size: 11px !important; letter-spacing: -0.02em !important; }
         }
       `}</style>
     </nav>
