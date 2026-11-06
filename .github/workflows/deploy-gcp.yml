@@ -37,7 +37,7 @@ concurrency:
 jobs:
   deploy:
     name: Build & Deploy (gcloud, no terraform)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}

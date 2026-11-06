@@ -9,7 +9,7 @@ on:
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/ruff-action@v3
@@ -19,7 +19,7 @@ jobs:
 
   backend-test:
     name: Backend tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The image build (incl. the slow DEM-tile bake) + data load + ~5 min pytest
     # lands at ~12-14 min on a COLD docker cache. 12 then 18 both proved too
     # tight: cold-cache runner variance repeatedly pushed the job past the ceiling
@@ -68,7 +68,11 @@ jobs:
 
       - name: Save Docker image for cache
         if: steps.docker-cache.outputs.cache-hit != 'true'
-        run: docker save $(docker compose -f docker-compose.backend.yml images -q backend) -o /tmp/docker-image.tar
+        # Recent Docker engines reject a bare 64-hex id as a repository name;
+        # `images -q` returns one, so re-prefix it with `sha256:`.
+        run: |
+          IMAGE_ID=$(docker compose -f docker-compose.backend.yml images -q backend)
+          docker save "sha256:${IMAGE_ID#sha256:}" -o /tmp/docker-image.tar
 
       - name: Wait for API /healthz
         run: |
@@ -107,7 +111,7 @@ jobs:
 
   e2e-test:
     name: E2E tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # E2E is now a REQUIRED gate (2026-08-10). The suite was pruned to
     # live-feature specs — frozen social (trips/collections/github) deleted,
@@ -162,7 +166,11 @@ jobs:
 
       - name: Save Docker image for cache
         if: steps.docker-cache.outputs.cache-hit != 'true'
-        run: docker save $(docker compose -f docker-compose.backend.yml images -q backend) -o /tmp/docker-image.tar
+        # Recent Docker engines reject a bare 64-hex id as a repository name;
+        # `images -q` returns one, so re-prefix it with `sha256:`.
+        run: |
+          IMAGE_ID=$(docker compose -f docker-compose.backend.yml images -q backend)
+          docker save "sha256:${IMAGE_ID#sha256:}" -o /tmp/docker-image.tar
 
       # ── Frontend build (parallel with Docker startup) ──────────────────
       - name: Setup Node.js
