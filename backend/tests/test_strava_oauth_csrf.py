@@ -302,3 +302,41 @@ def test_callback_with_sql_injection_shape_state(client, db_session):
     assert resp.status_code != 500, (
         f"SQL-injection-shaped state caused a 500: {resp.text[:200]}"
     )
+
+
+# ── Stub code outside TEST_MODE ────────────────────────────────────────
+
+def test_stub_code_outside_test_mode_never_short_circuits_oauth(client, db_session, monkeypatch):
+    """The stub branch is a TEST_MODE fixture only. In prod, a callback
+    carrying the stub code with a perfectly valid login state must go
+    through the real Strava token exchange (and fail there) — never mint a
+    session for the shared stub athlete."""
+    import app.api.integrations_strava as strava_mod
+    monkeypatch.setattr(strava_mod, "TEST_MODE", False)
+
+    exchanged: list[str] = []
+
+    class _FailingClient:
+        async def post(self, url, data=None, timeout=None):
+            exchanged.append(data["code"])
+            raise RuntimeError("strava unreachable in test")
+
+    async def _fake_client():
+        return _FailingClient()
+
+    monkeypatch.setattr(strava_mod, "get_http_client", _fake_client)
+    state = strava_mod._encode_oauth_state(strava_mod._STRAVA_LOGIN_SENTINEL)
+
+    resp = client.get(
+        f"/integrations/strava/callback?code=stub_code_test&state={state}",
+        follow_redirects=False,
+    )
+
+    assert exchanged == ["stub_code_test"], "the stub code must hit the real token exchange"
+    assert resp.status_code == 502
+    assert "set-cookie" not in {k.lower() for k in resp.headers.keys()}
+    from sqlalchemy import text as sa_text
+    stub_links = db_session.execute(sa_text(
+        "SELECT count(*) FROM integration_accounts WHERE external_user_id = 'strava_stub_user_42'"
+    )).scalar()
+    assert stub_links == 0
