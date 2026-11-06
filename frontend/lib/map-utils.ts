@@ -19,7 +19,8 @@ export interface ActivityItem {
   bbox: [number, number, number, number]; // [minLon, minLat, maxLon, maxLat]
   activity_date: string | null; // actual activity date (from Strava start_date_local)
   created_at: string | null;
-  coords: number[][]; // [lon, lat] or [lon, lat, elevation_m] per point
+  coords: number[][]; // [lon, lat] or [lon, lat, elevation_m] per point (all parts, in order)
+  parts?: number[][][]; // display parts when the trace is broken at GPS gaps (MultiLineString)
   provider: string; // "strava" | "file"
   provider_activity_id: string | null; // Strava activity ID when provider=strava
   total_photo_count?: number; // count of associated ActivityPhoto rows (Strava import phase 4)
@@ -80,6 +81,33 @@ export function distanceAlongAt(coords: number[][], lon: number, lat: number): {
     }
   }
   return { km: bestKm, nearestIdx: bestIdx };
+}
+
+// ── LineString / MultiLineString ─────────────────────────────────────────────
+
+/**
+ * Split a `/me/activities` geometry into its drawable parts. The API breaks a
+ * trace into a MultiLineString at GPS gaps (no straight line across a dropout);
+ * a plain LineString is a single part. Anything else → no parts.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function lineParts(geometry: any): number[][][] {
+  if (!geometry || !Array.isArray(geometry.coordinates)) return [];
+  if (geometry.type === 'MultiLineString') {
+    return (geometry.coordinates as number[][][]).filter((p) => Array.isArray(p) && p.length > 0);
+  }
+  if (geometry.type === 'LineString') {
+    return geometry.coordinates.length > 0 ? [geometry.coordinates as number[][]] : [];
+  }
+  return [];
+}
+
+/** GeoJSON geometry to draw an activity: MultiLineString when it has gaps. */
+export function activityDisplayGeometry(
+  act: Pick<ActivityItem, 'coords' | 'parts'>,
+): { type: 'LineString'; coordinates: number[][] } | { type: 'MultiLineString'; coordinates: number[][][] } {
+  if (act.parts && act.parts.length > 1) return { type: 'MultiLineString', coordinates: act.parts };
+  return { type: 'LineString', coordinates: act.coords };
 }
 
 /** Return the midpoint coordinate of a LineString. */

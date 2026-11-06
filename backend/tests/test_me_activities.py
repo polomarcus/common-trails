@@ -525,3 +525,79 @@ class TestMeActivities:
         # Verify coordinates are in Montpellier area (lon≈3.87, lat≈43.62)
         assert 3.5 < coords[0][0] < 4.2, "longitude outside Montpellier area"
         assert 43.4 < coords[0][1] < 43.8, "latitude outside Montpellier area"
+
+
+def _gap_coords() -> list[list[float]]:
+    """Two 5-point runs near Sète separated by a ~5 km jump (GPS dropout)."""
+    run_a = [[3.69 + i * 0.001, 43.40, 5.0] for i in range(5)]
+    # 0.062° of longitude at 43.4°N ≈ 5.0 km
+    run_b = [[3.756 + i * 0.001, 43.40, 7.0] for i in range(5)]
+    return run_a + run_b
+
+
+def _feature_for(coords: list) -> dict:
+    import json as _json
+
+    from app.api.me_activities import _activity_to_feature
+
+    return _activity_to_feature(
+        {"id": "a1", "geometry_geojson": _json.dumps({"type": "LineString", "coordinates": coords})}
+    )
+
+
+class TestMeActivitiesGapSplit:
+    """Non-regression: "Mes traces" drew long straight lines across the sea
+    (beta report, Sète/Montpellier 2026-11) because ``_activity_to_feature``
+    emitted the stored LineString verbatim, bridging GPS dropouts. The display
+    geometry must now break at gaps > 2500 m (the ingest bridge) — without altering any point."""
+
+    def test_feature_splits_at_5km_jump(self):
+        coords = _gap_coords()
+        geom = _feature_for(coords)["geometry"]
+        assert geom["type"] == "MultiLineString"
+        assert len(geom["coordinates"]) == 2
+        # Trace integrity: every point verbatim (elevation kept), same order.
+        assert geom["coordinates"][0] + geom["coordinates"][1] == coords
+
+    def test_continuous_trace_stays_linestring(self):
+        coords = [[3.87 + i * 0.001, 43.62 + i * 0.001] for i in range(10)]
+        assert _feature_for(coords)["geometry"] == {"type": "LineString", "coordinates": coords}
+
+    def test_downsampled_1500m_stride_stays_linestring(self):
+        """A downsampled export (≈1.5 km between fixes) is a real ride, not a
+        dropout: it must stay one drawn line, with no holes."""
+        # Dense run, one 1.5 km stride (0.0185° of longitude at 43.4°N), dense run.
+        run_a = [[3.69 + i * 0.001, 43.40] for i in range(4)]
+        run_b = [[3.7215 + i * 0.001, 43.40] for i in range(4)]
+        coords = run_a + run_b
+        assert _feature_for(coords)["geometry"] == {"type": "LineString", "coordinates": coords}
+
+    def test_threshold_matches_ingest_bridge(self):
+        from app.api.me_activities import DISPLAY_GAP_BREAK_M
+        from app.services.ingest import _DENSIFY_MAX_BRIDGE_M
+
+        assert DISPLAY_GAP_BREAK_M == _DENSIFY_MAX_BRIDGE_M == 2500.0
+
+    def test_isolated_outlier_fix_is_not_drawn(self):
+        """A single stray fix far out at sea (jump out + jump back) must not
+        draw two straight lines; the drawable runs keep every point."""
+        run_a = [[3.69 + i * 0.001, 43.40] for i in range(4)]
+        run_b = [[3.694 + i * 0.001, 43.40] for i in range(4)]
+        geom = _feature_for(run_a + [[3.80, 43.30]] + run_b)["geometry"]
+        assert geom == {"type": "MultiLineString", "coordinates": [run_a, run_b]}
+
+    def test_endpoint_returns_multilinestring_for_gap_upload(self, client, auth_headers):
+        """End-to-end through the real upload + streamed /me/activities."""
+        gpx = gpxpy.gpx.GPX()
+        track = gpxpy.gpx.GPXTrack(name="Sete gap")
+        gpx.tracks.append(track)
+        seg = gpxpy.gpx.GPXTrackSegment()
+        track.segments.append(seg)
+        for lon, lat, ele in _gap_coords():
+            seg.points.append(gpxpy.gpx.GPXTrackPoint(latitude=lat, longitude=lon, elevation=ele))
+        up = _upload_gpx(client, auth_headers, gpx.to_xml().encode(), sport="road", name="gap.gpx")
+        assert up.status_code == 202
+        feats = client.get("/me/activities", headers=auth_headers).json()["features"]
+        feat = next(f for f in feats if f["properties"]["name"] == "Sete gap")
+        assert feat["geometry"]["type"] == "MultiLineString"
+        assert len(feat["geometry"]["coordinates"]) == 2

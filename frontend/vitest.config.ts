@@ -30,6 +30,7 @@ export default defineConfig({
       'lib/__tests__/init-map-layers-resilience.test.ts',
       'lib/__tests__/init-map-layers-my-heatmap.test.ts',
       'lib/__tests__/map-toolbar-my-heatmap.test.tsx',
+      'lib/__tests__/user-traces-layers.test.ts',
     ],
     environment: 'node',
     globals: false,

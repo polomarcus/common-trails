@@ -24,7 +24,7 @@ import { useHeatmapControl } from '@/hooks/useHeatmapControl';
 import { useUserMenu } from '@/hooks/useUserMenu';
 import { useMapLayerSync } from '@/hooks/useMapLayerSync';
 import { NORMAL, HIGH_CONTRAST } from '@/lib/routing-style';
-import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions } from '@/lib/map-utils';
+import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions, lineParts } from '@/lib/map-utils';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
@@ -261,8 +261,11 @@ export default function MapPage() {
       const geojson = await resp.json();
 
       // Populate sidebar activity list
-      const items: ActivityItem[] = geojson.features.filter((f: any) => f.geometry?.coordinates?.length > 0).map((f: any) => {
-        const coords = f.geometry.coordinates as [number, number][];
+      // Geometry is a LineString, or a MultiLineString when the API broke the
+      // trace at GPS gaps — flatten the parts for bbox/center/markers/profile.
+      const items: ActivityItem[] = geojson.features.filter((f: any) => lineParts(f.geometry).length > 0).map((f: any) => {
+        const parts = lineParts(f.geometry);
+        const coords = parts.flat() as [number, number][];
         return {
           id: f.properties.id || '',
           name: f.properties.name || t('map.activityDefaultName'),
@@ -274,6 +277,7 @@ export default function MapPage() {
           activity_date: f.properties.activity_date ?? null,
           created_at: f.properties.created_at ?? null,
           coords,
+          parts: parts.length > 1 ? parts : undefined,
           provider: f.properties.provider ?? 'file',
           provider_activity_id: f.properties.provider_activity_id ?? null,
           total_photo_count: f.properties.total_photo_count ?? 0,
@@ -313,8 +317,8 @@ export default function MapPage() {
       const hasPositionParam = new URLSearchParams(window.location.search).get('lat') !== null;
       if (!actParam && !hasPositionParam && geojson.features.length > 0) {
         const first = geojson.features[geojson.features.length - 1];
-        const coords = first?.geometry?.coordinates;
-        if (coords && coords.length > 0) {
+        const coords = lineParts(first?.geometry).flat();
+        if (coords.length > 0) {
           m.jumpTo({ center: coords[0], zoom: 13 });
         }
       }

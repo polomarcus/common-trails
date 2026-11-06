@@ -5,7 +5,8 @@ import { SPORT_COLORS } from '@/lib/constants';
 import { WAYMARKED_LAYERS } from '@/lib/basemap-styles';
 import { API_URL } from '@/lib/api-client';
 import { getToken } from '@/lib/auth';
-import { getTrackBbox } from '@/lib/map-utils';
+import { getTrackBbox, activityDisplayGeometry } from '@/lib/map-utils';
+import { applyUserTraceOpacity } from '@/lib/user-traces-layers';
 import {
   LINE_OPACITY_RAMP, GLOW_OPACITY_RAMP, LINE_WIDTH_RAMP, HEAT_OPACITY_RAMP,
   COMMUNITY_TRAILS_HEAT_LAYER, applyCommunityHeatSportFilter,
@@ -393,13 +394,15 @@ export function useMapLayerSync(params: {
         type: 'FeatureCollection',
         features: [{
           type: 'Feature',
-          geometry: { type: 'LineString', coordinates: selectedActivity.coords },
+          // Broken at GPS gaps (no straight line across a dropout) when the
+          // API split the trace into several parts.
+          geometry: activityDisplayGeometry(selectedActivity),
           properties: { color },
         }],
       });
-      // Dim all other traces so selected one pops
-      m.setPaintProperty('user-activities-line', 'line-opacity', 0.25);
-      m.setPaintProperty('user-activities-glow', 'line-opacity', 0.06);
+      // Dim all other traces so selected one pops — scales the zoom ramps,
+      // never a constant (a constant would bring back the low-zoom blob).
+      applyUserTraceOpacity(m, true);
       // Save current layer toggles and hide overlays so the trace is clearly visible
       if (!layersBeforeActivityRef.current) {
         layersBeforeActivityRef.current = { ...layers };
@@ -410,8 +413,7 @@ export function useMapLayerSync(params: {
     } else {
       m.getSource('selected-activity')?.setData({ type: 'FeatureCollection', features: [] });
       // Restore full opacity when nothing is selected
-      m.setPaintProperty('user-activities-line', 'line-opacity', 0.92);
-      m.setPaintProperty('user-activities-glow', 'line-opacity', 0.18);
+      applyUserTraceOpacity(m, false);
       // Restore layer toggles saved before activity selection
       if (layersBeforeActivityRef.current) {
         setLayers(() => layersBeforeActivityRef.current!);
