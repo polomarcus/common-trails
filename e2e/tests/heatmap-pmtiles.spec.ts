@@ -72,7 +72,7 @@ test.describe('Community heatmap PMTiles wiring', () => {
       if (req.url().includes('heatmap-display.pmtiles')) pmtilesRequests.push(req.url());
     });
 
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto(`${FRONTEND_URL}/map?lat=43.6&lon=3.87&zoom=12`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => !!(window as unknown as { __mapInstance?: unknown }).__mapInstance, undefined, {

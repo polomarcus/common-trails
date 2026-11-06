@@ -97,8 +97,10 @@ class TestRequest:
         assert r_existing.json() == r_new.json()
 
     def test_request_rate_limited_per_email(self, client, capture_send):
-        """4th request for the same email in the window returns generic 200 but
-        does NOT send (the DB rate-limiter blocks it)."""
+        """4th request for the same email in the window → HTTP 429 and NO send
+        (the DB rate-limiter blocks it). It used to be a silent generic 200:
+        the user waited for a link that never came. A 429 leaks nothing —
+        accounts are auto-created, so every address behaves the same."""
         email = _unique_email()
         ip = _unique_ip()  # fixed IP + fixed email → deterministic limit
         for _ in range(3):
@@ -107,9 +109,67 @@ class TestRequest:
             assert r.status_code == 200
         r4 = client.post("/auth/email/request", json={"email": email},
                          headers={"X-Forwarded-For": ip})
-        assert r4.status_code == 200  # still generic — no enumeration signal
-        assert r4.json()["ok"] is True
+        assert r4.status_code == 429
+        assert r4.headers.get("Retry-After")
         assert capture_send.call_count == 3  # 4th was suppressed
+
+    def test_shared_ip_distinct_emails_are_not_locked_out(self, client, capture_send):
+        """A club / campus NAT shares one IP: 4 riders with distinct emails
+        must ALL get their link (the old per-IP cap of 3 locked out the 4th)."""
+        ip = _unique_ip()
+        for _ in range(4):
+            r = client.post("/auth/email/request", json={"email": _unique_email()},
+                            headers={"X-Forwarded-For": ip})
+            assert r.status_code == 200
+        assert capture_send.call_count == 4
+
+    def test_request_rate_limited_per_ip_after_20(self, client, capture_send):
+        """Same IP, 20 distinct emails OK; the 21st → 429. The answer depends on
+        the request rate, never on account existence."""
+        from app.api.auth import _MAGIC_LINK_MAX_PER_IP
+
+        assert _MAGIC_LINK_MAX_PER_IP == 20
+        ip = _unique_ip()
+        for _ in range(20):
+            r = client.post("/auth/email/request", json={"email": _unique_email()},
+                            headers={"X-Forwarded-For": ip})
+            assert r.status_code == 200
+        r21 = client.post("/auth/email/request", json={"email": _unique_email()},
+                          headers={"X-Forwarded-For": ip})
+        assert r21.status_code == 429
+        assert capture_send.call_count == 20
+
+    def _sent_html(self, capture_send) -> str:
+        html = capture_send.call_args.kwargs.get("html")
+        return html if html is not None else capture_send.call_args.args[2]
+
+    def test_request_redirect_is_carried_into_the_link(self, client, capture_send):
+        resp = client.post(
+            "/auth/email/request",
+            json={"email": _unique_email(), "redirect": "/map"},
+            headers={"X-Forwarded-For": _unique_ip()},
+        )
+        assert resp.status_code == 200
+        html = self._sent_html(capture_send)
+        assert "/auth/verify?token=" in html
+        assert "&redirect=%2Fmap" in html
+        # The token is still extractable (the redirect is a separate param).
+        assert _extract_token(html)
+
+    @pytest.mark.parametrize("evil", [
+        "//evil.com", "https://evil.com", "javascript:alert(1)", "/\\evil.com",
+        "evil.com", "/map\nSet-Cookie:x",
+    ])
+    def test_request_unsafe_redirect_is_dropped(self, client, capture_send, evil):
+        resp = client.post(
+            "/auth/email/request",
+            json={"email": _unique_email(), "redirect": evil},
+            headers={"X-Forwarded-For": _unique_ip()},
+        )
+        assert resp.status_code == 200
+        html = self._sent_html(capture_send)
+        assert "redirect=" not in html
+        assert "evil" not in html
 
     def test_request_invalid_email_422(self, client, capture_send):
         resp = client.post("/auth/email/request", json={"email": "not-an-email"},

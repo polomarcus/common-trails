@@ -13,7 +13,7 @@ test.describe('Heatmap H key toggle', () => {
   test.setTimeout(60000);
 
   test('H key fires custom event without errors', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto(`${FRONTEND_URL}/map?lat=43.612&lon=3.875&zoom=13`);
     await page.waitForLoadState('domcontentloaded');
 
@@ -36,7 +36,7 @@ test.describe('Heatmap H key toggle', () => {
   });
 
   test('H key does NOT trigger when typing in input', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
     await page.goto(`${FRONTEND_URL}/map?lat=43.612&lon=3.875&zoom=13`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => !!(window as any).__mapInstance, { timeout: 30000 });

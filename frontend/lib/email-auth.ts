@@ -2,14 +2,19 @@
  * Passwordless magic-link auth — network logic, isolated from React so it can
  * be unit-tested with a mocked fetch (see lib/__tests__/email-auth.test.ts).
  *
- * The backend ALWAYS returns a generic 200 for a request (no account
- * enumeration), so `requestMagicLink` resolves to { ok: true } on 2xx and
- * { ok: false } only on a network / non-2xx failure.
+ * The backend returns a generic 200 for a request (accounts are auto-created,
+ * so nothing is enumerable) and a 429 when the per-email/IP limit is hit;
+ * `requestMagicLink` resolves to { ok: true } on 2xx, { ok: false,
+ * rateLimited: true } on 429 and { ok: false } on any other failure.
  */
 import { API_URL } from '@/lib/api-client';
+import { sanitizeRedirect } from '@/lib/safe-redirect';
 
 export interface RequestResult {
   ok: boolean;
+  /** True on HTTP 429 (too many link requests in the window) — the UI says
+   *  "try again in a few minutes" instead of pretending a link was sent. */
+  rateLimited?: boolean;
 }
 
 export interface VerifyResult {
@@ -19,19 +24,25 @@ export interface VerifyResult {
   redirect?: string;
 }
 
-/** POST /auth/email/request — trigger a magic-link email. */
+/**
+ * POST /auth/email/request — trigger a magic-link email. `redirect` (a
+ * same-origin path, sanitized here AND server-side) is carried into the emailed
+ * link so the user lands back where they started (e.g. /map) after login.
+ */
 export async function requestMagicLink(
   email: string,
   locale?: string,
+  redirect?: string | null,
 ): Promise<RequestResult> {
+  const safe = redirect ? sanitizeRedirect(redirect, '') : '';
   try {
     const resp = await fetch(`${API_URL}/auth/email/request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ email, locale }),
+      body: JSON.stringify({ email, locale, ...(safe ? { redirect: safe } : {}) }),
     });
-    return { ok: resp.ok };
+    return resp.status === 429 ? { ok: false, rateLimited: true } : { ok: resp.ok };
   } catch {
     return { ok: false };
   }

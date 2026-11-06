@@ -167,6 +167,26 @@ class TestMe:
         assert "email" in data
         assert "username" in data
 
+    def test_me_exposes_is_admin(self, client, auth_headers):
+        """/auth/me carries is_admin so the /map toolbar can show "Admin" to
+        admins only (it used to show it to every logged-in rider)."""
+        from app.db.models import User
+        from app.db.session import SessionLocal
+
+        resp = client.get("/auth/me", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["is_admin"] is False
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == resp.json()["user_id"]).first()
+            user.is_admin = True
+            db.commit()
+        finally:
+            db.close()
+        resp = client.get("/auth/me", headers=auth_headers)
+        assert resp.json()["is_admin"] is True
+
     def test_me_unauthenticated(self, client):
         # Clear any cookies from previous tests (TestClient carries cookies)
         client.cookies.clear()

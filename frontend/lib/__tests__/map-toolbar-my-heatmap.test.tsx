@@ -40,7 +40,7 @@ const INITIAL_LAYERS: LayerToggles = {
 
 let latestLayers: LayerToggles = INITIAL_LAYERS;
 
-function Harness() {
+function Harness({ menuOpen = false, isAdmin }: { menuOpen?: boolean; isAdmin?: boolean } = {}) {
   const [layers, setLayers] = useState<LayerToggles>(INITIAL_LAYERS);
   latestLayers = layers;
   const noop = () => {};
@@ -58,7 +58,7 @@ function Harness() {
     heatmapDays: null, setHeatmapDays: noop,
     dfciCount: null,
     exploreMode: false, setExploreMode: noop,
-    showUserMenu: false, setShowUserMenu: noop,
+    showUserMenu: menuOpen, setShowUserMenu: noop, isAdmin,
     userEmail: null, stravaName: null, stravaSyncing: false, stravaSyncMsg: null, lastSyncedAt: null,
     handleLogout: noop, setShowImportModal: noop, setShowExportModal: noop,
     activitiesCount: 0, mapInstance: null, dateLocale: 'fr-FR',
@@ -165,7 +165,51 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
   });
 });
 
-describe('MapLegend — one cyan "Mes sorties" entry next to the community ramp, signed-in only', () => {
+describe('MapToolbar — account menu "Admin" entry is admin-only', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  beforeEach(() => {
+    auth.token = 'cookie-auth';
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container.remove();
+  });
+
+  const adminLink = () => Array.from(container.querySelectorAll('a'))
+    .find((a) => a.getAttribute('href') === '/admin');
+
+  it('hidden for a regular signed-in rider (is_admin false / unknown)', async () => {
+    await act(async () => { root = createRoot(container); root.render(<Harness menuOpen />); });
+    // The menu itself is open (other entries render)…
+    expect(container.querySelector('[data-testid="map-open-import"]')).not.toBeNull();
+    // …but no Admin entry.
+    expect(adminLink()).toBeUndefined();
+    expect(container.textContent).not.toContain('Admin');
+  });
+
+  it('shown for an admin', async () => {
+    await act(async () => { root = createRoot(container); root.render(<Harness menuOpen isAdmin />); });
+    expect(adminLink()).toBeDefined();
+  });
+});
+
+describe('wording — legend and toolbar both say "Ma heatmap" / "My heatmap"', () => {
+  it('same label in FR and EN', async () => {
+    const fr = (await import('@/lib/translations/fr')).default;
+    const en = (await import('@/lib/translations/en')).default;
+    expect(fr['map.legend.myActivities']).toBe(fr['map.toolbar.myHeatmap']);
+    expect(fr['map.legend.myActivities']).toBe('Ma heatmap');
+    expect(en['map.legend.myActivities']).toBe(en['map.toolbar.myHeatmap']);
+    expect(en['map.legend.myActivities']).toBe('My heatmap');
+  });
+});
+
+describe('MapLegend — one cyan "Ma heatmap" entry next to the community ramp, signed-in only', () => {
   const waymarked = { hiking: false, cycling: false, mtb: false };
   const legend = (layers: LayerToggles = INITIAL_LAYERS) => (
     <I18nProvider><MapLegend layers={layers} waymarked={waymarked} /></I18nProvider>
@@ -184,22 +228,22 @@ describe('MapLegend — one cyan "Mes sorties" entry next to the community ramp,
     container.remove();
   });
 
-  it('static render has NO "Mes sorties" even for a signed-in rider (render never reads auth)', () => {
+  it('static render has NO "Ma heatmap" even for a signed-in rider (render never reads auth)', () => {
     auth.token = 'cookie-auth';
     const html = renderToString(legend());
-    expect(html).not.toContain('Mes sorties');
+    expect(html).not.toContain('Ma heatmap');
     expect(html).not.toContain('legend-my-activities');
     expect(html).toContain('legend-community');
   });
 
-  it('logged out after mount: no "Mes sorties" (a visitor has no traces and no toggle to hide it)', async () => {
+  it('logged out after mount: no "Ma heatmap" (a visitor has no traces and no toggle to hide it)', async () => {
     await act(async () => { root = createRoot(container); root.render(legend()); });
     expect(container.querySelector('[data-testid="legend-my-activities"]')).toBeNull();
-    expect(container.textContent).not.toContain('Mes sorties');
+    expect(container.textContent).not.toContain('Ma heatmap');
     expect(container.querySelector('[data-testid="legend-community"]')).not.toBeNull();
   });
 
-  it('signed in: hydrating the logged-out HTML does not mismatch, then ONE cyan "Mes sorties" appears right after the community ramp', async () => {
+  it('signed in: hydrating the logged-out HTML does not mismatch, then ONE cyan "Ma heatmap" appears right after the community ramp', async () => {
     container.innerHTML = renderToString(legend()); // the static export (logged out)
     auth.token = 'cookie-auth';
     const { hydrateRoot } = await import('react-dom/client');
@@ -214,18 +258,18 @@ describe('MapLegend — one cyan "Mes sorties" entry next to the community ramp,
     const mine = container.querySelector('[data-testid="legend-my-activities"]') as HTMLElement | null;
     expect(community).not.toBeNull();
     expect(mine).not.toBeNull();
-    expect(mine!.textContent).toContain('Mes sorties');
+    expect(mine!.textContent).toContain('Ma heatmap');
     // Exactly one entry for my traces — no per-sport list.
     expect(container.querySelectorAll('[data-testid="legend-my-activities"]').length).toBe(1);
     expect(container.textContent).not.toContain('Gravel');
-    // ORDER: "Mes sorties" is the very next legend row after the community ramp.
+    // ORDER: "Ma heatmap" is the very next legend row after the community ramp.
     expect(community!.nextElementSibling).toBe(mine);
     const swatch = mine!.firstElementChild as HTMLElement;
     expect(swatch.style.background).toMatch(/rgb\(6, 182, 212\)|#06b6d4/i);
     expect(MY_TRACES_COLOR).toBe('#06b6d4');
   });
 
-  it('signed in but "Ma heatmap" off: no "Mes sorties"', async () => {
+  it('signed in but "Ma heatmap" off: no "Ma heatmap"', async () => {
     auth.token = 'cookie-auth';
     await act(async () => {
       root = createRoot(container);

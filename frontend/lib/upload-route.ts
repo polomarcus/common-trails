@@ -48,3 +48,30 @@ export function chooseUploadPath<F extends NamedFile>(
   if (zip) return { kind: 'archive', file: zip };
   return { kind: 'files', files: arr };
 }
+
+/** Loose-trace extensions `/imports/files` accepts (the files-block picker's `accept`). */
+export function isTraceName(name: string): boolean {
+  return /\.(gpx|fit)$/i.test(name.trim());
+}
+
+/**
+ * Split a picked/dropped set into what will actually be uploaded and what is
+ * IGNORED, so the UI can say so instead of dropping files silently:
+ *   - archive path: every file but the chosen `.zip` is ignored;
+ *   - files path: anything that is not a `.gpx` / `.fit` is ignored.
+ */
+export function partitionUpload<F extends NamedFile>(
+  files: ArrayLike<F> | null | undefined,
+): { route: UploadRoute<F>; ignored: F[] } {
+  const route = chooseUploadPath(files);
+  const all: F[] = files ? Array.from(files) : [];
+  if (route.kind === 'archive') {
+    return { route, ignored: all.filter((f) => f !== route.file) };
+  }
+  if (route.kind === 'files') {
+    const kept = route.files.filter((f) => isTraceName(f.name));
+    const ignored = route.files.filter((f) => !isTraceName(f.name));
+    return { route: kept.length ? { kind: 'files', files: kept } : { kind: 'empty' }, ignored };
+  }
+  return { route, ignored: [] };
+}

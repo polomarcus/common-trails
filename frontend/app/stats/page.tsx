@@ -280,7 +280,35 @@ export default function StatsPage() {
           </div>
         )}
 
-        {!loading && totals && (
+        {/* Empty state: 0 activities → an import CTA instead of three "0 km" cards. */}
+        {!loading && totals && totals.activity_count === 0 && (
+          <div
+            data-testid="stats-empty-state"
+            style={{
+              background: '#fff', borderRadius: 14, padding: '28px 24px',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.07)', textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: 32, marginBottom: 8 }} aria-hidden="true">📥</div>
+            <p style={{ fontSize: 16, fontWeight: 700, color: '#1a1a1a', margin: '0 0 6px' }}>
+              {t('stats.noImportedTraces')}
+            </p>
+            <p style={{ fontSize: 14, color: '#666', margin: '0 0 16px', lineHeight: 1.5 }}>
+              {t('stats.noImportedTracesSub')}
+            </p>
+            <Link
+              href="/strava"
+              style={{
+                display: 'inline-block', padding: '10px 20px', borderRadius: 10,
+                background: '#2d6a4f', color: '#fff', fontWeight: 700, fontSize: 14, textDecoration: 'none',
+              }}
+            >
+              {t('stats.importCta')}
+            </Link>
+          </div>
+        )}
+
+        {!loading && totals && totals.activity_count > 0 && (
           <>
             {/* ── Global summary cards ── */}
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 24 }}>

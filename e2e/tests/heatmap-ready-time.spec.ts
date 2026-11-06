@@ -26,7 +26,7 @@ test.describe('Community heatmap — display pipeline init', () => {
   test.setTimeout(90000);
 
   test('community-trails source + density/line layers stand up (no interaction)', async ({ page }) => {
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
 
     const tGoto = Date.now();
     await page.goto(`${FRONTEND_URL}/map?lat=43.612&lon=3.875&zoom=13`);

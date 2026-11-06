@@ -64,7 +64,7 @@ interface Wiring {
 
 /** Open /map at the given zoom; wait for the live map handle to be exposed. */
 async function openMap(page: import('@playwright/test').Page, zoom: number): Promise<void> {
-  await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+  await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
   await page.goto(`${BASE_URL}/map?lat=43.6&lon=3.87&zoom=${zoom}`);
   await page.waitForLoadState('domcontentloaded');
   // __mapInstance is set in app/map/page.tsx; initMapLayers (which adds the

@@ -37,7 +37,7 @@ test.describe('Heatmap export modal (pre-computed only)', () => {
   // map-login-gate.spec.ts.)
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('user_id', 'e2e-export-member'));
-    await page.addInitScript(() => localStorage.setItem('cc_beta_dismissed', '1'));
+    await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
   });
 
   test('opens the export modal with the two static downloads', async ({ page }) => {

@@ -171,6 +171,11 @@ def render_archive_done_email(
     contribute to the heatmap (``contribute_heatmap=False``) no rebuild is
     triggered, so the copy only points to "Ma heatmap". The count is NOT
     repeated in the intro — the list below already carries it.
+
+    Provider-neutral wording ("Votre archive", never "archive Strava"): the
+    drain does not record which platform produced the .zip (pending_archives
+    has no provider column; Garmin/Komoot/… exports go through the same path).
+    The skip count is a single total — the drain does not split it by reason.
     """
     map_url = "https://chemins-communs.fr/map"
     # The community heatmap is also published as a raster XYZ tile pyramid on
@@ -189,7 +194,7 @@ def render_archive_done_email(
         else:
             subject = "Your archive has been processed"
             intro = (
-                "Your Strava archive has been processed, but no new trace was added — "
+                "Your archive has been processed, but no new trace was added — "
                 "they were most likely already imported (duplicates) or out of scope "
                 "(virtual rides, other sports…)."
             )
@@ -216,7 +221,7 @@ def render_archive_done_email(
         else:
             subject = "Votre archive a été traitée"
             intro = (
-                "Votre archive Strava a été traitée, mais aucune nouvelle trace n'a été "
+                "Votre archive a été traitée, mais aucune nouvelle trace n'a été "
                 "ajoutée — elles étaient probablement déjà importées (doublons) ou hors "
                 "périmètre (sorties virtuelles, autres sports…)."
             )

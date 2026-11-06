@@ -5,6 +5,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from urllib.parse import quote
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +13,7 @@ from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import func
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -59,10 +61,14 @@ _MAGIC_LINK_PURPOSE = "magic_link"
 #    session credential — `_decode_token` rejects any token carrying `purpose`.
 _EMAIL_CHANGE_PURPOSE = "email_change"
 _SYNTHETIC_EMAIL_DOMAIN = "@strava.local"
-# Rate-limit: at most N magic-link requests per email AND per IP within the
-# rolling window. Belt-and-suspenders with the slowapi per-IP decorator below.
-_MAGIC_LINK_MAX_PER_WINDOW = 3
+# Rate-limit within the rolling window: at most 3 requests per EMAIL (stops
+# mail-bombing one inbox) and 20 per IP (a club / campus / CGNAT shares one IP —
+# a 3-per-IP cap locked out the 4th rider). The slowapi decorator below uses
+# the same per-IP figure (keep _MAGIC_LINK_IP_LIMIT_STR in sync).
+_MAGIC_LINK_MAX_PER_EMAIL = 3
+_MAGIC_LINK_MAX_PER_IP = 20
 _MAGIC_LINK_WINDOW_MIN = 15
+_MAGIC_LINK_IP_LIMIT_STR = f"{_MAGIC_LINK_MAX_PER_IP}/{_MAGIC_LINK_WINDOW_MIN}minute"
 # Generic, non-enumerating response text (SSOT so both the success and the
 # rate-limited/unknown-email paths return the exact same body).
 _MAGIC_LINK_GENERIC_MSG = (
@@ -120,6 +126,9 @@ class UserOut(BaseModel):
     user_id: str
     email: str
     username: str
+    # Lets the frontend show admin-only entries (the /map Admin menu item) to
+    # admins only. Not a security boundary — /admin endpoints enforce it.
+    is_admin: bool = False
 
 
 class AuthenticatedUser(BaseModel):
@@ -135,6 +144,9 @@ class MagicLinkRequest(BaseModel):
     email: EmailStr
     # Optional UI locale so the email is sent in the user's language.
     locale: str | None = None
+    # Optional post-login path (e.g. "/map"), carried into the emailed link.
+    # Sanitized by ``_safe_redirect`` — only same-origin relative paths.
+    redirect: str | None = Field(default=None, max_length=512)
 
 
 class MagicLinkRequestResponse(BaseModel):
@@ -193,6 +205,24 @@ def _create_token(user_id: str, email: str) -> str:
     expire = datetime.now(UTC) + timedelta(minutes=JWT_EXPIRE_MINUTES)
     payload = {"sub": user_id, "email": email, "exp": expire}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _safe_redirect(raw: str | None) -> str | None:
+    """Return ``raw`` if it is a same-origin RELATIVE path, else ``None``.
+
+    Open-redirect guard for the magic link's ``redirect`` param: it must start
+    with exactly one "/" — "//evil.com" (protocol-relative), any backslash
+    (browsers fold "\\" into "/"), schemes ("https:", "javascript:") and
+    control characters are rejected. Mirrors frontend/lib/safe-redirect.ts.
+    """
+    if not raw:
+        return None
+    v = raw.strip()
+    if not v.startswith("/") or v.startswith("//") or "\\" in v:
+        return None
+    if len(v) > 512 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in v):
+        return None
+    return v
 
 
 def _normalize_email(email: str) -> str:
@@ -413,7 +443,7 @@ async def logout(response: Response) -> None:
 
 
 @router.post("/email/request", response_model=MagicLinkRequestResponse)
-@limiter.limit("3/15minute")
+@limiter.limit(_MAGIC_LINK_IP_LIMIT_STR)
 async def request_magic_link(
     request: Request,
     body: MagicLinkRequest,
@@ -422,12 +452,18 @@ async def request_magic_link(
     """Passwordless login step 1 — email a single-use magic link.
 
     Security posture:
-    * ALWAYS returns the same generic 200 body — never reveals whether an
-      account exists (no enumeration).
-    * Rate-limited per IP (the slowapi decorator) AND per email + per IP in the
-      DB (``_MAGIC_LINK_MAX_PER_WINDOW`` per ``_MAGIC_LINK_WINDOW_MIN`` min).
-      When over the limit we still return the generic 200 but send nothing.
+    * Returns the same generic 200 body whether or not the account existed.
+    * Rate-limited per IP (the slowapi decorator) AND in the DB: at most
+      ``_MAGIC_LINK_MAX_PER_EMAIL`` per email and ``_MAGIC_LINK_MAX_PER_IP``
+      per IP per ``_MAGIC_LINK_WINDOW_MIN`` min (riders behind one NAT are
+      not locked out by each other).
+      Over the limit → HTTP 429, nothing sent. The 429 reveals nothing about
+      account existence: accounts are auto-created (find-or-create), so every
+      address behaves the same. (It used to be a silent 200 — the user waited
+      for a link that never came.)
     * find-or-create: a first-time email becomes a full account.
+    * ``redirect`` (sanitized by ``_safe_redirect``) is appended to the emailed
+      link so the user lands back on the page they came from (e.g. /map).
     """
     email = _normalize_email(body.email)
     ip = _get_real_ip(request)
@@ -436,19 +472,27 @@ async def request_magic_link(
     now = datetime.now(UTC)
     window_start = now - timedelta(minutes=_MAGIC_LINK_WINDOW_MIN)
 
-    # Rate-limit by email OR IP (DB-backed, testable regardless of slowapi).
-    recent = (
-        db.query(MagicLinkToken)
+    # Rate-limit per email AND per IP (DB-backed, testable regardless of
+    # slowapi) — ONE query, two conditional counts.
+    per_email, per_ip = (
+        db.query(
+            func.count().filter(MagicLinkToken.email == email),
+            func.count().filter(MagicLinkToken.request_ip == ip),
+        )
         .filter(
             MagicLinkToken.purpose == _MAGIC_LINK_PURPOSE,
             MagicLinkToken.created_at >= window_start,
             (MagicLinkToken.email == email) | (MagicLinkToken.request_ip == ip),
         )
-        .count()
+        .one()
     )
-    if recent >= _MAGIC_LINK_MAX_PER_WINDOW:
-        logger.info("Magic-link rate-limited (email/ip) — returning generic 200")
-        return generic
+    if per_email >= _MAGIC_LINK_MAX_PER_EMAIL or per_ip >= _MAGIC_LINK_MAX_PER_IP:
+        logger.info("Magic-link rate-limited (email/ip) — returning 429")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login link requests. Please try again in a few minutes.",
+            headers={"Retry-After": str(_MAGIC_LINK_WINDOW_MIN * 60)},
+        )
 
     # find-or-create the user by email. A magic-link account has no password.
     user = db.query(User).filter(User.email == email).first()
@@ -480,6 +524,9 @@ async def request_magic_link(
     # the generic 200 is returned regardless of the email backend's health.
     locale = (body.locale or "fr").lower()
     verify_url = f"{FRONTEND_URL}/auth/verify?token={token}"
+    safe_redirect = _safe_redirect(body.redirect)
+    if safe_redirect:
+        verify_url += f"&redirect={quote(safe_redirect, safe='')}"
     subject, html = render_magic_link_email(verify_url, locale=locale)
     send_email(email, subject, html)
 
@@ -561,6 +608,7 @@ async def me(
         user_id=current_user.user_id,
         email=current_user.email,
         username=current_user.username,
+        is_admin=current_user.is_admin,
     )
 
 

@@ -22,7 +22,7 @@ function SelectedActivityCard({ activity, dateLocale, onClose }: SelectedActivit
   return (
     <div
       style={{
-        position: 'absolute', bottom: 16, left: 16,
+        position: 'absolute', bottom: 'calc(var(--beta-banner-h, 0px) + 16px)', left: 16,
         background: '#fff', borderRadius: 12, padding: '14px 18px',
         boxShadow: '0 4px 24px rgba(0,0,0,0.15)', zIndex: 10,
         maxWidth: 360, width: 'calc(100vw - 32px)',

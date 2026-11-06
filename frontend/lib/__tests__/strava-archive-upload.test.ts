@@ -7,8 +7,13 @@ import {
   putArchive,
   uploadArchive,
   ArchiveUploadError,
+  MAX_ARCHIVE_BYTES,
+  archiveErrorKey,
+  checkArchiveSize,
   type ArchiveInitResult,
 } from '../strava-archive-upload';
+import fr from '../translations/fr';
+import en from '../translations/en';
 
 const API = 'http://api.test';
 
@@ -190,5 +195,82 @@ describe('putArchive URL + header selection', () => {
     // (withCredentials) is the sole credential.
     expect(sent.headers.Authorization).toBeUndefined();
     expect(sent.withCredentials).toBe(true);
+  });
+});
+
+// ── Size pre-check + translated error mapping (onboarding friction) ─────────
+describe('archive size pre-check + error → translation key mapping', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('MAX_ARCHIVE_BYTES mirrors deploy-prod.sh (2 GiB = 2147483648)', () => {
+    expect(MAX_ARCHIVE_BYTES).toBe(2147483648);
+  });
+
+  it('checkArchiveSize flags only files over the limit', () => {
+    expect(checkArchiveSize({ size: MAX_ARCHIVE_BYTES })).toBeNull();
+    const err = checkArchiveSize({ size: MAX_ARCHIVE_BYTES + 1 });
+    expect(err).toBeInstanceOf(ArchiveUploadError);
+    expect(err!.code).toBe('too_large');
+  });
+
+  it('uploadArchive refuses a too-big blob before ANY network call', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const blob = new Blob(['z']);
+    Object.defineProperty(blob, 'size', { value: MAX_ARCHIVE_BYTES + 1 });
+    const put = vi.fn();
+    await expect(uploadArchive({
+      apiUrl: API, token: null, blob,
+      payload: { sport: 'road', consent: true, consent_version: 'v5', consent_text: 'x', locale: 'fr' },
+      put,
+    })).rejects.toMatchObject({ code: 'too_large' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it("maps the backend 'archive too large' (413 on /complete) to the tooLarge key", async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse(gcsInit))
+      .mockResolvedValueOnce(jsonResponse({
+        detail: 'archive too large (3000 MB > 2048 MB limit); split your export into smaller archives or contact us.',
+      }, false, 413)));
+    const err = await uploadArchive({
+      apiUrl: API, token: null, blob: new Blob(['z']),
+      payload: { sport: 'road', consent: true, consent_version: 'v5', consent_text: 'x', locale: 'fr' },
+      put: vi.fn().mockResolvedValue(undefined),
+    }).catch((e) => e);
+    expect(err.code).toBe('too_large');
+    const key = archiveErrorKey(err);
+    expect(key).toBe('strava.archive.err.tooLarge');
+    expect(fr[key]).toContain('2 Go');
+    expect(en[key]).toContain('2 GB');
+  });
+
+  it('maps init / network failures to translated keys, never the raw English text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({}, false, 500)));
+    const initErr = await initArchiveUpload({ apiUrl: API, token: null }, {
+      sport: 'road', consent: true, consent_version: 'v5', consent_text: 'x', locale: 'fr',
+    }).catch((e) => e);
+    expect(initErr.message).toMatch(/init failed/); // raw text stays internal…
+    expect(archiveErrorKey(initErr)).toBe('strava.archive.err.server'); // …the UI gets a key
+
+    class FailingXHR {
+      status = 0;
+      upload = {};
+      onload: null | (() => void) = null;
+      onerror: null | (() => void) = null;
+      open() {}
+      setRequestHeader() {}
+      send() { queueMicrotask(() => this.onerror?.()); }
+    }
+    vi.stubGlobal('XMLHttpRequest', FailingXHR as unknown as typeof XMLHttpRequest);
+    const netErr = await putArchive(gcsInit, new Blob(['z']), { apiUrl: API, token: null }).catch((e) => e);
+    expect(archiveErrorKey(netErr)).toBe('strava.archive.err.network');
+
+    for (const key of ['strava.archive.err.server', 'strava.archive.err.network', 'strava.archive.err.tooLarge']) {
+      expect(fr[key], `fr ${key}`).toBeTruthy();
+      expect(en[key], `en ${key}`).toBeTruthy();
+    }
+    expect(archiveErrorKey(new Error('boom'))).toBe('strava.archive.failed');
   });
 });
