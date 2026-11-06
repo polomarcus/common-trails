@@ -334,7 +334,7 @@ def test_stub_code_outside_test_mode_never_short_circuits_oauth(client, db_sessi
 
     assert exchanged == ["stub_code_test"], "the stub code must hit the real token exchange"
     assert resp.status_code == 502
-    assert "set-cookie" not in {k.lower() for k in resp.headers.keys()}
+    assert "set-cookie" not in {k.lower() for k in resp.headers}
     from sqlalchemy import text as sa_text
     stub_links = db_session.execute(sa_text(
         "SELECT count(*) FROM integration_accounts WHERE external_user_id = 'strava_stub_user_42'"
