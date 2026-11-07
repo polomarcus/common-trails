@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Ingestion Pipeline — Architecture & Operations
 
 > **New to the codebase?** Start with [`docs/ingestion-pipeline-explained.md`](ingestion-pipeline-explained.md) — it covers

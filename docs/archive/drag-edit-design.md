@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Drag-edit waypoint design — where we are, where we should go
 
 **Status:** design v3, 2026-05-30 — Paul resolved all 5 questions, the immediate-bug fix is implemented (off-by-one in line-drag waypoint insert), tests pin both the splice contract and the no-U-turn invariant. **Two follow-ups queued: Q2's (2b) snap-to-OSM-road and Q3's downstream-quality recalculation.** Triggered by Paul's bug report — when dragging a new waypoint from the source itinerary, the router adds two detours (visible as a U-turn pattern) instead of routing direct between the new position and its neighbours.
@@ -5,16 +7,16 @@
 **Audience:** Paul + future Claude sessions + the [routing-client agent](../.claude/agents/routing-client.md) when it picks this back up.
 
 **Fix shipped** in `frontend/lib/map-utils.ts` + `frontend/lib/init-map-layers.ts`:
-- New pure function [`computeLineDragInsert(waypoints, segIdx, dropPt)`](../frontend/lib/map-utils.ts) — encapsulates the correct splice with documented index convention.
+- New pure function [`computeLineDragInsert(waypoints, segIdx, dropPt)`](../../frontend/lib/map-utils.ts) — encapsulates the correct splice with documented index convention.
 - Line-drag handler in `init-map-layers.ts` now calls `computeLineDragInsert` instead of inlining `splice(segIdx + 1, 0, dropPt)`. The off-by-one — root cause of the U-turn — is gone.
-- New helper [`findNoBacktrackViolations(coords, waypoints, opts)`](../frontend/lib/map-utils.ts) — geometric invariant for runtime diagnostics + tests.
+- New helper [`findNoBacktrackViolations(coords, waypoints, opts)`](../../frontend/lib/map-utils.ts) — geometric invariant for runtime diagnostics + tests.
 - Bug found and fixed in the initial implementation of `findNoBacktrackViolations`: the cosLimit formula used `cos(180 - maxReverseDeg)` (e.g. `cos(30°)`), which fired on any 30°+ turn instead of actual U-turns. Now correctly `cos(maxReverseDeg)` so only true reversals (> 150°) trigger.
 
 **Tests** ([`route-line-drag.test.ts`](../frontend/lib/__tests__/route-line-drag.test.ts), 12 tests, all passing):
 - `computeLineDragInsert`: inserts at `segIdx` (the bug fix), returns correct prev/next neighbours, handles edge cases (first/last path segment, anchor segIdx=0 returns null, out-of-range returns null, input not mutated).
 - `findNoBacktrackViolations`: clean route emits no issues, the synthetic U-turn-pattern coords correctly trigger a `sharp reversal` issue (the screenshot reproduction), missed waypoints and out-of-order visits are detected, degenerate inputs are handled.
 
-**Cancel/undo:** yes, `routeHistory: {past, future}` + `pushSnapshotRef.current()` at [`page.tsx`](../frontend/app/map/page.tsx) — Cmd-Z reverts the last waypoint operation. The line-drag handler must call `pushSnapshotRef.current()` BEFORE the splice (verify; click-insert at `useRouteEditorInteraction.ts:334` already does — keep behaviour identical).
+**Cancel/undo:** yes, `routeHistory: {past, future}` + `pushSnapshotRef.current()` at [`page.tsx`](../../frontend/app/map/page.tsx) — Cmd-Z reverts the last waypoint operation. The line-drag handler must call `pushSnapshotRef.current()` BEFORE the splice (verify; click-insert at `useRouteEditorInteraction.ts:334` already does — keep behaviour identical).
 
 ---
 
@@ -32,8 +34,8 @@ The route editor has THREE distinct drag/click interactions, each handled in a d
 Code anchors:
 - Click-insert: [`frontend/hooks/useRouteEditorInteraction.ts:330-392`](../frontend/hooks/useRouteEditorInteraction.ts)
 - Waypoint-marker drag: same file, uses `wpDragIdxRef` and `AsyncDragRouter` (`createAsyncDragRouter` in [`frontend/lib/snap-to-road.ts:56`](../frontend/lib/snap-to-road.ts))
-- Line drag (ghost marker): `isDraggingLineRef` + `lineDragSegIdxRef` in [`frontend/app/map/page.tsx:417-418`](../frontend/app/map/page.tsx), plumbing in `useRouteEditorInteraction.ts`
-- Waypoint list lives at [`page.tsx:211`](../frontend/app/map/page.tsx) as `[lon, lat][]`; `segments` at `routeSegmentsRef.current` as `[lon, lat][][]` (one polyline per consecutive waypoint pair).
+- Line drag (ghost marker): `isDraggingLineRef` + `lineDragSegIdxRef` in [`frontend/app/map/page.tsx:417-418`](../../frontend/app/map/page.tsx), plumbing in `useRouteEditorInteraction.ts`
+- Waypoint list lives at [`page.tsx:211`](../../frontend/app/map/page.tsx) as `[lon, lat][]`; `segments` at `routeSegmentsRef.current` as `[lon, lat][][]` (one polyline per consecutive waypoint pair).
 
 The data model invariant: **`segments.length === waypoints.length - 1`** at all times outside an in-flight re-route.
 

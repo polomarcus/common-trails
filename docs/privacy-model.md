@@ -4,8 +4,8 @@
 collects, what it publishes, how individuals are protected, the exposures that
 remain, and the concrete posture chosen for the private-beta launch.
 
-Companion docs: [`raw-trace-cutover-runbook.md`](raw-trace-cutover-runbook.md)
-(the staged, Paul-gated flip to the raw-trace display) and
+Companion docs: [`archive/raw-trace-cutover-runbook.md`](archive/raw-trace-cutover-runbook.md)
+(the staged flip to the raw-trace display — executed, archived) and
 [`gdpr-deletion-runbook.md`](gdpr-deletion-runbook.md) (account deletion).
 
 Decided by Paul (2026-07): *raw precise traces + endpoint masking + a tunable
@@ -32,8 +32,11 @@ cookies, or data resale. The only cookie is the auth JWT.
 - **Explicit consent** (GDPR Art. 6(1)(a)) for contributing traces to the
   public map. Consent is a specific, unbundled checkbox on the upload path; the
   exact wording the user saw is stored verbatim in `contribution_consents`
-  (version-stamped — currently `contribution-2026-07-v3`), so the audit trail
-  proves *what* each user agreed to.
+  (version-stamped — currently `contribution-2026-09-v5`,
+  `frontend/lib/strava-archive-consent.ts`), so the audit trail proves *what*
+  each user agreed to. v5 also carries the non-exclusive grant allowing the
+  project to offer contributions under a commercial licence alongside ODbL;
+  v1–v4 were ODbL-only.
 - **Contract / legitimate interest** for running the account itself (login,
   showing the user their own traces).
 - The published community dataset is released under the **ODbL 1.0** open
@@ -63,7 +66,7 @@ their own archives, the public map is sparse — that is expected, not a bug.)
 
 Two independent mechanisms, both always applicable to the published map:
 
-1. **Endpoint masking (always on, radial).** Every point lying within
+1. **Endpoint masking (always on, radial — `backend/app/services/trace_privacy.py`).** Every point lying within
    `TRACE_MASK_METERS` (**default 200 m**) of an activity's physical start *or*
    end is removed — anywhere in the trace, so a loop that swings back past the
    house mid-ride is masked there too. "Start" and "end" are *zones*, not a
@@ -104,7 +107,7 @@ The honest exposures:
   route line is still traced through them.
 - **Masking is endpoint-only.** A loop that leaves home, rides out, and returns
   *past* home mid-route still exposes the home area at the mid-route pass — only
-  the very first and very last `TRACE_MASK_METERS` are trimmed.
+  the endpoints are masked.
 - **ODbL is irrevocable for data already published.** A user can delete their
   traces from our systems (§7), but anyone who downloaded the ODbL dataset while
   a trace was public keeps their copy. Deletion stops *future* publication and
@@ -179,12 +182,12 @@ Caveat (§5): deletion cannot recall ODbL copies third parties already downloade
    viewable by anonymous visitors (home hero + `/map`); only the bulk ODbL
    community-data export requires a login. Endpoint masking + K = 1 are the
    privacy mechanisms, not a page gate.
-3. Ship the **reworded consent** (v3 — drops the false "anonymisées" claim; see
-   the cutover runbook step (e)) *with* the cutover, not before — the wording
-   must be true of the behaviour actually live.
-4. Keep the matching substrate live during the soak (raw display is reversible
-   to matched); do not drop `osm_road_edges` / `heat_edges` until raw has soaked
-   and Paul explicitly approves the one-way steps.
+3. Ship the **reworded consent** (v3 — drops the false "anonymisées" claim)
+   *with* the cutover, not before — the wording must be true of the behaviour
+   actually live. *(Done; current version is v5.)*
+4. *(Done.)* The raw display soaked and the OSM matching substrate
+   (`osm_road_edges`, `heat_edges_agg`, …) was dropped in prod; the switch back
+   to matched is no longer available.
 
 ## 10. Checklist to flip to public
 
@@ -195,7 +198,7 @@ Caveat (§5): deletion cannot recall ODbL copies third parties already downloade
       value for public.
 - [ ] The map is already public (no page gate to lift). Re-evaluate whether the
       members-only ODbL bulk export can be opened wider once K = 2 is live.
-- [ ] Consent wording (v3) is live and matches the behaviour; decide with legal
+- [ ] Consent wording (v5) is live and matches the behaviour; decide with legal
       counsel whether users who consented under an older version need re-consent.
 - [ ] Privacy page reflects the raw model (done in this change): no "K=2
       minimum / impossible to reconstruct an individual trace" claims remain.

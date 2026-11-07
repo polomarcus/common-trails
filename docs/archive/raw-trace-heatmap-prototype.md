@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Raw-trace heatmap — prototype, benchmark & flag-gated implementation
 
 **Status: flag-gated feature, default OFF. Safe to merge — prod behaviour is
@@ -74,7 +76,7 @@ Same bbox as `docs/img/grid-vs-osm-*.png` (lon 3.70–4.05, lat 43.50–43.75), 
 it is directly comparable. 605 activities, 6.1 M densified points accumulated
 into a ~5 m raster (5640×5528), Strava-style hot ramp on black.
 
-![Raw-trace heatmap](img/raw-trace-heatmap.png)
+![Raw-trace heatmap](../img/raw-trace-heatmap.png)
 
 This reads as the **Strava raw-raster look**: precise thin individual traces,
 bright warm corridors where many overlap (the Montpellier N-S spine burns
@@ -88,7 +90,7 @@ this single-user-dominated corpus.
 Zoom on the densest trace-endpoint cell (the closest thing to "home" in the
 corpus), ~800 m box at ~1.5 m/px, unmasked vs masked (200 m).
 
-![Endpoint masking before/after](img/raw-trace-endpoint-mask.png)
+![Endpoint masking before/after](../img/raw-trace-endpoint-mask.png)
 
 The bright terminus knot in the left ("AVANT") panel — where traces converge and
 end at home — opens into a faint scatter in the right ("APRÈS") panel: the

@@ -7,6 +7,12 @@ encodes an incident that already happened.**
 
 ## 1. Deploy ONLY via `scripts/deploy-prod.sh` — never hand-typed `gcloud`
 
+**Normal path: merge to `main`.** `.github/workflows/deploy-gcp.yml` runs on
+every push to `main` (and on manual `workflow_dispatch`): it builds the
+frontend static export into the backend image, pushes it, then runs
+`DEPLOY_YES=1 scripts/deploy-prod.sh <sha>`. See [`ci.md`](ci.md). Run the
+script by hand only for an out-of-band redeploy:
+
 ```bash
 export STRAVA_WEBHOOK_SUBSCRIPTION_ID='349136'   # numeric id (current live value), or '' for allow-all
 scripts/deploy-prod.sh <IMAGE_TAG>               # tag already built+pushed to Artifact Registry
@@ -27,11 +33,13 @@ The env set in `deploy-prod.sh` is the env set of the **live-good revision**
 (rev 00395), captured 1:1 — NOT terraform's superset. `infra/terraform/main.tf`
 is a useful *design* reference, but the working revision is the SSOT: adding a
 var terraform declares but live doesn't carry is itself drift (e.g. the matview
-queue dropped in migration 0055, the export queue, `SENTRY_DSN`, `DB_POOL_SIZE`,
-`SKIP_OSM_FETCH` — none are on live; Overpass is off in prod via
-`OVERPASS_ENABLED=false` alone). Two host subtleties the script encodes:
-`HEATMAP_K_ANONYMITY=1` (single-user beta — K=2 would blank the public heatmap;
-flip to 2 once ≥2 contributors), and the `INTERNAL_*_HANDLER_URL` vars point at
+queue dropped in migration 0055, the export queue, `SKIP_OSM_FETCH`; Overpass is
+off in prod via `OVERPASS_ENABLED=false` alone). `SENTRY_DSN` (secret) and
+`DB_POOL_SIZE`/`DB_MAX_OVERFLOW` have since been added deliberately. Host
+subtleties the script encodes: the heatmap display gate is
+`HEATMAP_DISPLAY_SOURCE=raw` + `HEATMAP_MIN_USERS=1` (distinct-user floor, K=1
+during the beta) + `TRACE_MASK_METERS=200` (`HEATMAP_K_ANONYMITY=1` only feeds
+legacy matched-era paths), and the `INTERNAL_*_HANDLER_URL` vars point at
 a **`.run.app`** origin (their OIDC audience is bound to it), while the
 user-facing `FRONTEND_URL` / redirect / webhook-callback use `chemins-communs.fr`.
 Since the microservice split (§8) the three HEAVY handler URLs (heat / artefact
@@ -49,66 +57,68 @@ d['spec']['template']['spec']['containers'][0]['env']]"
 
 ## 2. Every Cloud Run Job is synced to the SAME image as the service
 
-`deploy-prod.sh` updates the image of **all 11** jobs (`JOBS=(…)` — import-strava,
-strava-subscribe, resync-strava, rebuild-heatmap, build-pmtiles, rebuild-heat-agg,
-verify-heat-agg, import-osm, group-edges-osm, migrate-edge-clustering,
-recompute-elevation-gain — matches `gcloud run jobs list`). **Why.** Jobs were
+`deploy-prod.sh` updates the image of **all 6** live jobs (`JOBS=(…)` —
+import-strava, strava-subscribe, resync-strava, build-pmtiles,
+ingest-pending-archives, resync-reminder) and asserts their memory, env and
+secrets (`job_memory_for` / `job_env_for` / `job_secrets_for`). The seven
+matched-era jobs (import-osm, group-edges-osm, rebuild-heatmap,
+rebuild-heat-agg, verify-heat-agg, migrate-edge-clustering,
+recompute-elevation-gain) were removed from the list at the raw-trace pivot.
+**Why.** Jobs were
 left pinned to a pre-migration image (git-sha `65251dfb`, pre-0056) and threw
 `bigint = text` when they ran against the new schema. A deploy must never leave
 a job on a stale image. Add any new job to that list the moment it's created
 (cross-check `gcloud run jobs list --region=europe-west1` after a deploy).
 
-## 3. `min-instances=0` cold-start tradeoff — the weekly resync is load-bearing
+## 3. Webhook drops — the weekly resync is load-bearing
 
-The api service scales to zero (≈$0 idle on the micro tier). The cost: a Strava
-push webhook `POST` that arrives while the service is cold can miss Strava's
-~2 s ack window → Strava drops the event → that activity is **never** pushed
-again. This is *accepted*, because the **weekly Strava resync scheduler**
+The WEB service now runs `min-instances=1` (`deploy-prod.sh`, warm 512Mi), which
+removes most of the cold-start window; the WORKER still scales to zero. A Strava
+push webhook `POST` that is lost (cold start, deploy, outage) is **never**
+pushed again by Strava. This is *accepted*, because the **weekly Strava resync scheduler**
 (`common-trails-resync-strava-weekly-prod` → the `common-trails-resync-strava-prod`
 Cloud Run Job) is a *trailing-window*
 reconciliation (`after = now − RESYNC_WINDOW_DAYS`): it re-scans the recent
 window every Monday and ingest-dedup absorbs what we already have, so a dropped
 webhook event is recovered within the window. **Do not delete that scheduler
-thinking webhooks made it redundant** — it is the safety net that makes
-scale-to-zero acceptable. (History: the monthly cursor-based resync *was*
+thinking webhooks made it redundant** — it is the safety net for lost
+webhook events. (History: the monthly cursor-based resync *was*
 removed for webhooks in #341; the loss-recovery gap forced the weekly
 trailing-window version back in, 2026-07-10.)
 
-## 4. Heavy jobs need a temporary tier bump, then downgrade
+## 4. The heatmap build is a Cloud Run Job (8Gi), not a DB tier bump
 
-db-f1-micro handles steady-state serving and — since #441/#442 — the
-`build-pmtiles` job too (it reads the ~45 k-row `heat_edges_agg`, not raw
-`heat_edges`). Three ops still scan/rebuild the full ~5 M-row `heat_edges` and
-**OOM/timeout the micro tier**; bump the tier first, run, then downgrade
-(post-rebuild downgrade is pre-authorized):
+Since the raw-trace pivot, `build-pmtiles` reads `activities` directly
+(`build_pmtiles.py`, raw branch of `main`) and the OSM substrate
+(`osm_road_edges`, `heat_edges_agg`, …) is dropped in prod, so the old
+"bump the Cloud SQL tier → rebuild `heat_edges` → downgrade" dance is gone.
+The job runs on db-f1-micro; its memory is asserted at **8Gi** by
+`deploy-prod.sh` (`job_memory_for`) because the export runs in a child process
+(`_run_raw_export`, `HEATMAP_EXPORT_ISOLATED`) and shares one cgroup with the
+tmpfs intermediates and tippecanoe. Lowering it there silently reverts any
+out-of-band bump on the next deploy. Manual run + verification:
+[`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 
-```bash
-gcloud sql instances patch common-trails-prod --tier=db-custom-2-7680   # bump
-# … run: rebuild_heatmap  |  python -m app.jobs.rebuild_heat_agg (backfill)  |  python -m app.jobs.verify_heat_agg
-gcloud sql instances patch common-trails-prod --tier=db-f1-micro        # downgrade
-```
+Anything on a **request or cron hot path** must stay bounded
+(`statement_timeout`, bbox filters); the `/admin` stats are bounded + fail-soft
+(`ADMIN_STAT_TIMEOUT_MS`, degrade to `-1` rather than dropping the connection).
 
-Anything on a **request or cron hot path** must never full-scan raw
-`heat_edges` — that severs the micro-tier connection (`build_pmtiles` learned
-this in #442). The live MVT tile endpoint is bbox+`statement_timeout`-bounded;
-`_emit_heat_quality_metrics` is bbox-bounded and post-upload; the `/admin`
-dashboard's heat_edges counts are now bounded + fail-soft
-(`_heat_edge_stats`, `ADMIN_STAT_TIMEOUT_MS`, degrades to `-1` rather than
-dropping the connection).
+## 5. Terraform is retired — do NOT `apply`
 
-## 5. Terraform is frozen — do NOT `apply`
-
-`infra/terraform/` is the **design** SSOT (read it to derive the correct env),
-but its state still references the DELETED old resources, so any
-`terraform apply` recreates them (including the old 200 GB DB). The
-`deploy-gcp.yml` GitHub workflow stays **disabled** for the same reason. Deploy
-by hand with `deploy-prod.sh` until infra is deliberately re-terraformed from a
-clean state.
+`infra/terraform/*.tf` were renamed `*.tf.archived` (see
+[`infra/terraform/README.md`](../infra/terraform/README.md)): terraform state
+still references deleted resources, so any `apply` would recreate them. Prod is
+deployed by `deploy-gcp.yml` → `deploy-prod.sh` (gcloud only). The archived
+files remain a design reference, not a source of truth.
 
 ## 6. Post-deploy verify
 
 After a deploy, confirm the two build-time artefacts the frontend + /admin
 depend on are current:
+
+- **Freshness pointer.** `curl -s https://tiles.chemins-communs.fr/heatmap-display.json`
+  — `snapshot_started_at` / `captured_at` tell you when the live heatmap was
+  built (details in [`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md)).
 
 - **`stats.json` published (#446).** The `build-pmtiles` job computes the
   home-banner headline via `compute_community_stats(db, min_uc)` (the SSOT in
@@ -176,7 +186,7 @@ Since 2026-07-13 prod runs **two Cloud Run services from the SAME image**:
 
 | Service | Memory | Scale | Serves |
 |---|---|---|---|
-| `common-trails-api-prod` (WEB) | **512Mi** | min=0, max=1 | static frontend + light API (auth, `/imports` init/complete, Strava OAuth, heatmap/export reads, `me_activities`) + the LIGHT daily Strava health-check |
+| `common-trails-api-prod` (WEB) | **512Mi** | min=1 (warm), max=1 | static frontend + light API (auth, `/imports` init/complete, Strava OAuth, heatmap/export reads, `me_activities`) + the LIGHT daily Strava health-check |
 | `common-trails-worker-prod` (WORKER) | **2Gi** | min=0 (scale-to-zero), max=1 | the HEAVY Cloud Tasks handlers: `POST /internal/ingest/heat` (heat compute), `/internal/artefacts/rebuild` (PMTiles build), `/internal/strava/webhook-event` (Strava fetch+ingest) |
 
 **Why.** The 2Gi + heavy CPU were forced by the in-request `/internal/*`
@@ -238,12 +248,9 @@ idle worker costs ~nothing (scale-to-zero) so leaving it deployed but unwired is
 also a valid, faster rollback. Cloud Tasks tasks already enqueued for the worker
 drain normally; nothing needs draining to flip back.
 
-**Should the 512Mi web be min=1 (warm)?** *Advisable, and now cheap.* At 512Mi a
-warm instance is a fraction of the old 2Gi cost, and a warm web removes the
-cold-start webhook-drop window (§3) for the public `POST` that acks Strava. This
-PR does **not** flip it (out of scope — it only enables 512Mi); consider
-`--min-instances=1` on the WEB service as a cheap follow-up once 512Mi is proven
-stable in prod. The WORKER should stay min=0 (scale-to-zero is the whole point).
+**Warm web.** The WEB service runs `--min-instances=1` (`deploy-prod.sh`,
+`deploy_service … 1`): at 512Mi a warm instance is cheap and kills the ~43 s
+cold start. The WORKER stays min=0 (scale-to-zero is the whole point).
 
 ## Account
 
