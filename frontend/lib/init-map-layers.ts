@@ -23,7 +23,7 @@ import {
 import type { ActivityItem } from '@/lib/map-utils';
 import { trace } from '@/lib/perf-trace';
 import {
-  DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY,
+  DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY, DFCI_MIN_ZOOM,
 } from '@/lib/routing-style';
 import { communityPmtilesUrl, resolveCommunityPmtilesUrl } from '@/lib/cdn-cache';
 import { MY_TRACES_COLOR } from '@/lib/constants';
@@ -209,6 +209,7 @@ function addDfciTrails(m: any): void {
     id: 'dfci-trails-casing',
     type: 'line',
     source: 'dfci-trails',
+    minzoom: DFCI_MIN_ZOOM,
     layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': DFCI_COLOR_WHITE,
@@ -221,6 +222,7 @@ function addDfciTrails(m: any): void {
     id: 'dfci-trails-line',
     type: 'line',
     source: 'dfci-trails',
+    minzoom: DFCI_MIN_ZOOM,
     layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': DFCI_COLOR,
@@ -229,12 +231,12 @@ function addDfciTrails(m: any): void {
       'line-dasharray': DFCI_DASH_ARRAY,
     },
   });
-  // DFCI labels — visible from zoom 6, "DFCI" far, "DFCI {ref}" close
+  // DFCI labels — visible with the lines, "DFCI" far, "DFCI {ref}" close
   m.addLayer({
     id: 'dfci-trails-label',
     type: 'symbol',
     source: 'dfci-trails',
-    minzoom: 6,
+    minzoom: DFCI_MIN_ZOOM,
     layout: {
       visibility: 'none',
       'symbol-placement': 'line',
