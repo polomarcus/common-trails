@@ -1,0 +1,4 @@
+{
+  "_comment": "SSOT of the community heatmap kernel radius (CSS px) per zoom. Read by backend raw_trace_display (heat_points level-of-detail: point spacing per zoom must stay below this radius, else a lone trace renders as beads) and pinned against frontend/lib/community-heatmap-layers.ts HEAT_RADIUS_RAMP by the vitest community-heatmap-layers.test.ts. Change both together.",
+  "stops": [[6, 2], [10, 4], [13, 8], [16, 10], [18, 12]]
+}
