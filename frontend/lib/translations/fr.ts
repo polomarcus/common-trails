@@ -394,7 +394,7 @@ const fr: Translations = {
   'strava.archive.acceptedQueued': 'Archive reçue — traitement en cours. Vous recevrez un email à la fin ; vos sorties apparaîtront dans « Ma heatmap », la heatmap commune se met à jour en général dans l\'heure.',
   'strava.archive.failed': "Échec de l'envoi de l'archive.",
   'strava.archive.err.tooLarge': 'Archive trop volumineuse (max 2 Go). Découpez votre export en plusieurs .zip plus petits et envoyez-les un par un.',
-  'strava.archive.err.network': "Connexion interrompue pendant l'envoi. Vérifiez votre réseau et réessayez.",
+  'strava.archive.err.network': "Connexion interrompue pendant l'envoi. Vérifiez votre réseau et redéposez le même fichier : l'envoi reprendra là où il s'était arrêté.",
   'strava.archive.err.server': "Le serveur n'a pas pu recevoir votre archive. Réessayez dans quelques minutes.",
   'strava.archive.maxSize': 'max 2 Go',
   'strava.archive.seeMap': 'Voir la carte →',

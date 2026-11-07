@@ -1,0 +1,8 @@
+[
+  {
+    "origin": ["https://chemins-communs.fr"],
+    "method": ["PUT", "OPTIONS", "POST", "GET"],
+    "responseHeader": ["Content-Type", "Content-Range", "Range", "X-Goog-Resumable"],
+    "maxAgeSeconds": 3600
+  }
+]

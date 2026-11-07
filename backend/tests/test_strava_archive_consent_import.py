@@ -331,6 +331,161 @@ class TestInitReturnsSignedUrl:
         assert body["upload_url"] == f"/imports/strava-archive/upload/{body['archive_id']}"
 
 
+class TestInitResumableSession:
+    """Resumable mode: init opens a GCS resumable session bound to the DECLARED
+    size + the site origin (mocked only at the google-client boundary, so the
+    real ``create_resumable_session`` runs); over-cap sizes 413 before any
+    session exists; local dev keeps the single-PUT stand-in."""
+
+    SIZE = 1_800 * 1024 * 1024  # a 1.8 GB export — the case resumable exists for
+
+    @pytest.fixture()
+    def gcs_blob(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from app.services import archive_intake
+
+        blob = MagicMock(name="blob")
+        blob.create_resumable_upload_session.return_value = (
+            "https://storage.googleapis.com/upload/storage/v1/b/test-bucket/o"
+            "?uploadType=resumable&upload_id=SESSION123"
+        )
+        client = MagicMock(name="client")
+        client.bucket.return_value.blob.return_value = blob
+        monkeypatch.setattr(archive_intake, "_get_client", lambda: client)
+        monkeypatch.setattr(archive_intake, "UPLOADS_BUCKET", "test-bucket")
+        monkeypatch.setattr(archive_intake, "MAX_ARCHIVE_BYTES", 2 * 1024**3)
+        monkeypatch.setattr("app.config.FRONTEND_URL", "https://chemins-communs.fr/")
+
+        def _no_signed_put(key):  # resumable must not need the signer at all
+            raise AssertionError("signed PUT minted in resumable mode")
+        monkeypatch.setattr(archive_intake, "generate_signed_put_url", _no_signed_put)
+        return blob
+
+    def _init_sized(self, client, auth_headers, size):
+        return client.post(
+            "/imports/strava-archive/init",
+            headers=auth_headers,
+            json={
+                "sport": "road", "consent": True,
+                "consent_version": "strava-archive-2026-07-v1",
+                "consent_text": "Je consens à contribuer mes traces (ODbL).",
+                "locale": "fr", "filename": "export.zip", "size": size,
+            },
+        )
+
+    def test_gcs_with_size_opens_resumable_session_bound_to_size_and_origin(
+        self, client, auth_headers, gcs_blob,
+    ):
+        resp = self._init_sized(client, auth_headers, self.SIZE)
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["upload_mode"] == "resumable"
+        assert body["session_url"].endswith("upload_id=SESSION123")
+        assert body["upload_url"] == body["session_url"]
+        gcs_blob.create_resumable_upload_session.assert_called_once()
+        kw = gcs_blob.create_resumable_upload_session.call_args.kwargs
+        assert kw["size"] == self.SIZE  # GCS refuses bytes past the declared total
+        assert kw["origin"] == "https://chemins-communs.fr"  # site origin, no path
+        assert kw["content_type"] == "application/zip"
+
+    def test_declared_size_over_cap_is_413_before_any_session_or_row(
+        self, client, auth_headers, gcs_blob,
+    ):
+        from app.db.models import ContributionConsent, PendingArchive
+        uid = _user_id(client, auth_headers)
+        resp = self._init_sized(client, auth_headers, 2 * 1024**3 + 1)
+        assert resp.status_code == 413, resp.text
+        assert "archive too large" in resp.json()["detail"]
+        gcs_blob.create_resumable_upload_session.assert_not_called()
+        assert _count(PendingArchive, user_id=uid) == 0
+        assert _count(ContributionConsent, user_id=uid) == 0
+
+    def test_session_failure_falls_back_to_signed_put(
+        self, client, auth_headers, gcs_blob, monkeypatch,
+    ):
+        from app.services import archive_intake
+        gcs_blob.create_resumable_upload_session.side_effect = RuntimeError("gcs down")
+        monkeypatch.setattr(archive_intake, "generate_signed_put_url", lambda key: "https://signed/put")
+        resp = self._init_sized(client, auth_headers, self.SIZE)
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["upload_mode"] == "put"
+        assert body["session_url"] is None
+        assert body["upload_url"] == "https://signed/put"
+
+    def test_gcs_without_size_keeps_signed_put(self, client, auth_headers, gcs_blob, monkeypatch):
+        """An older cached client (no ``size``) still gets the single PUT."""
+        from app.services import archive_intake
+        monkeypatch.setattr(archive_intake, "generate_signed_put_url", lambda key: "https://signed/put")
+        resp = _init(client, auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["upload_mode"] == "put"
+        gcs_blob.create_resumable_upload_session.assert_not_called()
+
+    def test_put_fallback_reuses_the_awaiting_archive_no_orphan(
+        self, client, auth_headers, gcs_blob, monkeypatch,
+    ):
+        """Client fallback (resumable session unreachable, 0 byte persisted):
+        re-init WITHOUT size + reuse_archive_id → the SAME archive row / key /
+        consent as a signed PUT, and no second pending_archives / consent row."""
+        from app.db.models import ContributionConsent, PendingArchive
+        from app.services import archive_intake
+        uid = _user_id(client, auth_headers)
+        first = self._init_sized(client, auth_headers, self.SIZE).json()
+        assert first["upload_mode"] == "resumable"
+
+        monkeypatch.setattr(archive_intake, "generate_signed_put_url", lambda key: f"https://signed/{key}")
+        resp = client.post("/imports/strava-archive/init", headers=auth_headers, json={
+            "sport": "road", "consent": True,
+            "consent_version": "strava-archive-2026-07-v1",
+            "consent_text": "Je consens à contribuer mes traces (ODbL).",
+            "locale": "fr", "reuse_archive_id": first["archive_id"],
+        })
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["upload_mode"] == "put"
+        assert body["archive_id"] == first["archive_id"]
+        assert body["bucket_key"] == first["bucket_key"]
+        assert body["consent_id"] == first["consent_id"]
+        assert body["upload_url"] == f"https://signed/{first['bucket_key']}"
+        assert _count(PendingArchive, user_id=uid) == 1
+        assert _count(ContributionConsent, user_id=uid) == 1
+        gcs_blob.create_resumable_upload_session.assert_called_once()  # not re-opened
+
+    def test_reuse_of_a_non_awaiting_or_junk_archive_is_a_fresh_init(self, client, auth_headers):
+        from app.db.models import PendingArchive
+        from app.db.session import SessionLocal
+        uid = _user_id(client, auth_headers)
+        first = _init(client, auth_headers).json()
+        db = SessionLocal()
+        try:
+            row = db.get(PendingArchive, first["archive_id"])
+            row.status = "uploaded"
+            db.commit()
+        finally:
+            db.close()
+        for reuse in (first["archive_id"], "not-a-uuid"):
+            resp = client.post("/imports/strava-archive/init", headers=auth_headers, json={
+                "sport": "road", "consent": True,
+                "consent_version": "strava-archive-2026-07-v1",
+                "consent_text": "Je consens à contribuer mes traces (ODbL).",
+                "locale": "fr", "reuse_archive_id": reuse,
+            })
+            assert resp.status_code == 201, resp.text
+            assert resp.json()["archive_id"] != first["archive_id"]
+        assert _count(PendingArchive, user_id=uid) == 3
+
+    def test_local_backend_with_size_still_returns_put_mode(self, client, auth_headers):
+        resp = self._init_sized(client, auth_headers, 1234)
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["storage_backend"] == "local"
+        assert body["upload_mode"] == "put"
+        assert body["session_url"] is None
+        assert body["upload_url"] == f"/imports/strava-archive/upload/{body['archive_id']}"
+
+
 class TestCompleteOwnershipAndFlip:
     def test_complete_flow_flips_status(self, client, auth_headers):
         body = _init(client, auth_headers).json()
