@@ -27,6 +27,7 @@ import { useHeatmapControl } from '@/hooks/useHeatmapControl';
 import { useUserMenu } from '@/hooks/useUserMenu';
 import { useMapLayerSync } from '@/hooks/useMapLayerSync';
 import { NORMAL, HIGH_CONTRAST } from '@/lib/routing-style';
+import { withActivitySport } from '@/lib/activity-sport';
 import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions, lineParts } from '@/lib/map-utils';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
@@ -168,6 +169,10 @@ export default function MapPage() {
   // present), so the static/first render stays identical (#418).
   const [activitiesLoading, setActivitiesLoading] = useState<boolean>(false);
   const activitiesRef = useRef<ActivityItem[]>([]);
+  // Last FeatureCollection pushed to the "Ma heatmap" source — kept so a sport
+  // correction can patch one feature and re-set the source without a refetch.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const userActivitiesGeojsonRef = useRef<any>(null);
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null);
   const layersBeforeActivityRef = useRef<LayerToggles | null>(null);
 
@@ -265,6 +270,21 @@ export default function MapPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Sport correction from the selected-activity card ─────────────────────
+  // Called optimistically with the new sport, and again with the old one on a
+  // failed PATCH (rollback): keep the list, the selected card and the
+  // "Ma heatmap" source (hover popup reads feature.properties.sport) in sync.
+  const handleActivitySportChange = useCallback((activityId: string, sport: string) => {
+    setActivities((prev) => prev.map((a) => (a.id === activityId ? { ...a, sport } : a)));
+    setSelectedActivity((prev) => (prev && prev.id === activityId ? { ...prev, sport } : prev));
+    const next = withActivitySport(userActivitiesGeojsonRef.current, activityId, sport);
+    if (next !== userActivitiesGeojsonRef.current) {
+      userActivitiesGeojsonRef.current = next;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (mapInstanceRef.current as any)?.getSource('user-activities')?.setData(next);
+    }
+  }, []);
+
   // ── Load user activities from API ─────────────────────────────────────────
   const loadActivities = useCallback(async (map: unknown) => {
     const token = getToken();
@@ -328,6 +348,7 @@ export default function MapPage() {
       // No per-feature colour: "Ma heatmap" is painted in ONE cyan
       // (MY_TRACES_COLOR, set on the layer in init-map-layers) so it contrasts
       // with the community ramp instead of mimicking it with sport colours.
+      userActivitiesGeojsonRef.current = geojson;
       m.getSource('user-activities')?.setData(geojson);
 
       // Load user cell coverage
@@ -1040,6 +1061,7 @@ export default function MapPage() {
             activity={selectedActivity}
             dateLocale={dateLocale}
             onClose={() => setSelectedActivity(null)}
+            onSportChange={handleActivitySportChange}
           />
         )}
       </div>
