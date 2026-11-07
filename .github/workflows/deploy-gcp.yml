@@ -119,14 +119,22 @@ jobs:
         run: DEPLOY_YES=1 bash scripts/deploy-prod.sh "${IMAGE_TAG}"
 
       # Turn a bad revision into a RED CD instead of a silent bad deploy.
+      # Hits the REAL readiness route /readyz (app/api/health.py: SELECT 1 on
+      # Cloud SQL, 503 if the DB is unreachable). NOT /api/health/live: that
+      # route does not exist, so the SPA catch-all answered 200 text/html on any
+      # booted container and the check proved nothing (2026-11-07 ops audit
+      # P1-2). We also require a JSON body carrying "version" so an SPA HTML
+      # 200 can never pass again.
       - name: Post-deploy healthcheck
         run: |
           for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" https://chemins-communs.fr/api/health/live || echo 000)
-            if [ "$code" = "200" ]; then echo "health OK ($code)"; exit 0; fi
+            code=$(curl -s -o /tmp/readyz.json -w "%{http_code}" https://chemins-communs.fr/readyz || echo 000)
+            if [ "$code" = "200" ] && grep -q '"version"' /tmp/readyz.json; then
+              echo "web ready OK ($code): $(head -c 200 /tmp/readyz.json)"; exit 0
+            fi
             echo "attempt $i: $code — retrying"; sleep 5
           done
-          echo "post-deploy healthcheck FAILED (service not returning 200)"; exit 1
+          echo "post-deploy healthcheck FAILED (web /readyz not returning 200 JSON)"; exit 1
 
       # The WORKER (scale-to-zero 2Gi) owns the heavy /internal Cloud Tasks
       # handlers (heat-compute, artefact-rebuild, Strava webhook). A broken
