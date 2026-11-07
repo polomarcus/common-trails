@@ -101,11 +101,80 @@ def _fit_skip_reason(fit) -> str | None:
     return None
 
 
-def parse_fit(content: bytes) -> dict:
-    """Parse FIT bytes, return internal activity dict (same format as parse_gpx)."""
+class _TolerantFitMessage:
+    """fitparse-compatible view (``get_value``) of a fitdecode data message."""
+
+    __slots__ = ("_msg",)
+
+    def __init__(self, msg):
+        self._msg = msg
+
+    def get_value(self, name):
+        val = self._msg.get_value(name, fallback=None)
+        # fitdecode yields tz-aware UTC datetimes; fitparse (primary path)
+        # yields naive UTC — keep the parse_fit output contract identical.
+        if isinstance(val, datetime) and val.tzinfo is not None:
+            from datetime import UTC
+
+            val = val.astimezone(UTC).replace(tzinfo=None)
+        return val
+
+
+class _TolerantFitFile:
+    """Minimal fitparse.FitFile stand-in (``get_messages``) backed by fitdecode.
+
+    Fallback ONLY: fitparse 1.2.0 (unmaintained) aborts the WHOLE file with
+    ``FitParseError: Invalid field size 1 for type 'uint32' (expected a
+    multiple of 4)`` when a definition message declares a field whose size is
+    not a multiple of its base type — recent Garmin firmwares do this, usually
+    in undocumented messages unrelated to GPS. The FIT spec says to read such a
+    field as raw bytes; fitdecode (maintained fork of fitparse, same profile
+    strings) does exactly that with ``error_handling=IGNORE`` (the other
+    IGNORE relaxations only touch developer-field metadata). CRC is still
+    enforced, and truncated/corrupt files still raise.
+    """
+
+    def __init__(self, content: bytes):
+        import fitdecode
+
+        by_name: dict[str, list[_TolerantFitMessage]] = {}
+        with fitdecode.FitReader(
+            io.BytesIO(content),
+            check_crc=fitdecode.CrcCheck.RAISE,
+            error_handling=fitdecode.ErrorHandling.IGNORE,
+        ) as reader:
+            for frame in reader:
+                if isinstance(frame, fitdecode.FitDataMessage):
+                    by_name.setdefault(frame.name, []).append(_TolerantFitMessage(frame))
+        self._by_name = by_name
+
+    def get_messages(self, name):
+        return iter(self._by_name.get(name, ()))
+
+
+def _open_fit(content: bytes):
+    """Fully parse FIT bytes with fitparse; on ``FitParseError`` retry with the
+    tolerant fitdecode reader. If the fallback fails too, the ORIGINAL fitparse
+    error is re-raised, so callers (drain → member ``failed``, upload → 422)
+    see exactly the exceptions they did before."""
     import fitparse
 
     fit = fitparse.FitFile(io.BytesIO(content))
+    try:
+        fit.parse()  # eager: surface mid-file errors here, not mid-loop
+        return fit
+    except fitparse.FitParseError as exc:
+        try:
+            tolerant = _TolerantFitFile(content)
+        except Exception:
+            raise exc from None
+        log.info("fitparse rejected FIT (%s); recovered with fitdecode", exc)
+        return tolerant
+
+
+def parse_fit(content: bytes) -> dict:
+    """Parse FIT bytes, return internal activity dict (same format as parse_gpx)."""
+    fit = _open_fit(content)
 
     coords: list[list[float]] = []
     distance_m = 0.0

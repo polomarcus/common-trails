@@ -39,6 +39,9 @@ dependencies = [
     # BEFORE gpxpy imports. Audit 2026-05-29 GPX-S2.3.
     "defusedxml>=0.7.1",
     "fitparse>=1.2.0",
+    # Tolerant fallback when fitparse rejects a FIT (mis-sized fields from
+    # recent Garmin firmwares) — see app/services/fit_parser._open_fit.
+    "fitdecode==0.11.0",
     "shapely>=2.0.4",
     "sentry-sdk[fastapi]>=2.0.0",
     "slowapi>=0.1.9",
