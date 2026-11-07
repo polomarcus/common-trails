@@ -86,8 +86,9 @@ class ArchiveIntakeResult(BaseModel):
 class ArchiveInitRequest(BaseModel):
     """Body of ``POST /imports/strava-archive/init``. No file — the archive
     is PUT straight to the bucket via the returned signed URL."""
-    # Accepted for back-compat, NOT used: each member's sport comes from
-    # activities.csv or its own FIT/GPX, else the member is skipped.
+    # Sent ONLY when the user explicitly picked a sport (never a default).
+    # Last-resort fallback for members with no activities.csv row and no
+    # FIT/GPX sport of their own; absent → such members are skipped.
     sport: str | None = None
     consent: bool = False
     consent_version: str
@@ -140,8 +141,8 @@ async def import_files(
     file: UploadFile = File(...),
     # The user's EXPLICIT sport for a loose .gpx/.fit (the UI requires one).
     # No default: a file whose own data can't tell its sport and that comes
-    # without one is skipped, never filed under a guessed layer. Ignored for
-    # a .zip (mixed sports — see the cascade below).
+    # without one is skipped, never filed under a guessed layer. For a .zip
+    # it is only a last resort (mixed sports — see the cascade below).
     sport: str | None = Form(None),
     contribute_heatmap: bool = Form(False),
     consent_version: str | None = Form(None),
@@ -324,16 +325,19 @@ async def import_files(
             #      the device's generic "cycling".
             #   2. FIT sport + sub_sport (parsed["sport"]) / GPX
             #      <trk><type> (parsed["sport_from_gpx"]).
-            #   3. The user's explicit choice — LOOSE files only. A ZIP
-            #      mixes sports: a blanket form sport would mislabel every
-            #      member its own file can't classify.
+            #   3. The user's explicit choice. For a loose file it may refine
+            #      a generic road (FIT "Bike" profile → the user's gravel).
+            #      For a ZIP (mixed sports) it is a PURE last resort: only
+            #      for members nothing else classifies, never overriding or
+            #      refining a CSV / file sport.
             #   Nothing → SKIP (never a default layer).
-            effective_sport = resolve_sport_cascade(
+            file_sport = resolve_sport_cascade(
                 parsed.get("sport_from_csv"),
                 parsed.get("sport"),
                 parsed.get("sport_from_gpx"),
                 None if is_zip else sport,
             )
+            effective_sport = file_sport or (resolve_sport_cascade(sport) if is_zip else None)
             if effective_sport is None:
                 skipped += 1
                 errors.append(
@@ -537,6 +541,7 @@ async def import_strava_archive(
                 user_id=current_user.user_id,
                 content=content,
                 filename=filename,
+                fallback_sport=sport,
                 contribute_heatmap=True,
                 consent_id=consent_id,
                 source=archive_intake.ARCHIVE_PROVENANCE,
@@ -788,9 +793,10 @@ async def init_strava_archive(
             source=archive_intake.ARCHIVE_PROVENANCE,
             storage_backend=backend,
             bucket_key=bucket_key,
-            # Never a blanket sport for an archive (see _effective_sport in
-            # the drain): the column is NOT NULL, so store the no-hint marker.
-            fallback_sport=archive_intake.NO_SPORT_HINT,
+            # The user's EXPLICIT pick (the UI sends none otherwise), used by
+            # the drain only as a last resort (see _effective_sport). The
+            # column is NOT NULL: no pick → the no-hint marker.
+            fallback_sport=body.sport or archive_intake.NO_SPORT_HINT,
             contribute_heatmap=True,
             status="awaiting_upload",
         )

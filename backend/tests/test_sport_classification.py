@@ -234,12 +234,13 @@ def captured_ingest(monkeypatch):
     return calls
 
 
-def _drain(filename: str, raw: bytes, csv_sport):
+def _drain(filename: str, raw: bytes, csv_sport, fallback_sport=None):
     return drain._ingest_member_bytes(
         user_id="u1",
         filename=filename,
         raw=raw,
         resolved_sport=csv_sport,
+        fallback_sport=fallback_sport,
         contribute_heatmap=True,
         source="manual_upload",
         skip_heat_computation=True,
@@ -269,6 +270,36 @@ def test_archive_member_sport(captured_ingest, filename, raw, csv_sport, expecte
 
 
 @pytest.mark.parametrize(
+    "filename,raw,csv_sport,pick,expected",
+    [
+        # (a) user-built zip: untyped GPX + explicit pick → the pick
+        ("a.gpx", _gpx(None), None, "gravel", "gravel"),
+        ("b.gpx", _gpx("cycling"), None, "mtb", "mtb"),
+        # (c) activities.csv beats the pick — and the pick never refines a
+        # generic CSV "Ride" (picking VTT for a Strava export ≠ all rides VTT)
+        ("c.gpx", _gpx(None), "running", "mtb", "running"),
+        ("d.gpx", _gpx(None), "road", "mtb", "road"),
+        # the file's own sport beats the pick (incl. a legacy queue row's
+        # stored form sport, e.g. a silent 'mtb', now ranked last)
+        ("e.fit", _make_fit("hiking", "generic"), None, "mtb", "running"),
+        ("f.fit", _make_fit("cycling", "generic"), None, "mtb", "road"),
+    ],
+    ids=_param_id,
+)
+def test_archive_explicit_pick_is_a_pure_last_resort(
+    captured_ingest,
+    filename,
+    raw,
+    csv_sport,
+    pick,
+    expected,
+):
+    outcome, _aid, err = _drain(filename, raw, csv_sport, pick)
+    assert outcome == "imported", err
+    assert captured_ingest[-1]["sport"] == expected
+
+
+@pytest.mark.parametrize(
     "filename,raw",
     [
         ("7.gpx", _gpx("cycling")),  # Strava-collapsed GPX, no CSV row
@@ -278,9 +309,29 @@ def test_archive_member_sport(captured_ingest, filename, raw, csv_sport, expecte
     ids=_param_id,
 )
 def test_archive_member_with_unknown_sport_is_skipped(captured_ingest, filename, raw):
-    outcome, _aid, err = _drain(filename, raw, None)
-    assert (outcome, err) == ("skipped", "sport_unknown")
+    # (b) no pick (None, or the NO_SPORT_HINT marker stored when absent)
+    for no_pick in (None, "unknown"):
+        outcome, _aid, err = _drain(filename, raw, None, no_pick)
+        assert (outcome, err) == ("skipped", "sport_unknown")
     assert captured_ingest == []
+
+
+def test_done_email_reports_no_sport_skips_on_their_own_line():
+    from app.services.email import render_archive_done_email
+
+    _subj, html = render_archive_done_email(imported=3, skipped=5, skipped_no_sport=2, failed=0)
+    assert "<strong>3</strong> ignorées (hors-scope / doublons)" in html
+    assert "<strong>2</strong> sans sport identifiable" in html
+    assert "choisissez un sport et réimportez-les" in html
+    _subj, html_en = render_archive_done_email(
+        imported=1,
+        skipped=2,
+        skipped_no_sport=2,
+        failed=0,
+        locale="en",
+    )
+    assert "out of scope / duplicates" not in html_en
+    assert "<strong>2</strong> with no identifiable sport" in html_en
 
 
 # ── POST /imports/files (real handler, real DB) ───────────────────────────
@@ -331,14 +382,26 @@ def test_loose_hike_fit_never_lands_on_vtt(client, auth_headers):
     assert _sport_of(client, auth_headers, body["activity_ids"][0]) == "running"
 
 
-def test_zip_csv_beats_the_fit_generic_cycling_and_no_form_fallback(client, auth_headers):
+def _zip_csv_fit_and_untyped_gpx() -> bytes:
     csv = b"Activity ID,Activity Name,Activity Type,Filename\n1,Sortie,Gravel Ride,activities/1.fit\n"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("activities.csv", csv)
         zf.writestr("activities/1.fit", _make_fit("cycling", "generic", n_points=22))
-        # not in the CSV, Strava-collapsed type → must NOT take the form "mtb"
+        # not in the CSV, Strava-collapsed type → no sport of its own
         zf.writestr("activities/2.gpx", _gpx("cycling", lat0=44.21))
-    body = _post(client, auth_headers, "export.zip", buf.getvalue(), sport="mtb")
+    return buf.getvalue()
+
+
+def test_zip_csv_beats_the_fit_generic_cycling_and_no_pick_skips(client, auth_headers):
+    body = _post(client, auth_headers, "export.zip", _zip_csv_fit_and_untyped_gpx())
     assert body["imported"] == 1 and body["skipped"] == 1, body
     assert _sport_of(client, auth_headers, body["activity_ids"][0]) == "gravel"
+
+
+def test_zip_pick_is_last_resort_only(client, auth_headers):
+    body = _post(client, auth_headers, "export.zip", _zip_csv_fit_and_untyped_gpx(), sport="mtb")
+    assert body["imported"] == 2, body
+    sports = sorted(_sport_of(client, auth_headers, a) for a in body["activity_ids"])
+    # CSV row keeps its Gravel Ride; only the unclassifiable member takes the pick
+    assert sports == ["gravel", "mtb"]

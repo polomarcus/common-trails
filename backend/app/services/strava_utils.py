@@ -110,7 +110,6 @@ _STRAVA_SPORT_MAP: dict[str, str | None] = {
     "vttelectrique": "mtb",
     "vtae": "mtb",
     "courseapied": "running",
-    "trail": "running",
     "randonnee": "running",
     "marche": "running",
     "velovirtuel": None,
