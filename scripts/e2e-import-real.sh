@@ -19,7 +19,11 @@ fi
 ARCHIVE="$(cd "$(dirname "$ARCHIVE")" && pwd)/$(basename "$ARCHIVE")"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 P="ct-import-real-$(date +%s)-$$"
-IMAGE="${E2E_IMPORT_IMAGE:-ct-e2e-import-backend:latest}"
+# Image tag = hash of what goes into the deps layer (pyproject + Dockerfile):
+# a dependency change (e.g. fitdecode added) builds a fresh image instead of
+# silently reusing a stale one. E2E_IMPORT_REBUILD=1 forces a rebuild anyway.
+DEPS_HASH="$(cat "$REPO/backend/pyproject.toml" "$REPO/backend/Dockerfile" | shasum -a 256 | cut -c1-12)"
+IMAGE="${E2E_IMPORT_IMAGE:-ct-e2e-import-backend:$DEPS_HASH}"
 MEM="${E2E_IMPORT_MEM:-8g}"   # the prod importer job's limit
 
 cleanup() {
@@ -44,7 +48,9 @@ for _ in $(seq 1 60); do
 done
 sleep 2  # postgis init restarts the server once
 
-docker run --name "$P-run" --network "$P-net" --memory "$MEM" \
+# --memory-swap = --memory: no swap, like Cloud Run — over the limit is an OOM kill.
+set +e
+docker run --name "$P-run" --network "$P-net" --memory "$MEM" --memory-swap "$MEM" \
   -e DATABASE_URL=postgresql://postgres:postgres@db:5432/common_trails \
   -e TEST_MODE=true -e JWT_SECRET=local-import-real -e SKIP_DEM_ENRICHMENT=true \
   -e DEM_PROVIDER=none -e OVERPASS_ENABLED=false -e HEATMAP_K_ANONYMITY=1 \
@@ -55,5 +61,12 @@ docker run --name "$P-run" --network "$P-net" --memory "$MEM" \
   -v "$ARCHIVE:/input/archive.zip:ro" \
   -w /app "$IMAGE" python -W ignore /driver.py
 
-PEAK=$(docker inspect "$P-run" --format '{{.State.OOMKilled}}')
-echo "container OOM-killed: $PEAK (limit $MEM)"
+RC=$?
+set -e
+OOM_KILLED=$(docker inspect "$P-run" --format '{{.State.OOMKilled}}' 2>/dev/null || echo unknown)
+if [[ "$OOM_KILLED" == "true" || "$RC" == "137" ]]; then
+  echo "✗ OOM-KILLED: the import exceeded the $MEM memory limit (exit $RC) — the prod job would die the same way." >&2
+  exit 137
+fi
+echo "container OOM-killed: $OOM_KILLED (limit $MEM, no swap), exit $RC"
+exit "$RC"

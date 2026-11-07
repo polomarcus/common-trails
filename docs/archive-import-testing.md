@@ -48,3 +48,10 @@ changer). Il affiche : comptes, sauts par raison, erreurs agrégées, activités
 par sport (et sans `display_geojson`), pings de rebuild, emails, durée totale et
 par fichier, pic mémoire (RSS). Rien ne sort du conteneur (emails et ping
 capturés, pas de bucket). Ne jamais commiter l'archive ni la sortie.
+
+L'image backend est taguée par un hash de `backend/pyproject.toml` +
+`backend/Dockerfile` : un changement de dépendances la reconstruit
+automatiquement. `E2E_IMPORT_REBUILD=1` force la reconstruction,
+`E2E_IMPORT_IMAGE=…` impose une image. Sans swap (`--memory-swap` =
+`--memory`, comme Cloud Run) : un dépassement est signalé « OOM-KILLED »
+(code 137).

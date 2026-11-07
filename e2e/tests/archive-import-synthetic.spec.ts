@@ -41,13 +41,20 @@ interface Expected {
 
 function buildSyntheticStravaZip(): { zipPath: string; expected: Expected } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ct-synth-export-'));
+  tmpDirs.push(dir);
   const zipPath = path.join(dir, 'export_123.zip');
   const out = execFileSync('python3', [GENERATOR, 'strava', zipPath], { encoding: 'utf-8' });
   return { zipPath, expected: JSON.parse(out.trim().split('\n').pop() as string) };
 }
 
+const tmpDirs: string[] = [];
+
 test.describe('Archive import — synthetic Strava export through the dropzone', () => {
   test.setTimeout(120_000);
+
+  test.afterAll(() => {
+    for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+  });
 
   test('recap → upload → "archive reçue" → (drain) → rides in Ma heatmap', async ({ page }) => {
     const { zipPath, expected } = buildSyntheticStravaZip();
