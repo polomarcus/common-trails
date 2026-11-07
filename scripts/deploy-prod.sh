@@ -618,7 +618,7 @@ job_secrets_for() {
 # binding is a no-op), and it is ADDITIVE: it never removes other bindings
 # (e.g. the api/jobs SAs' run.developer used by the event-driven triggers).
 #   drain   ← common-trails-drain-archives-daily-prod     (0 3 * * *)
-#   build   ← common-trails-rebuild-pmtiles-daily-prod    (30 4 * * *)
+#   build   ← common-trails-rebuild-pmtiles-daily-prod    (30 4 * * 1 — weekly, see §5)
 #   reminder← common-trails-resync-reminder-monthly-prod  (0 9 1 * *)
 # (resync-strava already carries this binding from its deleted weekly
 #  scheduler; left untouched — this function only ADDS.)
@@ -713,6 +713,25 @@ if gcloud scheduler jobs describe "$HEALTH_CHECK_SCHEDULER" --project="$PROJECT"
   fi
 else
   echo "   ! scheduler ${HEALTH_CHECK_SCHEDULER}: does not exist — SKIPPED"
+fi
+
+# ── 5. Heatmap rebuild backstop: WEEKLY, not daily (Paul 2026-11-07: cost) ───
+# Uploads already ping the build job event-driven (drain → BUILD_PMTILES_JOB_NAME),
+# so the scheduler is only a backstop. A full rebuild every day costs too much;
+# Monday 04:30 UTC is enough. The resource keeps its historical "-daily-" name
+# (renaming = delete + recreate). Idempotent; skipped if it doesn't exist.
+REBUILD_SCHEDULER="common-trails-rebuild-pmtiles-daily-prod"
+REBUILD_SCHEDULE="30 4 * * 1"
+if gcloud scheduler jobs describe "$REBUILD_SCHEDULER" --project="$PROJECT" --location="$REGION" >/dev/null 2>&1; then
+  if gcloud scheduler jobs update http "$REBUILD_SCHEDULER" --project="$PROJECT" --location="$REGION" \
+        --schedule="$REBUILD_SCHEDULE" --time-zone="Etc/UTC" >/dev/null 2>&1; then
+    echo "   ✓ scheduler ${REBUILD_SCHEDULER}: schedule asserted → ${REBUILD_SCHEDULE} (weekly)"
+  else
+    echo "   ✗ scheduler ${REBUILD_SCHEDULER}: schedule update FAILED" >&2
+    sync_failures=$((sync_failures + 1))
+  fi
+else
+  echo "   ! scheduler ${REBUILD_SCHEDULER}: does not exist — SKIPPED"
 fi
 
 echo "──────────────────────────────────────────────────────────────────────"

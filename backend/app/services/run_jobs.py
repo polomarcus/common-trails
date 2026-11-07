@@ -108,8 +108,8 @@ def warn_on_missing_job_config() -> list[str]:
             "Event-driven job triggers DEGRADED — missing env var(s): %s. "
             "Archives will only drain via the daily scheduler, and PMTiles "
             "rebuild pings from the web will NOT fire (the display stays stale "
-            "until a drain imports something — there is no daily rebuild "
-            "backstop). Restore the vars (a `gcloud run ... --set-env-vars` "
+            "until a drain imports something — the rebuild backstop is only "
+            "weekly). Restore the vars (a `gcloud run ... --set-env-vars` "
             "wipe is the usual cause — use --update-env-vars).",
             ", ".join(missing),
         )

@@ -177,3 +177,18 @@ def test_cd_web_healthcheck_hits_real_readiness_route():
     wf = _find_deploy_workflow().read_text(encoding="utf-8")
     assert "https://chemins-communs.fr/api/health/live" not in wf
     assert "https://chemins-communs.fr/readyz" in wf
+
+
+def test_heatmap_rebuild_backstop_is_weekly_not_daily(gcloud_calls):
+    """Cost (Paul 2026-11-07): the full PMTiles rebuild backstop runs once a week;
+    uploads already trigger an event-driven rebuild."""
+    updates = [
+        c
+        for c in gcloud_calls
+        if c[:4] == ["scheduler", "jobs", "update", "http"] and c[4] == "common-trails-rebuild-pmtiles-daily-prod"
+    ]
+    assert updates, "rebuild scheduler schedule is not asserted by the deploy"
+    schedule = _flag(updates[0], "schedule")
+    assert schedule is not None
+    assert schedule.split()[4] not in ("*", "*/1"), f"rebuild backstop must not run daily: {schedule!r}"
+    assert schedule == "30 4 * * 1"
