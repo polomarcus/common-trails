@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.64.0](https://github.com/polomarcus/common-trails/compare/frontend-v0.63.0...frontend-v0.64.0) (2026-11-07)
+
+
+### Features
+
+* **activities:** corriger le sport d'une sortie après import ([#43](https://github.com/polomarcus/common-trails/issues/43)) ([c628ad7](https://github.com/polomarcus/common-trails/commit/c628ad796612d03abf35c566ef5f0d322454c9f3))
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+* **import:** envoi d'archive reprenable (session GCS resumable, chunks 16 Mio) ([#35](https://github.com/polomarcus/common-trails/issues/35)) ([abce601](https://github.com/polomarcus/common-trails/commit/abce601113dfb7940c6430611c796fc7eb17f8a5))
+* **map:** 'Utiliser la heatmap pour tracer' in the account menu ([#25](https://github.com/polomarcus/common-trails/issues/25)) ([71656a2](https://github.com/polomarcus/common-trails/commit/71656a2321e6ac47f056639e8fca328931af2e6e))
+* **map:** « Ma heatmap » vs « Heatmap commune » — mes sorties en cyan, superposables ([#30](https://github.com/polomarcus/common-trails/issues/30)) ([d5c5a4d](https://github.com/polomarcus/common-trails/commit/d5c5a4d42021d4c67b8f7d63238fa21d74c01d0d))
+
+
+### Bug Fixes
+
+* **frontend:** P0 audit — géoloc auto, HEAD/404, heatmap indisponible, modale export ([#38](https://github.com/polomarcus/common-trails/issues/38)) ([92e349e](https://github.com/polomarcus/common-trails/commit/92e349ed5d67814a9c730dbbba0652bf0682f391))
+* **heatmap:** les lignes nettes s'affichent partout où la tuile a de la donnée (le plancher z9 cachait tout un réseau) ([#28](https://github.com/polomarcus/common-trails/issues/28)) ([d5543b3](https://github.com/polomarcus/common-trails/commit/d5543b3f7329ccc4c019fb5b0c915c23912f2453))
+* **import:** ignorer les itinéraires routes/ d'un export Strava + email de début d'import ([#45](https://github.com/polomarcus/common-trails/issues/45)) ([1f08742](https://github.com/polomarcus/common-trails/commit/1f08742a5d2cb54d02ca00d50cd1e98f447bd9ca))
+* **import:** sport des traces importées — sub_sport FIT, CSV prioritaire, plus aucun sport par défaut ([#42](https://github.com/polomarcus/common-trails/issues/42)) ([3a059d3](https://github.com/polomarcus/common-trails/commit/3a059d3c3e874f9e04717e2b60dd05064096e06f))
+* **map:** « Mes traces » lisibles à faible zoom et sans traits droits à travers la mer ([#31](https://github.com/polomarcus/common-trails/issues/31)) ([5e823b0](https://github.com/polomarcus/common-trails/commit/5e823b03441b956df907ab16b7814db628543ebf))
+* **map:** /map entièrement blanche quand le devicePixelRatio est fractionnaire (+ déblocage CI) ([#27](https://github.com/polomarcus/common-trails/issues/27)) ([ccb41df](https://github.com/polomarcus/common-trails/commit/ccb41df08cbd49e184e9041efaa0e2112df41d95))
+* **onboarding:** lève les frictions du premier import (sport requis, 2 Go, magic link, état vide, mobile) ([#33](https://github.com/polomarcus/common-trails/issues/33)) ([17ecdc1](https://github.com/polomarcus/common-trails/commit/17ecdc19a816ed416099101ca4962f6d437873df))
+* **privacy:** masque radial des extrémités + exclusion des FIT virtuels/indoor ([#36](https://github.com/polomarcus/common-trails/issues/36)) ([b8380fc](https://github.com/polomarcus/common-trails/commit/b8380fcbb778b56ebe25115889b099d381e427be))
+
 ## [0.63.0](https://github.com/polomarcus/common-trails/compare/frontend-v0.62.0...frontend-v0.63.0) (2026-09-05)
 
 
