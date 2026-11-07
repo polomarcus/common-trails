@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Ingestion Pipeline — Explained for First-Time Contributors
 
 This doc is the **"why does this exist, how does it fit together, where would I change X"** companion to the existing
@@ -51,7 +53,7 @@ That's what `osm_road_edges` is: a precomputed, indexed copy of the OSM road net
 **What's a PBF?** OpenStreetMap's binary distribution format — `OSM Protocol Buffers Binary Format`. Compared to the XML
 dump, a PBF is ~7× smaller (binary varint encoding) and orders of magnitude faster to parse. France's PBF from Geofabrik
 is around 4 GB; the whole planet is ~75 GB. We use `pyosmium` (the official streaming parser) to walk the file twice:
-once for nodes, once for ways. See [`backend/app/cli/import_osm_roads.py`](../backend/app/cli/import_osm_roads.py).
+once for nodes, once for ways. See [`backend/app/cli/import_osm_roads.py`](../../backend/app/cli/import_osm_roads.py).
 
 **Why regional shards, not the whole planet?**
 
@@ -116,7 +118,7 @@ We picked option 3. The HGT tiles live under `${DEM_DIR}` inside the image; `bac
 via `python -m app.cli.download_dem --region <name>`. Coverage today is `france`, `cataluna`, `italia-nord-ovest` (see the
 agent brief for the exact bbox envelope).
 
-**The numpy reader.** [`backend/app/services/local_dem.py`](../backend/app/services/local_dem.py) is a pure-numpy HGT reader.
+**The numpy reader.** [`backend/app/services/local_dem.py`](../../backend/app/services/local_dem.py) is a pure-numpy HGT reader.
 It bilinearly interpolates the 4 surrounding cells; voids (`-32768`) return `None`. The process-wide cache (max 64 tiles ≈
 185 MB) means hot paths cost a single numpy index per lookup.
 
@@ -193,7 +195,7 @@ For background, see the surface + elevation audit section of [`.claude/agents/in
 ```
 
 For ground-truth line-by-line, see the diagram at the top of [`docs/ingestion-pipeline.md`](ingestion-pipeline.md) and
-the prod-focused single-trace flow in [`docs/prod-ingestion-flow.md`](prod-ingestion-flow.md).
+the prod-focused single-trace flow in [`docs/prod-ingestion-flow.md`](../prod-ingestion-flow.md).
 
 ---
 
@@ -236,7 +238,7 @@ This is by design and contributors must internalise it before debugging "why isn
 3. The MVT layer is empty in that area because `user_count < 2`. Not a bug.
 4. To verify visually, temporarily flip `HEATMAP_K_ANONYMITY=1` in your dev env.
 
-See also the personal heatmap path in [`docs/heatmap-pipeline.md`](heatmap-pipeline.md) § Stage 5.
+See also the personal heatmap path in [`docs/heatmap-pipeline.md`](../heatmap-pipeline.md) § Stage 5.
 
 ---
 
@@ -317,7 +319,7 @@ stay `surface_type='unknown'` until `group_edges_osm` catches them. See § 7.
 
 ### How it works
 
-[`backend/app/services/surface_classification.py`](../backend/app/services/surface_classification.py) is the single source
+[`backend/app/services/surface_classification.py`](../../backend/app/services/surface_classification.py) is the single source
 of truth (consolidated in PR #259 from three previously-duplicated maps). The `classify_surface` function applies three
 rules in order, each producing a `(surface_class, confidence)` pair:
 
@@ -355,7 +357,7 @@ honest signal: low-confidence inference, not absolute truth.
 ## 8. Trace integrity (also Crouzet)
 
 **Never auto-reroute, never simplify, never snap an imported GPX.** This is the Crouzet methodology (named after the
-project's design inspiration, [tcrouzet.com](https://tcrouzet.com/) — see [`docs/vision.md`](vision.md) and
+project's design inspiration, [tcrouzet.com](https://tcrouzet.com/) — see [`docs/vision.md`](../vision.md) and
 [`memory/project_crouzet_methodology.md`](../.claude/projects/-Users-paulleclercq-projects-common-trails/memory/project_crouzet_methodology.md)).
 
 ### Why this matters to riders
@@ -510,7 +512,7 @@ docker compose exec backend python -m app.jobs.refresh_matview  # 5–15 min, on
 ```
 
 That `refresh_matview` step is critical for dev: without it the MVT path falls through to the slower live query and you'll
-think the heatmap is broken. See [`docs/heatmap-pipeline.md`](heatmap-pipeline.md) § Stage 3 for why.
+think the heatmap is broken. See [`docs/heatmap-pipeline.md`](../heatmap-pipeline.md) § Stage 3 for why.
 
 ### Make a change, run the relevant tests
 
@@ -723,9 +725,9 @@ Use osm_way_ids in the 999_999_xxx range for test rows; never overlap real data.
 - [`docs/ingestion-pipeline.md`](ingestion-pipeline.md) — the architecture & operations reference, with current
   line-by-line code citations, tunable parameters, and the optimisation history. Read this **after** you've finished the
   doc you're reading now.
-- [`docs/prod-ingestion-flow.md`](prod-ingestion-flow.md) — the prod-focused "single trace, end-to-end with timings"
+- [`docs/prod-ingestion-flow.md`](../prod-ingestion-flow.md) — the prod-focused "single trace, end-to-end with timings"
   walk-through. Best companion when you're debugging a real prod ingest.
-- [`docs/heatmap-pipeline.md`](heatmap-pipeline.md) — the heatmap-specific pipeline view, including MVT tile generation
+- [`docs/heatmap-pipeline.md`](../heatmap-pipeline.md) — the heatmap-specific pipeline view, including MVT tile generation
   and the `heat_edges_display` matview.
 - [`docs/routing-cost-model.md`](routing-cost-model.md) — how surface, slope, and heat scores combine into the routing
   edge cost. Touch this if you change anything in `heat_edges.surface_type` or `slope_grade`.
@@ -736,7 +738,7 @@ Use osm_way_ids in the 999_999_xxx range for test rows; never overlap real data.
 - [`docs/valhalla-ops.md`](valhalla-ops.md) — Valhalla map-matcher operational notes.
 - [`docs/migration-runbook.md`](migration-runbook.md) — schema migrations + matview recovery.
 - [`docs/prod-rebuild-runbook.md`](prod-rebuild-runbook.md) — end-to-end heatmap rebuild procedure.
-- [`docs/privacy.md`](privacy.md) — K-anonymity policy and GDPR considerations from the user perspective.
-- [`docs/vision.md`](vision.md) — Crouzet methodology in narrative form.
+- [`docs/privacy.md`](../privacy.md) — K-anonymity policy and GDPR considerations from the user perspective.
+- [`docs/vision.md`](../vision.md) — Crouzet methodology in narrative form.
 - [`.claude/agents/ingest-pipeline.md`](../.claude/agents/ingest-pipeline.md) — the agent brief, refreshed with the same
   PR as this doc.

@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # PRD — Heatmap Export
 
 **Status:** ✅ APPROVED 2026-06-02 — engineering may start Phase 1

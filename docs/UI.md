@@ -3,71 +3,77 @@
 ## Principes
 
 L'interface est **map-first** : la carte est l'élément central, les panneaux sont des compléments.
+Le frontend est un export statique Next.js (`output: 'export'`, pas de SSR) ; tout ce qui
+dépend de la session (jeton, `is_admin`) est lu **après le montage**, jamais au rendu
+(sinon erreur d'hydratation React #418 — voir `frontend/components/map/MapToolbar.tsx`).
+
+Le routage in-app (routeur WASM, édition par drag, propositions d'itinéraires) a été
+**retiré** ; le design historique est dans [`archive/`](archive/).
 
 ## Pages
 
 | Page | Route | Description |
 |------|-------|-------------|
-| Landing | `/` | Carte hero plein écran, auth, sport pills, CTA |
-| Carte | `/map` | Carte interactive principale, sidebar traces, routage |
-| Mes itinéraires | `/me/routes` | Bibliothèque personnelle, groupes, corbeille |
-| Méthode | `/methode` | Explication transparente du moteur de routage |
-| Discover | `/discover` | Exploration des itinéraires publics |
-| Stats | `/me/stats` | Statistiques personnelles (style Statshunter) |
-| Strava callback | `/strava` | Page de retour OAuth Strava |
+| Accueil | `/` | Carte hero (heatmap PMTiles statique), connexion par lien magique, dépôt de traces (`ContributionDropzone`) |
+| Carte | `/map` | Carte publique : heatmap commune, « Ma heatmap » (si connecté), recherche de lieu, fonds de carte, légende, export ODbL |
+| Calque | `/calque` | Tutoriel : ajouter la heatmap comme calque dans gpx.studio / autres outils |
+| Méthode | `/methode` | Explication de la méthode et des licences |
+| Stats | `/stats` | Tableau de bord personnel (cartes de synthèse, records, répartition par sport) |
+| Strava | `/strava` | Retour OAuth Strava |
+| Vie privée | `/privacy` | Politique de confidentialité |
+| Support | `/support` | Contact / soutien |
+| Admin | `/admin` | Tableau de bord admin (utilisateurs, fraîcheur de la heatmap) — 403 sans `is_admin` |
+| Connexion | `/auth/verify`, `/auth/confirm-email` | Validation du lien magique / confirmation d'email |
 
-## Carte interactive (`/map`)
+Redirections (stubs client, fonctionnalités gelées) : `/discover`, `/collections`,
+`/activities` → `/map` ; `/me/stats` → `/stats`. `/routes` et `/me/routes` relèvent du
+modèle social/routage gelé.
 
-### Interactions de routage
+## Carte (`/map`)
 
-- Clic pour ajouter un waypoint
-- Drag d'un waypoint pour le déplacer
-- Insert d'un waypoint sur la route (clic sur le tracé)
-- Recalcul instantané (< 100ms, Dijkstra côté client)
-- Alt+clic ou segments > 15km : 3 propositions diversifiées
+La carte **n'exige pas de connexion**. Seul l'export ODbL en masse
+(`ExportHeatmapModal`) affiche un appel à se connecter pour un visiteur anonyme.
 
-### Sélecteur de sport
+### Couches
 
-5 profils avec icônes : Route, Gravel, VTT, Off-road, Running. Change le modèle de coût et recharge le graphe.
+- **Heatmap commune** — source PMTiles `community-trails`, couches définies dans
+  `frontend/lib/community-heatmap-layers.ts` : densité (`community-trails-heat`, type
+  `heatmap` sur `heat_points`), lignes (`community-trails-glow` / `community-trails-line`
+  sur `trails`) et flèches de sens (`community-trails-arrows`). Rampe prune → rose →
+  orange (`#7a2058` … `#ff8c42`).
+- **Ma heatmap** — les traces de l'utilisateur, servies en direct par
+  `GET /me/activities` (`backend/app/api/me_activities.py`), une seule couleur cyan
+  `MY_TRACES_COLOR = '#06b6d4'` (`frontend/lib/constants.ts`). Largeur, flou et opacité
+  suivent des rampes de zoom (`frontend/lib/user-traces-layers.ts`) : traits fins à
+  faible zoom. Pour l'affichage seulement, une trace est coupée en `MultiLineString`
+  là où deux points consécutifs sont à plus de 2 500 m (pas de traits droits à travers
+  la mer) ; la géométrie stockée n'est jamais modifiée.
+- Les deux cases « Ma heatmap » / « Heatmap commune » sont indépendantes et
+  superposables ; « Ma heatmap » n'apparaît qu'une fois connecté (après montage).
+- Autres couches optionnelles : pistes DFCI, photos, fonds de carte.
 
-### Sidebar gauche
+### Légende
 
-- Toggle : icône (collapsed 36px) / expanded (260px)
-- Onglets : "Mes traces" | "Publiques"
-- Tri par proximité au centre de la carte (haversine)
-- Activité sélectionnée : détails, lien Strava, badge GPX, profil d'élévation
-- Profil d'élévation SVG avec gradient de pente (vert → jaune → orange → rouge → violet)
+`frontend/components/map/MapLegend.tsx` : « Popularité » pour la heatmap commune,
+« Ma heatmap » pour les traces personnelles.
 
-### Couches carte
+## Import et connexion
 
-- **Heatmap communautaire** : lignes colorées par heat_score (rose → violet)
-- **Pistes DFCI** : tirets rouge/blanc
-- **Traces personnelles** : lignes colorées par sport
-- **Overlay de surface** : segments colorés asphalte/gravel/terre/roche (si data_quality suffisante)
-
-## Landing page (`/`)
-
-- Carte MapLibre plein écran en arrière-plan (scroll désactivé)
-- Sport pills pour filtrer la heatmap affichée
-- Panneau auth en bas à droite (si non connecté)
-- Feature cards : routage communautaire, heatmap, invitation club
-- Section méthode + CTA contribution
-
-## Composants partagés
-
-| Composant | Usage |
-|-----------|-------|
-| `TopNav` | Navigation avec liens actifs (« Mes itinéraires » visible si connecté) |
-| `RouteCard` | Carte de route partagée (discover + /me/routes, modes public/owner) |
-| `Map` | Wrapper MapLibre (dynamic import, SSR disabled) |
-| `PlaceSearch` | Recherche de lieu (Nominatim) avec variante dark/light |
-| `ElevationProfile` | SVG interactif pente/altitude |
-| `ProfileSelector` | Sélecteur de sport pour le routage |
-| `HeatmapLayer` | Couche heatmap avec filtrage sport |
+- **Connexion par lien magique** (email). Limites : 3 demandes par email et 20 par IP
+  par fenêtre de 15 min (429 au-delà). Le paramètre `?redirect=` est respecté après
+  connexion s'il pointe vers un chemin interne sûr (`frontend/lib/safe-redirect.ts`).
+- **Dépôt unique** (`ContributionDropzone`) : GPX/FIT isolés (sport à choisir,
+  obligatoire) ou archive Strava/Garmin `.zip` (pré-contrôle de taille 2 Go,
+  `MAX_ARCHIVE_BYTES` dans `frontend/lib/strava-archive-upload.ts`). Un avertissement
+  `beforeunload` protège un envoi en cours. Carte d'état vide quand l'utilisateur n'a
+  encore aucune trace.
+- Le lien « Admin » n'est affiché qu'aux comptes `is_admin` (lu sur `/auth/me`).
+- Bandeau bêta refermable en pied de page (`BetaBanner`, variable CSS `--beta-banner-h`).
 
 ## Design tokens
 
 - Couleur principale : `#1a4731` (vert foncé)
 - Couleur secondaire : `#2d6a4f` (vert moyen)
 - DFCI : rouge `#c0392b` + blanc
-- Heatmap : gradient rose → violet (`#f4b8d8` → `#3d1a5c`)
+- Heatmap commune : rampe prune → rose → orange (`#7a2058` → `#ff8c42`)
+- Ma heatmap : cyan `#06b6d4`
