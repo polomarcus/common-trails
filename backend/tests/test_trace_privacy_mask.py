@@ -16,7 +16,7 @@ from app.services.geo import haversine_m
 from app.services.raw_trace_display import mask_then_densify
 from app.services.trace_privacy import (
     DWELL_METERS,
-    HEAD_FIXES,
+    ZONE_MAX_M,
     mask_endpoints,
     mask_meters,
 )
@@ -60,13 +60,13 @@ def test_point_to_point_trims_both_ends():
     runs = mask_endpoints(line, mask_m=200.0)
     assert len(runs) == 1
     remaining = _run_length(runs[0])
-    # Radial mask with end ZONES: discs of 200 m sit on each of the first/last
-    # HEAD_FIXES fixes (here 0–90 m and 900–990 m) plus the dwell margin, so the
+    # Radial mask with end ZONES: discs of 200 m sit on each zone fix (here at
+    # least the first/last 10 fixes, 0–90 m and 900–990 m) plus the dwell margin, so the
     # hole is larger than 200 m. Was `isclose(total - 400)` under the
     # along-track trim. Pin: strictly more than 400 m removed, and every kept
     # point >= 200 m from every end-zone fix.
     assert 0.0 < remaining <= total - 400.0
-    zone = line[:HEAD_FIXES] + line[-HEAD_FIXES:]
+    zone = line[:10] + line[-10:]
     for fix in zone:
         assert _min_dist_runs(runs, fix) >= 199.0
     # The kept trace starts ~200 m in and ends ~200 m before the true end.
@@ -185,7 +185,8 @@ def test_stationary_jitter_at_start_does_not_leak_home():
     for fix in trace[:180]:
         assert _min_dist(runs, fix) >= R - 1.0
     # The cut lands on the circle around the first fix (R + dwell margin).
-    assert R <= _d(trace[0], runs[0][0]) <= R + DWELL_METERS + 1.0
+    # (zone = dwell cluster + a few anchors within ZONE_MAX_M along-track).
+    assert R <= _d(trace[0], runs[0][0]) <= R + ZONE_MAX_M + 2 * DWELL_METERS + 1.0
 
 
 def test_stationary_jitter_at_end_does_not_leak_destination():
@@ -195,7 +196,7 @@ def test_stationary_jitter_at_end_does_not_leak_destination():
     assert _min_dist(runs, WORK) >= R - 1.0
     for fix in trace[-180:]:
         assert _min_dist(runs, fix) >= R - 1.0
-    assert R <= _d(trace[-1], runs[-1][-1]) <= R + DWELL_METERS + 1.0
+    assert R <= _d(trace[-1], runs[-1][-1]) <= R + ZONE_MAX_M + 2 * DWELL_METERS + 1.0
 
 
 def test_jitter_at_both_ends_of_a_loop_from_home():
@@ -220,12 +221,12 @@ def test_mid_ride_pass_near_home_is_masked():
     # exit; every cut point lies on the boundary of the end-zone discs: >= R
     # from every zone fix, and within R + dwell margin of the nearest one.
     assert len(runs) == 2
-    # (the zone holds at least the first/last HEAD_FIXES fixes, 5 m apart).
-    zone = trace[:HEAD_FIXES] + trace[-HEAD_FIXES:]
+    # (the zone holds at least the first/last 10 fixes, 5 m apart).
+    zone = trace[:10] + trace[-10:]
     for run in runs:
         for pt in (run[0], run[-1]):
             nearest = min(_d(f, pt) for f in zone)
-            assert R - 1.0 <= nearest <= R + 2 * DWELL_METERS + 1.0
+            assert R - 1.0 <= nearest <= R + ZONE_MAX_M + 2 * DWELL_METERS + 1.0
 
 
 def test_multi_run_dropout_near_home_is_masked():
@@ -320,3 +321,45 @@ def test_mask_then_densify_output_is_dense_and_far_jump_stays_a_break():
     assert len(runs) == 2
     for run in runs:
         assert all(_d(run[i], run[i + 1]) <= 6.01 for i in range(len(run) - 1))
+
+
+# ── Long stale cluster / sparse recording (third review of #36) ──────────────
+
+def _stale_cluster(origin_north_m: float, n: int, amp: float, seed: int) -> list:
+    rng = random.Random(seed)
+    return [_offset(HOME, rng.uniform(-amp, amp), origin_north_m + rng.uniform(-amp, amp))
+            for _ in range(n)]
+
+
+@pytest.mark.parametrize("n,amp", [(10, 0.0), (30, 0.0), (20, 10.0)])
+def test_long_stale_cluster_at_start_does_not_leak_home(n, amp):
+    # N stale fixes (identical, or ±10 m jittered) 600 m north of home, then
+    # home, then the ride east. Counting raw fixes let the stale cluster fill
+    # the zone and home was drawn at 0–1 m.
+    stale = _stale_cluster(600.0, n, amp, seed=n)
+    trace = stale + [list(HOME)] + _leg(0, 0, 3000, 0, step=8.0)
+    runs = mask_then_densify(trace, R)
+    assert runs
+    assert _min_dist(runs, HOME) >= R - 1.0
+
+
+@pytest.mark.parametrize("n,amp", [(10, 0.0), (30, 0.0), (20, 10.0)])
+def test_long_stale_cluster_at_end_does_not_leak_destination(n, amp):
+    stale = [_offset(p, 3000.0, 0.0) for p in _stale_cluster(600.0, n, amp, seed=n + 1)]
+    trace = _leg(0, 0, 3000, 0, step=8.0) + [list(WORK)] + stale
+    runs = mask_then_densify(trace, R)
+    assert runs
+    assert _min_dist(runs, WORK) >= R - 1.0
+
+
+def test_sparse_smart_recording_is_not_over_masked():
+    # Garmin smart recording: a fix every ~80 m over a 3 km ride (38 fixes).
+    # The zone is capped by along-track span (ZONE_MAX_M), so the ride is not
+    # swallowed — yet nothing is drawn within R of home or of the finish.
+    trace = _leg(0, 0, 3000, 0, step=80.0)
+    runs = mask_then_densify(trace, R)
+    assert runs, "a 3 km sparse ride must not vanish"
+    assert _min_dist(runs, HOME) >= R - 1.0
+    assert _min_dist(runs, trace[-1]) >= R - 1.0
+    kept = sum(_d(run[i], run[i + 1]) for run in runs for i in range(len(run) - 1))
+    assert kept >= 3000.0 - 2 * (ZONE_MAX_M + R + DWELL_METERS + 80.0)

@@ -35,10 +35,18 @@ DEFAULT_MASK_METERS = 200.0
 # End zones (see ``mask_endpoints``). The first recorded fix is only an
 # ESTIMATE of home: while the rider waits for a fix, consecutive fixes scatter
 # by several metres, and the very first fix can be stale / cell-based, hundreds
-# of metres or kilometres away. The start zone is therefore the first
-# ``HEAD_FIXES`` fixes plus every following fix still within ``DWELL_METERS``
-# of them; a disc of radius R is centred on every one of those fixes.
-HEAD_FIXES = 10
+# of metres or kilometres away (possibly as a long run of identical fixes).
+# The start zone is therefore built from DISTINCT positions (anchors: clusters
+# of fixes within ``DWELL_METERS``), not raw fix counts: the first
+# ``MIN_ANCHORS`` anchors are always included whatever their distance (a stale
+# cluster + home + the first metres away), then further anchors while the
+# zone spans <= ``ZONE_MAX_M`` along-track (raw distance from the endpoint) and
+# there are at most ``MAX_ANCHORS``. A disc of radius R sits on every zone fix.
+MIN_ANCHORS = 3
+MAX_ANCHORS = 10
+# 100 m (not more): the MIN_ANCHORS rule already covers stale clusters, so the
+# span cap only has to stop sparse / dense rides from losing far more than R.
+ZONE_MAX_M = 100.0
 DWELL_METERS = 30.0
 
 
@@ -199,15 +207,22 @@ def _endpoint_anchors(indexed_points, r: float) -> tuple[list[_Disc], int]:
     that belongs to that end zone.
 
     ``indexed_points`` yields ``(index, point)`` walking AWAY from the end.
-    The zone is the first ``HEAD_FIXES`` fixes, extended by every following fix
-    that stays within ``DWELL_METERS`` of an anchor (the rider still waiting
-    at the door). Fixes are greedily clustered: a fix within ``DWELL_METERS``
-    of an existing anchor widens that anchor's radius by its distance (so the
-    hole is >= ``r`` around the fix itself), otherwise it starts a new anchor.
+    Fixes are greedily clustered: a fix within ``DWELL_METERS`` of an existing
+    anchor joins it and widens its radius by its distance (so the hole is
+    >= ``r`` around the fix itself) — any number of fixes, so a long stale
+    cluster or a long wait at the door counts as ONE anchor. A fix farther
+    from every anchor starts a new anchor if fewer than ``MIN_ANCHORS`` exist,
+    or if fewer than ``MAX_ANCHORS`` exist and the along-track raw distance
+    walked so far is <= ``ZONE_MAX_M``; otherwise the zone ends there.
     """
     anchors: list[list] = []  # [center, pad]
     last = -1
-    for k, (idx, pt) in enumerate(indexed_points):
+    walked = 0.0
+    prev = None
+    for idx, pt in indexed_points:
+        if prev is not None:
+            walked += haversine_m(prev[0], prev[1], pt[0], pt[1])
+        prev = pt
         best = None
         best_d = math.inf
         for anc in anchors:
@@ -216,7 +231,8 @@ def _endpoint_anchors(indexed_points, r: float) -> tuple[list[_Disc], int]:
                 best, best_d = anc, dd
         if best is not None and best_d <= DWELL_METERS:
             best[1] = max(best[1], best_d)
-        elif k < HEAD_FIXES:
+        elif len(anchors) < MIN_ANCHORS or (
+                len(anchors) < MAX_ANCHORS and walked <= ZONE_MAX_M):
             anchors.append([pt, 0.0])
         else:
             break
@@ -232,12 +248,15 @@ def mask_endpoints(coords: list, mask_m: float | None = None) -> list[Run]:
     zones are defined on recorded fixes, and densify would otherwise bridge a
     stale first fix to home with a dense line of fake points.
 
-    1. **End zones.** The start zone is the first ``HEAD_FIXES`` fixes plus
-       every following fix still within ``DWELL_METERS`` of them (rider
-       waiting at the door). Same for the end zone, walking backwards. Using
-       several fixes, not just the first one, covers a stale / cell-based
-       first fix hundreds of metres or kilometres from home (up to
-       ``HEAD_FIXES - 1`` leading outliers): home is one of the next fixes.
+    1. **End zones** (``_endpoint_anchors``). The start zone is built from
+       distinct positions (clusters of fixes within ``DWELL_METERS``): always
+       the first ``MIN_ANCHORS`` of them, then more while the zone spans
+       <= ``ZONE_MAX_M`` along-track (max ``MAX_ANCHORS``). Same for the end
+       zone, walking backwards. A stale / cell-based first fix hundreds of
+       metres or kilometres from home — even a long run of them — is one
+       anchor, so home (the next distinct position) is always in the zone.
+       Sparse recordings (smart recording, ~80 m spacing) are capped by the
+       along-track span instead of over-masking.
     2. Everything from the physical start up to the last start-zone fix (and
        from the first end-zone fix to the physical end) is dropped — this
        removes the straight outlier→home bridge.
