@@ -189,6 +189,4 @@ def test_heatmap_rebuild_backstop_is_weekly_not_daily(gcloud_calls):
     ]
     assert updates, "rebuild scheduler schedule is not asserted by the deploy"
     schedule = _flag(updates[0], "schedule")
-    assert schedule is not None
-    assert schedule.split()[4] not in ("*", "*/1"), f"rebuild backstop must not run daily: {schedule!r}"
-    assert schedule == "30 4 * * 1"
+    assert schedule == "30 4 * * 1", f"rebuild backstop must stay weekly: {schedule!r}"
