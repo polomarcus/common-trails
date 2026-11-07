@@ -53,7 +53,7 @@ import zlib
 from sqlalchemy import text as sa_text
 
 from app.services.geo import haversine_m
-from app.services.trace_privacy import mask_endpoints, mask_meters
+from app.services.trace_privacy import _split_runs, mask_endpoints, mask_meters
 
 log = logging.getLogger(__name__)
 
@@ -680,7 +680,7 @@ def _reject_far_outliers(coords: list, max_km: float) -> list:
 # db-f1-micro TWICE per build (~1.4 GB at 17.4k activities) and re-run
 # json.loads + bbox-clip + outlier-reject per activity each time. The
 # ``display_coords`` blob caches the polyline AFTER those stages (and BEFORE
-# densify + mask, which stay at read time in the same order → byte-identical
+# mask + densify, which stay at read time in the same order → byte-identical
 # output): zlib'd little-endian ``[u8 version][u32 n][n × (f64 lon, f64 lat)]``.
 # ~3.6× fewer bytes off the micro instance, ~10× cheaper to decode.
 #
@@ -859,7 +859,7 @@ def iter_masked_runs(db, *, bbox=None, sport=None, since_days=None):
     the whole-world PMTiles build passes none of them, so it is unchanged.
     """
     from app.config import expand_sport
-    from app.services.ingest import _densify_coords, _normalize_heat_edge_sport
+    from app.services.ingest import _normalize_heat_edge_sport
 
     sport_filter = set(expand_sport(sport)) if sport else None
     m = mask_meters()
@@ -872,7 +872,7 @@ def iter_masked_runs(db, *, bbox=None, sport=None, since_days=None):
             continue
         # FAST PATH (migration 0065): a fingerprint-current display_coords blob
         # already IS the post-clip, post-outlier polyline — skip straight to
-        # densify + mask (same stages, same order → byte-identical output).
+        # mask + densify (same stages, same order → byte-identical output).
         coords = decode_display_coords(dc_blob) if dc_blob is not None else None
         if coords is None:
             if geojson_str is None:
@@ -898,11 +898,42 @@ def iter_masked_runs(db, *, bbox=None, sport=None, since_days=None):
             coords = _reject_far_outliers(coords, max_span)
         if len(coords) < 2:
             continue
-        # Densify to <5 m spacing so the density lattice sees every cell the
-        # trace crosses (default densify gap is 15 m > lattice cell).
-        coords = _densify_coords(coords, max_gap=3.0)
-        for run in mask_endpoints(coords, m):
+        for run in mask_then_densify(coords, m):
             yield aid, user_id, norm_sport, run
+
+
+def mask_then_densify(coords: list, mask_m: float) -> list[list]:
+    """Endpoint-mask the RAW fixes, THEN densify each surviving run to <5 m.
+
+    Order matters for privacy (data audit C1 follow-up): ``mask_endpoints``
+    defines the start/end zones on recorded fixes. Densifying first turned a
+    stale first fix (250 m–2.5 km from home) into a dense straight bridge to
+    home, so the mask anchored on the outlier and published home itself.
+    Densify spacing (3 m) is for the density lattice, which must see every cell
+    the trace crosses (default densify gap is 15 m > lattice cell). Densify may
+    insert ``None`` breaks on a >2.5 km gap, hence the re-split.
+    """
+    from app.services.ingest import _DENSIFY_MAX_BRIDGE_M, _densify_coords
+
+    # Mirror densify's GPS-break rule on the RAW fixes first: a jump longer
+    # than the bridge cap is a track break, not a segment — otherwise the mask
+    # could cut a point onto that phantom line and densify would then draw it.
+    raw: list = []
+    prev = None
+    for pt in coords:
+        if pt is None:
+            raw.append(None)
+            prev = None
+            continue
+        if prev is not None and haversine_m(prev[0], prev[1], pt[0], pt[1]) > _DENSIFY_MAX_BRIDGE_M:
+            raw.append(None)
+        raw.append(pt)
+        prev = pt
+
+    out: list[list] = []
+    for run in mask_endpoints(raw, mask_m):
+        out.extend(_split_runs(_densify_coords(run, max_gap=3.0)))
+    return out
 
 
 def gate_run(run: list, sport: str, users_by_cell: dict, deg: float,
