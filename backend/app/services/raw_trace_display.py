@@ -43,6 +43,7 @@ the "precise raw traces" look — only the COUNTING is now streaming + bounded.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import logging
 import math
@@ -103,9 +104,114 @@ _COORD_BITS = 28
 # the point count a fraction of the ~3 m densified vertices while staying far
 # finer than the heatmap-radius reads at any zoom; overlapping traces stack
 # points in the same corridor so ``heatmap-density`` accumulates into the field.
-# ``HEATMAP_RAW_POINT_STRIDE_M`` overrides; tippecanoe ``--drop-densest-as-needed``
-# thins further at low zoom so a coarse ride never blobs.
+# ``HEATMAP_RAW_POINT_STRIDE_M`` overrides.
+#
+# Lower zooms do NOT carry every point: each point gets a per-feature
+# tippecanoe ``minzoom`` (see ``heat_point_levels``) so the spacing kept at zoom
+# z tracks the kernel radius at z. 20 m (+ ≤3 m densify overshoot) stays below
+# the radius through z14 (~26–30 m); at z15+ (radius ~14–16 m) a lone trace may
+# still ripple slightly — accepted: the heatmap fades there and the crisp line
+# carries the read. A finer stride would fix z15 but multiplies the points file,
+# which lives in /tmp = the job's RAM (prod 2026-11-07: 8.6 M points ≈ 1.1 GB).
 DEFAULT_POINT_STRIDE_M = 20.0
+
+# ── heat_points level-of-detail (fix/heatmap-beads, 2026-11) ─────────────────
+# BUG: tippecanoe's DEFAULT dot-dropping (``-r 2.5``) kept 1/2.5 of the points
+# per zoom below z15 — and picks them along its spatial index, not along the
+# trace — so a single-user trace's 20 m points became ~150 m (mean) / 750 m
+# (max) gaps at z13, i.e. ~100 px between kernels of ~8 px radius: BEADS. Busy
+# corridors hid it (dozens of stacked traces fill each other's gaps).
+#
+# FIX: the export decides, per point, the lowest zoom it must appear at, so the
+# spacing ALONG THE TRACE at every zoom stays ≤ ``HEAT_POINT_MAX_GAP_RATIO`` ×
+# the heatmap radius at that zoom (``build_pmtiles`` passes ``-r1`` so
+# tippecanoe no longer drops points by rate on top). Levels are NESTED powers
+# of two: zoom z keeps every 2**level(z)-th point of a run, so a point present
+# at z is present at every higher zoom. Density stays honest: every trace keeps
+# the SAME spacing-to-radius ratio at a given zoom, so N stacked traces still
+# sum to ~N× one trace (busy corridors stay hotter); ``--drop-densest-as-needed``
+# still caps tile bytes.
+#
+# The maplibre kernel is a Gaussian with σ = radius/3 (heatmap shader), so a gap
+# ≤ 0.75 × radius = 2.25 σ leaves a < ~4 % ripple along the ribbon.
+HEAT_POINT_MAX_GAP_RATIO = 0.75
+# The PMTiles build's min zoom (``build_pmtiles --min-zoom`` default): a point
+# whose minzoom is ≤ this is present in every tile anyway, so it is written
+# without the ``tippecanoe`` member.
+HEAT_POINTS_LAYER_MIN_ZOOM = 6
+# A stride walk over a run densified to ≤ 3 m (``mask_then_densify``)
+# overshoots the stride by < 3 m.
+_DENSIFY_SLACK_M = 3.0
+# Level table computed for zooms 0.._LOD_MAX_ZOOM (the radius ramp clamps
+# outside its stops, as maplibre's ``interpolate`` does).
+_LOD_MAX_ZOOM = 22
+_EARTH_CIRCUMFERENCE_M = 40_075_016.686
+# maplibre renders vector tiles at 512 CSS px per tile.
+_TILE_CSS_PX = 512
+
+
+def _load_heat_radius_stops() -> tuple[tuple[float, float], ...]:
+    path = os.path.join(os.path.dirname(__file__), "heatmap_radius_ramp.json")
+    with open(path) as fh:
+        stops = json.load(fh)["stops"]
+    return tuple((float(z), float(r)) for z, r in stops)
+
+
+# SSOT shared with frontend HEAT_RADIUS_RAMP (pinned by a vitest).
+HEAT_RADIUS_STOPS_PX = _load_heat_radius_stops()
+
+
+def heat_radius_px(zoom: float) -> float:
+    """``heatmap-radius`` (CSS px) at ``zoom`` — linear interpolation of
+    ``HEAT_RADIUS_STOPS_PX``, clamped at both ends (maplibre semantics)."""
+    stops = HEAT_RADIUS_STOPS_PX
+    if zoom <= stops[0][0]:
+        return stops[0][1]
+    for (z0, r0), (z1, r1) in itertools.pairwise(stops):
+        if zoom <= z1:
+            return r0 + (r1 - r0) * (zoom - z0) / (z1 - z0)
+    return stops[-1][1]
+
+
+def metres_per_css_px(zoom: float, lat: float) -> float:
+    """Ground metres per CSS pixel at ``zoom`` / ``lat`` (512 px tiles)."""
+    return (_EARTH_CIRCUMFERENCE_M * math.cos(math.radians(lat))
+            / (_TILE_CSS_PX * 2 ** zoom))
+
+
+def heat_radius_m(zoom: float, lat: float) -> float:
+    """The heatmap kernel radius, in ground metres, at ``zoom`` / ``lat``."""
+    return heat_radius_px(zoom) * metres_per_css_px(zoom, lat)
+
+
+def heat_point_levels(lat: float, stride_m: float) -> list[int]:
+    """Per-zoom decimation level for a run at latitude ``lat`` emitted every
+    ``stride_m``: zoom ``z`` keeps every ``2 ** levels[z]``-th point.
+
+    Largest level such that ``2**level × (stride + densify slack)`` ≤
+    ``HEAT_POINT_MAX_GAP_RATIO × heat_radius_m(z)``; never negative (if even
+    the full stride is too coarse — a huge env stride — keep every point).
+    Non-increasing in zoom (enforced) so the kept sets are nested."""
+    step = stride_m + _DENSIFY_SLACK_M
+    levels: list[int] = []
+    prev = None
+    for z in range(_LOD_MAX_ZOOM + 1):
+        budget = HEAT_POINT_MAX_GAP_RATIO * heat_radius_m(z, lat)
+        lvl = max(0, math.floor(math.log2(budget / step))) if budget > step else 0
+        if prev is not None:
+            lvl = min(lvl, prev)
+        levels.append(lvl)
+        prev = lvl
+    return levels
+
+
+def heat_point_minzoom(index: int, levels: list[int]) -> int:
+    """Lowest zoom at which the ``index``-th point of a run is kept: the first
+    zoom whose stride ``2**levels[z]`` divides ``index`` (index 0 → zoom 0)."""
+    for z, lvl in enumerate(levels):
+        if index % (1 << lvl) == 0:
+            return z
+    return len(levels) - 1  # unreachable: levels[-1] >= 0 divides everything
 
 # Per-cell distinct-user cap. Beta density is ~1 user/cell, so cells store a bare
 # ``user_id`` (see ``_add_user``) and this cap is never approached; at national
@@ -1105,7 +1211,18 @@ def _emit_run_points(sub: list, sid: int, deg: float, pass_by_cell: dict,
     look) instead of the diffuse vector-line blob. Streaming: one point written
     at a time, O(1) memory per run (never materialised) — the same bounded
     posture as the surrounding ``trails`` emission.
+
+    Each point also carries a tippecanoe ``minzoom`` (``heat_point_minzoom``)
+    so the spacing kept at every zoom stays below the heatmap kernel radius —
+    the fix for the "beads" a lone trace drew at z12–14 (see
+    ``HEAT_POINT_MAX_GAP_RATIO``). Points kept down to the layer's min zoom
+    (``HEAT_POINTS_LAYER_MIN_ZOOM``) carry no minzoom member — every byte per
+    point counts (the file lives in /tmp = job RAM). Coordinates are rounded to
+    5 decimals (~1 m), far below the 20 m stride.
     """
+    if not sub:
+        return 0
+    levels = heat_point_levels(sub[0][1], stride_m)
     n = 0
     acc = stride_m  # prime so the FIRST vertex always emits
     prev = None
@@ -1118,14 +1235,20 @@ def _emit_run_points(sub: list, sid: int, deg: float, pass_by_cell: dict,
         acc = 0.0
         key = _cell_key(sid, pt[0], pt[1], deg)
         w = round(min(1.0, math.log1p(pass_by_cell.get(key, 0)) / log_max), 3)
-        fpts.write(json.dumps({
+        feature = {
             "type": "Feature",
             "geometry": {
                 "type": "Point",
-                "coordinates": [round(pt[0], 6), round(pt[1], 6)],
+                "coordinates": [round(pt[0], 5), round(pt[1], 5)],
             },
             "properties": {"w": w, "sport": sport},
-        }))
+        }
+        minzoom = heat_point_minzoom(n, levels)
+        if minzoom > HEAT_POINTS_LAYER_MIN_ZOOM:
+            feature["tippecanoe"] = {"minzoom": minzoom}
+        # Compact separators: the points file lives in /tmp (tmpfs = job RAM)
+        # — ~15 bytes/point saved.
+        fpts.write(json.dumps(feature, separators=(",", ":")))
         fpts.write("\n")
         n += 1
     return n

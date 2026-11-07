@@ -308,7 +308,10 @@ export const HEAT_INTENSITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
 /** heatmap-radius grows to a MODEST cap (~12px@z18, was 26px). A 26px kernel at
  *  street zoom made overlapping traces merge into a filled mass (and its
  *  low-density tail drew ugly dark "beads"). ~10-12px lets corridors read as
- *  corridors, not a field. */
+ *  corridors, not a field.
+ *  PINNED to backend/app/services/heatmap_radius_ramp.json (vitest): the backend
+ *  thins `heat_points` per zoom so the gap along a lone trace stays < this radius
+ *  (fix/heatmap-beads). Change both together. */
 export const HEAT_RADIUS_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
   6, 2, 10, 4, 13, 8, 16, 10, 18, 12,
 ];

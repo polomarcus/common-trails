@@ -215,6 +215,9 @@ def test_run_tippecanoe_multi_layer_command(monkeypatch):
     # --read-parallel: line-delimited input → parallel parse is safe and free
     # wall-clock on the cpu2 job (perf/rebuild-raster).
     assert "-P" in cmd
+    # -r1: no rate-based dot dropping of heat_points (the export sets a per-point
+    # minzoom instead) — the default -r 2.5 drew lone traces as beads.
+    assert "-r1" in cmd
 
     # Single-layer (matched mode / no points)
     bp.run_tippecanoe("/tmp/trails.geojsonl", "/tmp/out.pmtiles", 6, 15)
@@ -223,3 +226,4 @@ def test_run_tippecanoe_multi_layer_command(monkeypatch):
     assert "/tmp/trails.geojsonl" in cmd
     assert not any(str(a).startswith("heat_points:") for a in cmd)
     assert "-P" in cmd
+    assert "-r1" not in cmd
