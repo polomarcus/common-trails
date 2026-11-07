@@ -227,6 +227,10 @@ class _ZipPlan:
     # yielded as an out-of-scope skip, counted in ``skipped``).
     selected: list
     is_strava_export: bool = False
+    # activities.csv ``Activity Date`` by normalised lookup key (fallback date
+    # for a listed activity whose file has no timestamp — see
+    # :func:`csv_activity_dates`).
+    date_by_filename: dict = field(default_factory=dict)
 
 
 MEMBER_ACTIVITY = "activity"
@@ -287,6 +291,7 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
     # ANY depth: a re-zipped export folder nests it under a root prefix. The
     # shallowest match wins and its directory becomes the archive root.
     sport_by_filename: dict[str, str | None] = {}
+    date_by_filename: dict = {}
     csv_complete = False
     root_prefix = ""
     csv_candidates = [
@@ -300,11 +305,14 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
         if "/" in csv_info.filename:
             root_prefix = csv_info.filename.rsplit("/", 1)[0] + "/"
         try:
-            raw_map, csv_complete = gpx_service.parse_strava_activities_csv_checked(
-                zf.read(csv_info.filename)
-            )
+            csv_bytes = zf.read(csv_info.filename)
+            raw_map, csv_complete = gpx_service.parse_strava_activities_csv_checked(csv_bytes)
             sport_by_filename = {
                 gpx_service._normalize_archive_path(k): v for k, v in raw_map.items()
+            }
+            date_by_filename = {
+                gpx_service._normalize_archive_path(k): v
+                for k, v in gpx_service.parse_strava_activities_csv_dates(csv_bytes).items()
             }
         except Exception:
             sport_by_filename, csv_complete = {}, False
@@ -339,7 +347,30 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
         sport_by_filename=sport_by_filename,
         selected=selected,
         is_strava_export=is_strava_export,
+        date_by_filename=date_by_filename,
     )
+
+
+def csv_activity_dates(zf: zipfile.ZipFile) -> dict:
+    """``{member name (as yielded by iter_zip_members) → activities.csv date}``.
+
+    The fallback ``activity_date`` for a CSV-listed activity whose file carries
+    no timestamp: without it the real ride would be left undated, i.e. kept out
+    of the public heatmap (``provenance.community_eligible_conditions``). Only
+    top-level ``MEMBER_ACTIVITY`` members can have one (nested Garmin zips have
+    no activities.csv). Best-effort: any error → ``{}``.
+    """
+    try:
+        plan = _plan_zip(zf)
+    except Exception:  # noqa: BLE001 — a date hint must never break a drain
+        return {}
+    if not plan.date_by_filename:
+        return {}
+    return {
+        info.filename: plan.date_by_filename[lookup]
+        for info, lookup, kind in plan.selected
+        if kind == MEMBER_ACTIVITY and lookup in plan.date_by_filename
+    }
 
 
 # Start-of-import estimate for Garmin nested zips: their members are only

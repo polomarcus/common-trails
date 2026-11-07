@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import tracemalloc
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text as sa_text
@@ -39,6 +40,8 @@ from app.services.raw_trace_display import (
 LAT = 43.61
 STEP = 10.0 / 110_574  # ~10 m per point
 _MANUAL = "manual_upload"
+# Community-eligible rows must be DATED (undated = planned route → never public).
+_DATED = datetime(2024, 3, 1, 7, 30, tzinfo=UTC)
 _TEST_USER = "heatpoints-test-user"
 _LON_BASE = -43.0  # empty mid-Atlantic corridor → isolated from the real corpus
 
@@ -68,7 +71,7 @@ def seeded_line():
     db.commit()
     # ~2 km manual_upload gravel line → survives 200 m endpoint masking on both
     # ends, leaving ~1.6 km of drawable geometry.
-    db.add(Activity(user_id=_TEST_USER, provider="file", sport="gravel",
+    db.add(Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel",
                     source=_MANUAL, geometry_geojson=_line_geojson(200, _LON_BASE),
                     contribute_heatmap=True))
     db.commit()

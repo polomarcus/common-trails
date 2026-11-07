@@ -23,6 +23,8 @@ touched-way sets. Pinned contracts:
 """
 import io
 import zipfile
+import zlib
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import gpxpy
@@ -33,6 +35,7 @@ from sqlalchemy import text as sa_text
 from app.jobs import ingest_pending_archives as drain_mod
 from app.services import ingest as ingest_service
 
+_T0 = datetime(2024, 1, 1, 7, 0, tzinfo=UTC)
 
 def _gpx(name: str, lat0: float, lon0: float, n: int = 8) -> str:
     gpx = gpxpy.gpx.GPX()
@@ -40,9 +43,12 @@ def _gpx(name: str, lat0: float, lon0: float, n: int = 8) -> str:
     gpx.tracks.append(trk)
     seg = gpxpy.gpx.GPXTrackSegment()
     trk.segments.append(seg)
+    # Timestamped: an undated trace never feeds the public heatmap (provenance SSOT).
+    _start = _T0 + timedelta(minutes=zlib.crc32(f"{name}{lon0}{lat0}".encode()) % 500_000)
     for i in range(n):
         seg.points.append(gpxpy.gpx.GPXTrackPoint(
             latitude=lat0 + i * 0.001, longitude=lon0 + i * 0.001, elevation=100 + i,
+            time=_start + timedelta(seconds=10 * i),
         ))
     return gpx.to_xml()
 

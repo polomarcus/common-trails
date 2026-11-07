@@ -11,6 +11,8 @@ Uses per-run unique coordinates (grid-fallback territory, far from any
 OSM import) so assertions are deterministic on a shared local DB.
 """
 import uuid
+import zlib
+from datetime import UTC, datetime, timedelta
 
 import gpxpy
 import gpxpy.gpx
@@ -21,18 +23,23 @@ from app.db.session import SessionLocal
 MISSING_ID = "00000000-0000-0000-0000-000000000000"
 
 
+_T0 = datetime(2024, 1, 1, 7, 0, tzinfo=UTC)
+
 def _make_gpx_bytes(name: str, lon0: float, lat0: float, n_points: int = 8) -> bytes:
     gpx = gpxpy.gpx.GPX()
     track = gpxpy.gpx.GPXTrack(name=name)
     gpx.tracks.append(track)
     seg = gpxpy.gpx.GPXTrackSegment()
     track.segments.append(seg)
+    # Timestamped: an undated trace never feeds the public heatmap (provenance SSOT).
+    _start = _T0 + timedelta(minutes=zlib.crc32(f"{name}{lon0}{lat0}".encode()) % 500_000)
     for i in range(n_points):
         seg.points.append(
             gpxpy.gpx.GPXTrackPoint(
                 latitude=lat0 + i * 0.001,
                 longitude=lon0 + i * 0.001,
                 elevation=50 + i * 5,
+                time=_start + timedelta(seconds=10 * i),
             )
         )
     return gpx.to_xml().encode()

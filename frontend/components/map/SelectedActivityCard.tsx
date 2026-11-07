@@ -145,13 +145,23 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
             <div style={{ fontSize: 11, color: '#aaa' }}>{t('map.activity.elevGain')}</div>
           </div>
         ) : null}
-        {(activity.activity_date || activity.created_at) && (
+        {!activity.undated && (activity.activity_date || activity.created_at) && (
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#333' }}>{fmtDate(activity.activity_date || activity.created_at || undefined, dateLocale)}</div>
             <div style={{ fontSize: 11, color: '#aaa' }}>{t('map.activity.date')}</div>
           </div>
         )}
       </div>
+
+      {/* Undated trace (in practice a planned itinerary): kept in "Ma heatmap"
+          but never public (backend provenance.community_eligible_conditions).
+          The API's activity_date then falls back to the import date, which is
+          NOT shown as if it were the ride date. */}
+      {activity.undated && (
+        <div data-testid="activity-undated-note" style={{ fontSize: 12, color: '#8a6d3b', background: '#fcf8e3', borderRadius: 6, padding: '4px 8px', marginBottom: 8 }}>
+          {t('map.activity.undated')}
+        </div>
+      )}
 
       {/* Photo thumbnails (Strava import phase 4) */}
       {activity.total_photo_count && activity.total_photo_count > 0 ? (

@@ -3344,6 +3344,8 @@ def ingest_activity(
         and not skip_heat_computation
         and geometry_geojson
         and is_community_source(activity_data.get("source"))
+        # Undated (planned route) → personal-only, see provenance SSOT.
+        and activity_data.get("activity_date") is not None
         and not raw_display_enabled()
     ):
         edges_indexed, _ = _update_heat_edges(
@@ -4724,6 +4726,9 @@ def iter_user_map_activities(
                 "elevation_gain_m": r.elevation_gain_m,
                 "moving_time": r.moving_time,
                 "activity_date": (r.activity_date or r.created_at).isoformat() if (r.activity_date or r.created_at) else None,
+                # activity_date above falls back to created_at for display/sort;
+                # ``undated`` tells the truth (undated = never public, provenance SSOT).
+                "undated": r.activity_date is None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "total_photo_count": r.total_photo_count or 0,
             }
@@ -4779,6 +4784,9 @@ def get_user_activities_meta(user_id: str) -> list[dict]:
                 "contribute_heatmap": r.contribute_heatmap,
                 "moving_time": r.moving_time,
                 "activity_date": (r.activity_date or r.created_at).isoformat() if (r.activity_date or r.created_at) else None,
+                # activity_date above falls back to created_at for display/sort;
+                # ``undated`` tells the truth (undated = never public, provenance SSOT).
+                "undated": r.activity_date is None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "total_photo_count": r.total_photo_count or 0,
             }
@@ -4918,6 +4926,9 @@ def get_activity_by_id(user_id: str, activity_id: str) -> dict | None:
             "contribute_heatmap": a.contribute_heatmap,
             "moving_time": a.moving_time,
             "activity_date": (a.activity_date or a.created_at).isoformat() if (a.activity_date or a.created_at) else None,
+            # activity_date above falls back to created_at for display/sort;
+            # ``undated`` tells the truth (undated = never public, provenance SSOT).
+            "undated": a.activity_date is None,
             "created_at": a.created_at.isoformat() if a.created_at else None,
             "total_photo_count": a.total_photo_count or 0,
         }

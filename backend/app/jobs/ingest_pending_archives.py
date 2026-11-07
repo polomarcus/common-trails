@@ -520,6 +520,11 @@ def _order_pending_batch(batch: list[dict]) -> None:
     batch.sort(key=lambda r: _spatial_sort_key(r.get("_spatial_key")))
 
 
+# Third slot of an "imported" ``_ingest_member_bytes`` result: the activity has
+# no date → personal-only (``provenance.community_eligible_conditions``).
+UNDATED = "undated"
+
+
 def _finish(db, row_id: str, status: str, *, activity_id: str | None = None, error: str | None = None) -> None:
     db.execute(sa_text("""
         UPDATE pending_archive_files
@@ -540,6 +545,7 @@ def _ingest_member_bytes(
     skip_heat_computation: bool,
     collect_touched_ways: set[int] | None = None,
     fallback_sport: str | None = None,
+    fallback_date=None,
 ) -> tuple[str, str | None, str | None]:
     """Parse + ingest ONE archive member. Shared by both drains (per-member
     queue AND the whole-archive streaming drain) so provenance stamping +
@@ -550,9 +556,17 @@ def _ingest_member_bytes(
     recompute is deferred and the touched osm_way_ids accumulate there — the
     drain batches ONE recompute per archive (see ``_recompute_heat_agg_batched``).
 
+    ``fallback_date``: the activities.csv ``Activity Date`` of this member,
+    used ONLY when the file itself carries no timestamp (a CSV-listed activity
+    is a real ride — a parser gap must not leave it undated, i.e. off the
+    public heatmap).
+
     Returns ``(outcome, activity_id, error)`` where ``outcome`` is
-    ``"imported"`` (``created``/``promoted``) or ``"skipped"``. Raises on a
-    hard parse/ingest error (the caller records it as ``failed``).
+    ``"imported"`` (``created``/``promoted``) or ``"skipped"``. For an
+    ``"imported"`` member the third slot is ``UNDATED`` when the stored
+    activity has no date (kept in "Ma heatmap", never public — counted on its
+    own line in the done email), else ``None``. Raises on a hard parse/ingest
+    error (the caller records it as ``failed``).
     """
     parsed = _parse_member(raw, filename or "member.gpx")
     if parsed.get("skip_reason"):
@@ -585,7 +599,7 @@ def _ingest_member_bytes(
         "distance_m": parsed.get("distance_m"),
         "elevation_gain_m": parsed.get("elevation_gain_m"),
         "file_hash": parsed.get("file_hash"),
-        "activity_date": parsed.get("activity_date"),
+        "activity_date": parsed.get("activity_date") or fallback_date,
     }
     result = ingest_service.ingest_activity(
         user_id=user_id,
@@ -597,7 +611,8 @@ def _ingest_member_bytes(
     # "promoted" (③): a manual-upload member that upgraded a pre-existing
     # Strava-API twin to the community layer — counts as a successful import.
     if result["status"] in ("created", "promoted"):
-        return "imported", result["activity_id"], None
+        note = UNDATED if activity_data["activity_date"] is None else None
+        return "imported", result["activity_id"], note
     return "skipped", result.get("activity_id"), None
 
 
@@ -875,6 +890,7 @@ def _notify_archive_terminal(
                 imported=counts.get("imported", 0),
                 skipped=counts.get("skipped", 0),
                 skipped_no_sport=counts.get("skipped_no_sport", 0),
+                imported_undated=counts.get("imported_undated", 0),
                 failed=counts.get("failed", 0),
                 locale=locale,
                 contribute_heatmap=contribute_heatmap,
@@ -1051,6 +1067,9 @@ def drain_pending_archives(
                 # processing actually starts (not at upload: queue time would
                 # skew the estimate).
                 _notify_archive_started(arch, zf)
+                # activities.csv dates, the fallback for a listed activity
+                # whose file has no timestamp (best-effort, {} otherwise).
+                csv_dates = archive_intake.csv_activity_dates(zf)
                 first = True
                 ingested = 0
                 last_work_s: float | None = None
@@ -1099,8 +1118,13 @@ def drain_pending_archives(
                             source=arch["source"],
                             skip_heat_computation=skip_heat_computation,
                             collect_touched_ways=touched_ways,
+                            fallback_date=csv_dates.get(name),
                         )
                         counts[outcome] += 1
+                        if outcome == "imported" and _err == UNDATED:
+                            # Imported (in "Ma heatmap") but undated → never
+                            # public; own line in the done email.
+                            counts["imported_undated"] = counts.get("imported_undated", 0) + 1
                         if _err == "sport_unknown":
                             # Own line in the done email ("no identifiable
                             # sport — pick one and re-import"), not lumped

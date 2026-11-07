@@ -13,8 +13,10 @@ tous les pièges connus : dossier racine `export_123/` + `__MACOSX/`,
 Swim, Surf, Weight Training), GPX / FIT / FIT.gz dont le FIT « Invalid field
 size 1 for type uint32 » (repli fitdecode) et un FIT tronqué, `routes/`
 (itinéraires sans horodatage, l'un typé `running`), doublon octet pour octet,
-trace sans géométrie, fichier absent du CSV ; côté Garmin, zip imbriqué et FIT
-avec sport / sub_sport (dont un virtuel et un sans sport).
+trace sans géométrie, fichier absent du CSV, fichier listé sans horodatage
+(daté par `activities.csv`) ; côté Garmin, zip imbriqué, FIT avec sport /
+sub_sport (dont un virtuel et un sans sport) et un GPX sans aucune date
+(importé dans « Ma heatmap », jamais public, ligne dédiée dans l'email).
 
 ```bash
 python3 backend/tests/synthetic_exports.py strava /tmp/strava.zip   # imprime le résultat attendu (JSON)

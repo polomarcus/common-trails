@@ -1087,6 +1087,7 @@ const fr: Translations = {
   'map.activity.distance': 'Distance',
   'map.activity.elevGain': 'D+',
   'map.activity.date': 'Date',
+  'map.activity.undated': 'Sans date — non publiée sur la heatmap publique',
   'map.activity.viewDetails': 'Voir les détails',
   'map.activity.similar': 'Similaires',
   'map.activity.sport': 'Sport',

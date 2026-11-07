@@ -329,6 +329,7 @@ export default function MapPage() {
           provider: f.properties.provider ?? 'file',
           provider_activity_id: f.properties.provider_activity_id ?? null,
           total_photo_count: f.properties.total_photo_count ?? 0,
+          undated: f.properties.undated === true,
         };
       });
       setActivities(items);

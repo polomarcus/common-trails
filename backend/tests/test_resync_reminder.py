@@ -63,8 +63,9 @@ def _mk_activity(db, user_id: str, *, uploaded_days_ago: int,
             """
             INSERT INTO activities (id, user_id, provider, sport, source,
                                     geometry_geojson, contribute_heatmap,
-                                    distance_m, created_at)
+                                    distance_m, created_at, activity_date)
             VALUES (:id, :uid, 'test', 'road', :src, :geo, :contrib, 10000,
+                    now() - make_interval(days => :d),
                     now() - make_interval(days => :d))
             """
         ),

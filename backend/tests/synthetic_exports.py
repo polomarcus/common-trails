@@ -262,6 +262,12 @@ def build_strava_export() -> tuple[bytes, dict]:
     add(1011, "Ride", "Sortie longue", "activities/1011.gpx",
         make_gpx("Sortie longue", 11, start=_ts(11), trk_type="cycling"),
         "imported", "road", desc="Tres longue description. " * 8000)
+    # A listed activity whose file has NO timestamp at all: the activities.csv
+    # "Activity Date" must date it (a CSV-listed activity is a real ride) —
+    # otherwise it would be kept off the public heatmap as undated.
+    add(1015, "Ride", "Sortie sans horodatage", "activities/1015.gpx",
+        make_gpx("Sortie sans horodatage", 15, start=None, trk_type="cycling"),
+        "imported", "road")
 
     # Out-of-scope CSV types → skipped, bytes never parsed.
     add(1007, "Workout", "Renfo", "activities/1007.fit.gz",
@@ -326,6 +332,8 @@ def build_strava_export() -> tuple[bytes, dict]:
         "root": root,
         "members": {f"{root}{k}": v for k, v in expect.items()},
         "imported": sum(1 for o, _ in expect.values() if o == "imported"),
+        # Every imported member is dated (1015 via the activities.csv date).
+        "imported_undated": 0,
         "skipped": sum(1 for o, _ in expect.values() if o == "skipped"),
         "failed": sum(1 for o, _ in expect.values() if o == "failed"),
         "skipped_by_reason": reasons,
@@ -361,27 +369,34 @@ def build_garmin_export() -> tuple[bytes, dict]:
             _write(zin, name, data)
     nested = "DI_CONNECT/DI-Connect-Uploaded-Files/UploadedFiles_0-_Part1.zip"
     top_gpx = "DI_CONNECT/DI-Connect-Fitness/activity_25.gpx"
+    # No timestamp anywhere and no activities.csv to date it (in practice a
+    # planned itinerary): imported into "Ma heatmap", never public.
+    undated_gpx = "DI_CONNECT/DI-Connect-Fitness/activity_26.gpx"
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         _write(zf, top_gpx, make_gpx("Sortie route", 25, start=_ts(25), trk_type="road_biking"))
+        _write(zf, undated_gpx, make_gpx("Itineraire route", 26, start=None, trk_type="road_biking"))
         _write(zf, "DI_CONNECT/DI-Connect-Fitness/summarizedActivities.json", '[{"activityId": 1}]')
         _write(zf, nested, inner.getvalue())
         _write(zf, "__MACOSX/DI_CONNECT/._DI-Connect-Fitness", b"\x00\x05\x16\x07")
 
     members = {f"{nested}!{k}": (o, d) for k, (_b, o, d) in inner_files.items()}
     members[top_gpx] = ("imported", "road")
+    members[undated_gpx] = ("imported", "road")
     sports_by_start = {
         _key(_ts(21)): "mtb", _key(_ts(22)): "gravel", _key(_ts(25)): "road",
+        None: "road",  # the undated itinerary (activity_date NULL)
     }
     expected = {
         "members": members,
-        "imported": 3,
+        "imported": 4,
+        "imported_undated": 1,
         "skipped": 2,
         "failed": 0,
         "skipped_by_reason": {"out_of_scope": 1, "sport_unknown": 1},
         "skipped_no_sport": 1,
-        "members_total": 5,
+        "members_total": 6,
         "sports_by_start": sports_by_start,
         "never_ingested": [],
     }

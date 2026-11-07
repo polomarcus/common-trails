@@ -83,7 +83,11 @@ déclenchement manqué peut laisser la carte en retard jusqu'à une semaine
 
 Seules les traces `manual_upload` consenties (`backend/app/services/provenance.py`)
 alimentent la carte commune ; les activités synchronisées via l'API Strava
-restent personnelles. Extrémités masquées (`TRACE_MASK_METERS`, 200 m) et
+restent personnelles. Une trace **sans date** (`activity_date` nul — en pratique
+un itinéraire planifié) reste dans « Ma heatmap » mais n'alimente rien de public
+(build, stats, export) : même prédicat SSOT `community_eligible_conditions`. Pour
+une archive Strava, un fichier sans horodatage prend la date de `activities.csv`.
+Extrémités masquées (`TRACE_MASK_METERS`, 200 m) et
 plancher `HEATMAP_MIN_USERS` (K = 1 pendant la bêta). Modèle complet :
 [`privacy-model.md`](privacy-model.md).
 
