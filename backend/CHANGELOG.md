@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.66.0](https://github.com/polomarcus/common-trails/compare/backend-v0.65.0...backend-v0.66.0) (2026-11-07)
+
+
+### Features
+
+* **activities:** corriger le sport d'une sortie après import ([#43](https://github.com/polomarcus/common-trails/issues/43)) ([c628ad7](https://github.com/polomarcus/common-trails/commit/c628ad796612d03abf35c566ef5f0d322454c9f3))
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+* **import:** envoi d'archive reprenable (session GCS resumable, chunks 16 Mio) ([#35](https://github.com/polomarcus/common-trails/issues/35)) ([abce601](https://github.com/polomarcus/common-trails/commit/abce601113dfb7940c6430611c796fc7eb17f8a5))
+
+
+### Bug Fixes
+
+* **api:** push /me/activities filter/order/limit into SQL (OOM fix) ([#20](https://github.com/polomarcus/common-trails/issues/20)) ([a512f9e](https://github.com/polomarcus/common-trails/commit/a512f9e067fde8438e5c050da78227564b782acb))
+* **fit:** repli tolérant fitdecode quand fitparse rejette un FIT ([#41](https://github.com/polomarcus/common-trails/issues/41)) ([d8518bc](https://github.com/polomarcus/common-trails/commit/d8518bceddca8f40b5d7a5520fdce3f13a331c68))
+* **frontend:** P0 audit — géoloc auto, HEAD/404, heatmap indisponible, modale export ([#38](https://github.com/polomarcus/common-trails/issues/38)) ([92e349e](https://github.com/polomarcus/common-trails/commit/92e349ed5d67814a9c730dbbba0652bf0682f391))
+* **import:** ignorer les itinéraires routes/ d'un export Strava + email de début d'import ([#45](https://github.com/polomarcus/common-trails/issues/45)) ([1f08742](https://github.com/polomarcus/common-trails/commit/1f08742a5d2cb54d02ca00d50cd1e98f447bd9ca))
+* **import:** l'email « archive importée » ne part plus avant la demande de rebuild de la heatmap ([#29](https://github.com/polomarcus/common-trails/issues/29)) ([24277ce](https://github.com/polomarcus/common-trails/commit/24277cec4912a7d6674a7caf555ffa32d9ab22ee))
+* **import:** sport des traces importées — sub_sport FIT, CSV prioritaire, plus aucun sport par défaut ([#42](https://github.com/polomarcus/common-trails/issues/42)) ([3a059d3](https://github.com/polomarcus/common-trails/commit/3a059d3c3e874f9e04717e2b60dd05064096e06f))
+* **ingestion:** hygiene round — reap abandoned inits, husk guard, dedup index, raw-mode presort skip ([#21](https://github.com/polomarcus/common-trails/issues/21)) ([5789e7a](https://github.com/polomarcus/common-trails/commit/5789e7a6976047371a976243362f511adda31f31))
+* **map:** « Mes traces » lisibles à faible zoom et sans traits droits à travers la mer ([#31](https://github.com/polomarcus/common-trails/issues/31)) ([5e823b0](https://github.com/polomarcus/common-trails/commit/5e823b03441b956df907ab16b7814db628543ebf))
+* **map:** /map entièrement blanche quand le devicePixelRatio est fractionnaire (+ déblocage CI) ([#27](https://github.com/polomarcus/common-trails/issues/27)) ([ccb41df](https://github.com/polomarcus/common-trails/commit/ccb41df08cbd49e184e9041efaa0e2112df41d95))
+* **onboarding:** lève les frictions du premier import (sport requis, 2 Go, magic link, état vide, mobile) ([#33](https://github.com/polomarcus/common-trails/issues/33)) ([17ecdc1](https://github.com/polomarcus/common-trails/commit/17ecdc19a816ed416099101ca4962f6d437873df))
+* **ops:** répare les schedulers prod (IAM run.invoker sur les jobs, audience OIDC du health-check) + healthcheck CD sur /readyz ([#37](https://github.com/polomarcus/common-trails/issues/37)) ([9cb1d0a](https://github.com/polomarcus/common-trails/commit/9cb1d0a7dd6eaf970e7f4c0100a75916580250a6))
+* **privacy:** masque radial des extrémités + exclusion des FIT virtuels/indoor ([#36](https://github.com/polomarcus/common-trails/issues/36)) ([b8380fc](https://github.com/polomarcus/common-trails/commit/b8380fcbb778b56ebe25115889b099d381e427be))
+* **strava:** callback OAuth — branche stub réservée au TEST_MODE ([#34](https://github.com/polomarcus/common-trails/issues/34)) ([3a1d9d2](https://github.com/polomarcus/common-trails/commit/3a1d9d2558b9d9cb944c274ed7d4f04e2add4f39))
+
 ## [0.65.0](https://github.com/polomarcus/common-trails/compare/backend-v0.64.0...backend-v0.65.0) (2026-09-05)
 
 
