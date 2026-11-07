@@ -186,3 +186,24 @@ def test_deploy_sets_every_env_the_handlers_verify(deploy_sh: str):
         f"against: {sorted(missing)}. A handler verifying an unset audience "
         f"env 500s ('not configured for OIDC verification')."
     )
+
+
+def test_uploads_bucket_cors_allows_resumable_browser_upload(deploy_sh: str):
+    """The browser's chunked upload to a GCS resumable session is cross-origin
+    from the site: it SENDS Content-Range and must READ Range on each 308 to
+    resume. Pin the checked-in CORS SSOT + that the deploy actually applies it
+    to the uploads bucket, for the same origin the API binds sessions to."""
+    import json
+
+    cors = json.loads((_DEPLOY_SH.parent / "uploads-bucket-cors.json").read_text(encoding="utf-8"))
+    public_url = re.search(r'^PUBLIC_URL="([^"]+)"', deploy_sh, re.MULTILINE).group(1)
+    assert _env_value(deploy_sh, "FRONTEND_URL") == "${PUBLIC_URL}"  # session origin
+    rule = next(r for r in cors if public_url in r["origin"])
+    assert {"PUT", "POST", "GET"} <= set(rule["method"])
+    assert {"Content-Type", "Content-Range", "Range", "X-Goog-Resumable"} <= set(rule["responseHeader"])
+    assert re.search(
+        r'gcloud storage buckets update "gs://\$\{UPLOADS_BUCKET_NAME\}".*--cors-file="\$CORS_FILE"',
+        deploy_sh,
+    ), "deploy-prod.sh must assert the uploads bucket CORS from the checked-in JSON"
+    assert 'UPLOADS_BUCKET_NAME="${PROJECT}-common-trails-uploads-${ENV}"' in deploy_sh
+    assert _env_value(deploy_sh, "UPLOADS_BUCKET") == "${PROJECT}-common-trails-uploads-${ENV}"

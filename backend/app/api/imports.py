@@ -15,7 +15,7 @@ import os
 from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from app.api.auth import AuthenticatedUser, get_current_user
@@ -91,6 +91,10 @@ class ArchiveInitRequest(BaseModel):
     consent_text: str
     locale: str | None = None
     filename: str | None = None  # informational (original .zip name)
+    # Declared .zip size in bytes. Over MAX_ARCHIVE_BYTES → 413 right here,
+    # before any upload. On the gcs backend it also unlocks the RESUMABLE mode:
+    # the session binds this exact total. Absent (older client) → signed PUT.
+    size: int | None = Field(default=None, ge=0)
 
 
 class ArchiveInitResult(BaseModel):
@@ -104,6 +108,10 @@ class ArchiveInitResult(BaseModel):
     content_type: str        # required on the PUT (bound into the signature)
     max_bytes: int
     storage_backend: str     # "gcs" | "local" — local ⇒ send the auth header
+    # "put" = ONE PUT of the whole .zip to upload_url (local, or gcs fallback);
+    # "resumable" = chunked Content-Range PUTs to session_url (GCS session).
+    upload_mode: str = "put"
+    session_url: str | None = None
 
 
 class ArchiveCompleteRequest(BaseModel):
@@ -552,6 +560,19 @@ def _validate_consent(consent: bool, consent_version: str, consent_text: str, sp
         raise HTTPException(status_code=422, detail="Missing consent version/text.")
 
 
+def _upload_origin() -> str:
+    """Site origin bound into a GCS resumable session (``scheme://host[:port]``
+    of FRONTEND_URL — chemins-communs.fr in prod). GCS only answers CORS on the
+    session URL for the origin given at creation, so it must be the page the
+    browser uploads from, not this API's own host."""
+    from urllib.parse import urlparse
+
+    from app.config import FRONTEND_URL
+
+    p = urlparse(FRONTEND_URL)
+    return f"{p.scheme}://{p.netloc}"
+
+
 @router.post("/imports/strava-archive/init", response_model=ArchiveInitResult, status_code=201)
 async def init_strava_archive(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -569,6 +590,13 @@ async def init_strava_archive(
 
     Consent is REQUIRED — no consent → 422, nothing recorded.
 
+    Upload modes: when the client declares ``size`` on the gcs backend, init
+    opens a GCS RESUMABLE session bound to that size (``upload_mode=
+    "resumable"``, chunked + resumable after a blip or a tab reload); otherwise
+    — local dev, an older client, or a session-creation failure — it returns
+    the single signed PUT (``upload_mode="put"``). A declared size over
+    ``MAX_ARCHIVE_BYTES`` is a 413 before anything is created.
+
     Per-user quota (HIGH 3, abuse/cost): each ``init`` mints a signed PUT URL
     and creates a ``PendingArchive`` row whose ``/complete`` fires the drain
     JOB, so unbounded ``init`` spam is a cost + storage vector. Reject with 429
@@ -583,6 +611,14 @@ async def init_strava_archive(
     from app.db.models import PendingArchive
     from app.db.session import SessionLocal
     from app.services import archive_intake
+
+    # Declared-size cap BEFORE anything else (quota, consent row, upload
+    # session): a too-big export is refused up front, not after GBs of upload.
+    # Same SSOT reason as /complete so the client maps it to `too_large`.
+    if body.size is not None and body.size > archive_intake.MAX_ARCHIVE_BYTES:
+        raise HTTPException(
+            status_code=413, detail=archive_intake.too_large_message(body.size),
+        )
 
     # Quota gate FIRST — fail fast before minting a signed URL / recording
     # consent. Open = still consuming a slot (not yet terminal done/failed).
@@ -628,11 +664,23 @@ async def init_strava_archive(
 
     backend, bucket_key = archive_intake.new_archive_key(current_user.user_id)
 
-    # GCS: mint the signed PUT URL up front (fail fast before we record consent
-    # if the signer is misconfigured). Local: the URL keys off archive_id, set
-    # after the row is created.
+    # GCS: open the resumable session / mint the signed PUT URL up front (fail
+    # fast before we record consent if storage is misconfigured). Local: the URL
+    # keys off archive_id, set after the row is created.
     signed_url = ""
-    if backend == "gcs":
+    session_url = ""
+    if (
+        backend == "gcs"
+        and archive_intake.RESUMABLE_UPLOADS_ENABLED
+        and body.size  # needs the declared total; 0/None → plain PUT
+    ):
+        try:
+            session_url = archive_intake.create_resumable_session(
+                bucket_key, body.size, _upload_origin(),
+            )
+        except Exception:  # noqa: BLE001 — degrade to the single signed PUT
+            log.warning("resumable session creation failed; falling back to signed PUT", exc_info=True)
+    if backend == "gcs" and not session_url:
         try:
             signed_url = archive_intake.generate_signed_put_url(bucket_key)
         except Exception as exc:  # noqa: BLE001 — surface a clear 503, don't 500
@@ -671,7 +719,12 @@ async def init_strava_archive(
     # Local/dev stand-in: the browser PUTs to a backend endpoint (keyed by
     # archive_id) that lands the bytes under ARCHIVE_INTAKE_DIR (mirrors #451's
     # local fallback). Prod uses the direct-to-GCS signed URL.
-    upload_url = signed_url if backend == "gcs" else f"/imports/strava-archive/upload/{archive_id}"
+    if session_url:
+        upload_url = session_url
+    elif backend == "gcs":
+        upload_url = signed_url
+    else:
+        upload_url = f"/imports/strava-archive/upload/{archive_id}"
 
     return ArchiveInitResult(
         archive_id=archive_id,
@@ -682,6 +735,8 @@ async def init_strava_archive(
         content_type=archive_intake.ARCHIVE_CONTENT_TYPE,
         max_bytes=archive_intake.MAX_ARCHIVE_BYTES,
         storage_backend=backend,
+        upload_mode="resumable" if session_url else "put",
+        session_url=session_url or None,
     )
 
 

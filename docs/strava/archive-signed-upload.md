@@ -93,9 +93,23 @@ gcloud scheduler jobs create http common-trails-drain-archives-prod \
 Or manually post-upload:
 `gcloud run jobs execute common-trails-ingest-pending-archives-prod --region=$REGION`.
 
-### GCS bucket CORS — REQUIRED for the browser PUT (document, do NOT apply here)
+### GCS bucket CORS — REQUIRED for the browser PUT
+> **Since the resumable upload PR this is codified**: `scripts/deploy-prod.sh`
+> (step `[0/3]`) asserts `scripts/uploads-bucket-cors.json` on every deploy
+> (origin `https://chemins-communs.fr`, methods PUT/POST/GET, headers
+> `Content-Type`, `Content-Range`, `Range`, `X-Goog-Resumable`). On failure
+> it deploys with `ARCHIVE_RESUMABLE_UPLOADS=false` (single signed PUT). The
+> manual recipe below is historical.
+>
+> Resumable mode: when the client declares `size`, `init` opens a GCS
+> resumable session (`Blob.create_resumable_upload_session(size=…,
+> origin=FRONTEND_URL)`) and returns `upload_mode: "resumable"` +
+> `session_url`; the browser sends 16 MiB `Content-Range` chunks, resumes from
+> the 308 `Range` offset after a blip, and remembers the session in
+> localStorage so re-dropping the same file after a reload resumes it.
+
 The direct browser→GCS PUT is cross-origin; without CORS the browser blocks it.
-Apply once on the uploads bucket:
+Historical one-off recipe:
 ```bash
 cat > /tmp/cors.json <<'JSON'
 [{"origin": ["https://chemins-communs.fr"],
@@ -118,5 +132,6 @@ SA signs via the IAM `signBlob` API — grant it
 |---|---|---|
 | `UPLOADS_BUCKET` | `""` | GCS bucket for archive objects; unset ⇒ local backend |
 | `ARCHIVE_SIGNED_URL_TTL_MIN` | `30` | signed PUT URL TTL (minutes) |
+| `ARCHIVE_RESUMABLE_UPLOADS` | `true` | `false` = kill switch → always the single signed PUT (set by deploy-prod.sh if the CORS assertion fails) |
 | `MAX_ARCHIVE_UPLOAD_BYTES` (legacy alias `MAX_ARCHIVE_BYTES`) | `512 MiB` | sanity ceiling on one archive — re-checked at `/complete` (413 + row `failed` + delete) AND in the job (skip oversize from metadata, no download). Keep `<=` the importer job's tmpfs. |
 | `ARCHIVE_INTAKE_DIR` | tmp | local fallback root (dev/tests) |

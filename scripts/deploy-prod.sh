@@ -372,6 +372,29 @@ if [[ "${DEPLOY_YES:-}" != "1" ]]; then
   [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "Aborted."; exit 1; }
 fi
 
+# ── 0. Assert the uploads bucket CORS (browser → GCS archive upload) ─────────
+# The browser uploads archives STRAIGHT to the uploads bucket, cross-origin from
+# ${PUBLIC_URL}: chunked PUTs to a GCS RESUMABLE session (Content-Range in,
+# Range out on each 308) or, as a fallback, one signed PUT. Without this CORS
+# the browser blocks them (or can't read Range → can't resume). It was set once
+# by hand (docs/strava/archive-signed-upload.md: PUT + Content-Type only); it is
+# now asserted declaratively from the checked-in scripts/uploads-bucket-cors.json
+# on every deploy. `--cors-file` REPLACES the bucket's whole CORS list — the
+# JSON is the complete SSOT, edit it there. Idempotent.
+# Runs BEFORE the services roll so the new frontend never meets an old CORS. If
+# the assertion fails (e.g. the deployer lacks storage.buckets.update) the
+# deploy does NOT abort: the API is switched to the legacy single signed PUT
+# (ARCHIVE_RESUMABLE_UPLOADS=false) so uploads keep working exactly as before.
+UPLOADS_BUCKET_NAME="${PROJECT}-common-trails-uploads-${ENV}"
+CORS_FILE="$(dirname "${BASH_SOURCE[0]}")/uploads-bucket-cors.json"
+echo "[0/3] Asserting CORS on gs://${UPLOADS_BUCKET_NAME} from ${CORS_FILE} ..."
+if gcloud storage buckets update "gs://${UPLOADS_BUCKET_NAME}" --project="$PROJECT" --cors-file="$CORS_FILE" >/dev/null 2>&1; then
+  echo "   ✓ uploads bucket CORS asserted (resumable archive uploads ON)"
+else
+  echo "   ✗ uploads bucket CORS update FAILED — falling back to the single signed PUT (ARCHIVE_RESUMABLE_UPLOADS=false)" >&2
+  echo 'ARCHIVE_RESUMABLE_UPLOADS: "false"' >> "$ENV_FILE"
+fi
+
 # ── Deploy one Cloud Run service ─────────────────────────────────────────────
 # Shared knobs across both services (cost-tuned on db-f1-micro): min=0
 # (cold-start accepted — see the webhook caveat in docs/prod-deploy.md), max=1
