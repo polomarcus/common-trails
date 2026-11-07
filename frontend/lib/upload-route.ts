@@ -75,3 +75,41 @@ export function partitionUpload<F extends NamedFile>(
   }
   return { route, ignored: [] };
 }
+
+// ── Pre-send sport recap ─────────────────────────────────────────────────────
+//
+// Generic `<type>` values that carry no road/gravel/MTB signal (Strava GPX
+// exports collapse every cycling variant to "cycling" / "1"). Mirrors the
+// backend's generic entries in `GPX_TRACK_TYPE_TO_SPORT`; only used to WORD
+// the recap — the server still decides (and skips what it can't classify).
+const GENERIC_GPX_TYPES = new Set(['cycling', 'ride', 'biking', 'bike', 'ebiking', '1']);
+
+/** True when a GPX text declares a usable sport in its first `<type>`. */
+export function gpxDeclaresSport(text: string): boolean {
+  const m = /<type>\s*([^<]*?)\s*<\/type>/i.exec(text);
+  if (!m || !m[1]) return false;
+  const key = m[1].toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+  return key.length > 0 && !GENERIC_GPX_TYPES.has(key);
+}
+
+/** Bytes read per GPX to find `<type>` (it sits in `<trk>`, near the top). */
+const GPX_HEAD_BYTES = 64 * 1024;
+
+/**
+ * How many loose traces don't declare their own sport (→ they will take the
+ * chosen chip). A FIT carries its device sport, so it counts as declared; a
+ * GPX counts when its `<type>` is missing or generic. Unreadable → undeclared.
+ */
+export async function countUndeclaredSport(files: File[]): Promise<number> {
+  let n = 0;
+  for (const f of files) {
+    if (!/\.gpx$/i.test(f.name.trim())) continue;
+    try {
+      const head = await f.slice(0, GPX_HEAD_BYTES).text();
+      if (!gpxDeclaresSport(head)) n++;
+    } catch {
+      n++;
+    }
+  }
+  return n;
+}

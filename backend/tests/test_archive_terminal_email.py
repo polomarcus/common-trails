@@ -55,6 +55,9 @@ def _local_intake_dir(tmp_path, monkeypatch):
 def _gpx_xml(name: str, lat0: float, lon0: float, n: int = 8) -> str:
     gpx = gpxpy.gpx.GPX()
     trk = gpxpy.gpx.GPXTrack(name=name)
+    # No activities.csv here: the member must carry its own sport, or the
+    # drain skips it (no blanket fallback sport for archives).
+    trk.type = "road_biking"
     gpx.tracks.append(trk)
     seg = gpxpy.gpx.GPXTrackSegment()
     trk.segments.append(seg)

@@ -62,6 +62,9 @@ _FIT_EXTRA_SKIP: set[str] = {
     # Motorised sub-sports
     "motocross",
     "atv",
+    # Handcycle — skipped on every other path (Strava "Handcycle", GPX
+    # "handcycling"); the FIT spelling is "hand_cycling".
+    "hand_cycling",
 }
 
 # FIT ``file_id.manufacturer`` values (fitparse profile strings) that only ever
@@ -263,30 +266,69 @@ def parse_fit(content: bytes) -> dict:
     return result
 
 
-def _infer_sport(fit) -> str | None:
-    """Infer sport type from the FIT session sport field.
+# FIT ``sub_sport`` (fitparse profile strings) → our sport, for the cycling
+# family (sport=cycling / e_biking). Garmin's MTB / gravel / e-MTB activity
+# profiles all write sport=cycling and carry the real discipline ONLY in
+# sub_sport — reading `sport` alone filed every MTB / gravel ride as road.
+_FIT_CYCLING_SUB_SPORT: dict[str, str] = {
+    "mountain": "mtb",
+    "downhill": "mtb",
+    "e_bike_mountain": "mtb",
+    "bmx": "mtb",
+    "gravel_cycling": "gravel",
+    "cyclocross": "gravel",
+    "mixed_surface": "gravel",
+    "road": "road",
+    "commuting": "road",
+    "e_bike_fitness": "road",  # Garmin's OUTDOOR e-bike profile
+    "recumbent": "road",
+    "track_cycling": "road",
+    "track": "road",
+    "street": "road",
+}
+# FIT sports whose session maps to the running layer whatever the sub_sport
+# (indoor / treadmill sub-sports are skipped upstream by `_fit_skip_reason`).
+# Hike / walk → running, same as the Strava catalog ("Hike"/"Walk") and the
+# GPX map ("hiking"/"walking").
+_FIT_RUNNING_SPORTS: frozenset[str] = frozenset({"running", "walking", "hiking"})
 
-    Returns None when the device session carries NO sport field — so the
-    caller's cascade (CSV / Activity Name hint, form-supplied sport) can
-    win instead of being shadowed by a hard "road" default. A FIT with an
-    explicit sport still maps as before. See the `/imports/files` cascade
-    in `app/api/imports.py` and the CLI cascade in
-    `scripts/import_strava_export.py`.
+
+def _fit_sport_from_values(sport, sub_sport) -> str | None:
+    """Map one FIT session's (sport, sub_sport) to our sport enum, or None
+    when the pair carries no reliable information (generic / multisport /
+    mountaineering / an enum value fitparse doesn't know and returns as a
+    bare int). None NEVER becomes a default sport: the caller's cascade
+    (activities.csv, user choice) decides, else the file is skipped."""
+    if not sport or isinstance(sport, int):
+        return None
+    s = str(sport).lower()
+    sub = None if sub_sport is None else str(sub_sport).lower()
+    if s in ("cycling", "e_biking"):
+        if sub is None or sub in ("generic", "all"):
+            # Generic "Bike" profile: road — the same reading as Strava's
+            # generic "Ride" (`classify_sport`). A more specific source (CSV
+            # "Gravel Ride", the user's explicit choice) still refines it via
+            # `resolve_sport_cascade`.
+            return "road"
+        if sub_sport is not None and isinstance(sub_sport, int):
+            return None  # sub-sport newer than the fitparse profile → unknown
+        return _FIT_CYCLING_SUB_SPORT.get(sub)
+    if s in _FIT_RUNNING_SPORTS:
+        return "running"
+    return None
+
+
+def _infer_sport(fit) -> str | None:
+    """Infer our sport from the FIT session ``sport`` + ``sub_sport``.
+
+    Returns None when the session carries no usable sport (absent, generic,
+    or not a cycling/running/walking discipline we model) — the caller's
+    cascade (`strava_utils.resolve_sport_cascade`: activities.csv, the
+    user's explicit choice) decides, and with nothing left the file is
+    SKIPPED, never defaulted.
     """
     for session in fit.get_messages("session"):
         sport = session.get_value("sport")
         if sport:
-            sport_lower = str(sport).lower()
-            if sport_lower in ("cycling", "road_cycling"):
-                return "road"
-            if sport_lower in ("gravel_cycling",):
-                return "gravel"
-            if sport_lower in ("mountain_biking", "mtb"):
-                return "mtb"
-            if sport_lower in ("running", "trail_running"):
-                return "running"
-            if "cycling" in sport_lower:
-                return "gravel"  # default cycling → gravel
-            if "running" in sport_lower or "trail" in sport_lower:
-                return "running"
+            return _fit_sport_from_values(sport, session.get_value("sub_sport"))
     return None  # no FIT sport field — let the caller's cascade decide

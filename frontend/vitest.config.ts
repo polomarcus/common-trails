@@ -20,6 +20,7 @@ export default defineConfig({
       'lib/__tests__/strava-archive-resumable.test.ts',
       'lib/__tests__/strava-upload-summary.test.ts',
       'lib/__tests__/upload-progress.test.ts',
+      'lib/__tests__/upload-route.test.ts',
       'lib/__tests__/community-stats.test.ts',
       'lib/__tests__/community-heatmap-layers.test.ts',
       'lib/__tests__/admin-metrics.test.ts',

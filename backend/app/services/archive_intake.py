@@ -364,6 +364,30 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
 _NO_CSV = object()
 _OVERSIZE = object()
 
+# Stored in the NOT NULL ``sport`` / ``fallback_sport`` columns when there is
+# no sport hint. Deliberately NOT a valid sport: the drain's cascade ignores
+# it, so the member's sport comes from its own file or it is skipped.
+NO_SPORT_HINT = "unknown"
+
+# Per-member queue rows (``pending_archive_files.sport``) hold EITHER the
+# activities.csv sport (ranks FIRST) OR the user's explicit pick for a member
+# with no CSV row (ranks LAST). The pick is stored with this prefix so the
+# drain can tell them apart without a schema change; see split_queued_sport.
+PICK_PREFIX = "pick:"
+
+
+def split_queued_sport(stored: str | None) -> tuple[str | None, str | None]:
+    """``(csv_sport, fallback_sport)`` from a queued row's ``sport`` value.
+
+    ``"pick:mtb"`` → ``(None, "mtb")`` (last resort); ``NO_SPORT_HINT`` / NULL
+    → ``(None, None)``; anything else is the activities.csv sport →
+    ``(value, None)`` so it outranks the file's generic FIT/GPX sport."""
+    if not stored or stored == NO_SPORT_HINT:
+        return None, None
+    if stored.startswith(PICK_PREFIX):
+        return None, stored[len(PICK_PREFIX):] or None
+    return stored, None
+
 
 # NOTE: iter_zip_members above yields Garmin "Export All" nested members
 # (``<inner.zip>!<member>``) WITH their already-read inner bytes. The drain now
@@ -378,8 +402,8 @@ def enqueue_archive(
     user_id: str,
     content: bytes,
     filename: str,
-    fallback_sport: str,
     contribute_heatmap: bool,
+    fallback_sport: str | None = None,
     consent_id: str,
     source: str = ARCHIVE_PROVENANCE,
 ) -> IntakeResult:
@@ -397,8 +421,17 @@ def enqueue_archive(
             # Skip beats pollute — never store or ingest it.
             result.skipped += 1
             continue
-        # csv_sport is either a sport string or the _NO_CSV sentinel.
-        resolved_sport = csv_sport if isinstance(csv_sport, str) else fallback_sport
+        # csv_sport is either a sport string or the _NO_CSV sentinel. A CSV
+        # sport is stored as-is (the drain ranks it FIRST); no CSV row → the
+        # user's explicit pick as "pick:<sport>" (ranked LAST, after the
+        # file's own FIT/GPX sport), else NO_SPORT_HINT (member skipped when
+        # its file has no sport). See split_queued_sport.
+        if isinstance(csv_sport, str):
+            resolved_sport = csv_sport
+        elif fallback_sport and fallback_sport != NO_SPORT_HINT:
+            resolved_sport = f"{PICK_PREFIX}{fallback_sport}"
+        else:
+            resolved_sport = NO_SPORT_HINT
         member_id = str(uuid.uuid4())
         try:
             backend, storage_key = store_member(user_id, member_id, name, raw)

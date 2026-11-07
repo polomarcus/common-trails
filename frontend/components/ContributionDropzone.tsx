@@ -10,12 +10,17 @@
  *   - **Block A — Strava archive (.zip)**: signed-URL init → PUT straight to
  *     storage → complete (`uploadArchive`), GB-safe, never touches the
  *     ~32–50 MB Cloud Run cap. NO sport question — the archive's
- *     `activities.csv` is authoritative (the default sport is only a silent
- *     fallback). Carries a link that opens the collapsed "get your archive"
+ *     `activities.csv` / each file's own sport is authoritative; a chip the
+ *     user EXPLICITLY picked is only a last resort for files with none (no
+ *     pick → those are skipped server-side). Carries a link that opens the collapsed "get your archive"
  *     how-to further down the page.
  *   - **Block B — loose GPX / FIT**: streamed through `/imports/files`. The
  *     sport chips live HERE — the user states what the traces are
  *     (VTT/Gravel/…) because loose files carry no reliable sport signal.
+ *
+ * Pre-send recap: a dropped .zip, or loose GPX that don't declare their own
+ * sport, wait for a confirmation that states which sport those files will get
+ * (« N fichier(s) ne précisent pas leur sport : ils seront classés … »).
  *
  * Cross-routing guard: BOTH blocks dispatch through `chooseUploadPath`
  * (pure, unit-tested) — a `.zip` dropped on Block B still takes the archive
@@ -34,7 +39,7 @@ import { API_URL } from '@/lib/api-client';
 import { getToken } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { buildUploadSummary } from '@/lib/strava-upload-summary';
-import { partitionUpload } from '@/lib/upload-route';
+import { countUndeclaredSport, partitionUpload } from '@/lib/upload-route';
 import { markArchivePending } from '@/lib/archive-pending';
 import { archiveErrorKey, checkArchiveSize, uploadArchive } from '@/lib/strava-archive-upload';
 import { buildFilesConsentFields, CONTRIBUTION_CONSENT_VERSION } from '@/lib/strava-archive-consent';
@@ -88,6 +93,12 @@ export default function ContributionDropzone() {
   const canPick = !busy;
   const canPickFiles = canPick && sport !== null;
   const [ignoredMsg, setIgnoredMsg] = useState<string | null>(null);
+  // Upload awaiting the pre-send sport recap confirmation.
+  const [pending, setPending] = useState<
+    | { kind: 'archive'; file: File }
+    | { kind: 'files'; files: File[]; undeclared: number }
+    | null
+  >(null);
 
   // Leaving the page mid-upload silently kills a multi-GB archive transfer —
   // warn while (and only while) an upload is in flight.
@@ -120,9 +131,11 @@ export default function ContributionDropzone() {
         token,
         blob: file,
         payload: {
-          // Fallback only (unchanged): a Strava archive's activities.csv / the
-          // server classifier is authoritative.
-          sport: sport ?? 'mtb',
+          // Sport ONLY if the user explicitly picked a chip — never a default
+          // (a silent 'mtb' here used to file runs/hikes under VTT). Server-
+          // side it is a last resort: activities.csv and each file's own
+          // FIT/GPX sport win; a member nothing classifies is skipped.
+          ...(sport !== null ? { sport } : {}),
           consent: true,
           consent_version: CONTRIBUTION_CONSENT_VERSION,
           consent_text: t('strava.archive.consentLabel'),
@@ -207,10 +220,33 @@ export default function ContributionDropzone() {
     setIgnoredMsg(ignored.length
       ? t('strava.filesIgnored', { count: ignored.length, names: ignored.map((f) => f.name).join(', ') })
       : null);
+    setPending(null);
     if (route.kind === 'empty') return;
-    if (route.kind === 'archive') await runArchiveUpload(route.file, token);
-    else if (sport === null) setErrMsg(t('strava.pickSportFirst'));
+    // Pre-send recap: say which sport the files that don't declare their own
+    // will get, with the chips still changeable, BEFORE anything is sent.
+    // A zip's content is unknown client-side → always recap it.
+    if (route.kind === 'archive') {
+      // A too-big export is refused right away — no point confirming it.
+      const tooBig = checkArchiveSize(route.file);
+      if (tooBig) { setErrMsg(t(archiveErrorKey(tooBig))); setPhase('error'); return; }
+      setPending({ kind: 'archive', file: route.file });
+      return;
+    }
+    if (sport === null) { setErrMsg(t('strava.pickSportFirst')); return; }
+    const undeclared = await countUndeclaredSport(route.files);
+    if (undeclared > 0) setPending({ kind: 'files', files: route.files, undeclared });
     else await runFilesUpload(route.files, sport);
+  };
+
+  const confirmPending = async () => {
+    const p = pending;
+    if (!p) return;
+    const token = getToken();
+    if (!token) { setErrMsg(t('strava.loginToImport')); return; }
+    if (p.kind === 'files' && sport === null) { setErrMsg(t('strava.pickSportFirst')); return; }
+    setPending(null);
+    if (p.kind === 'archive') await runArchiveUpload(p.file, token);
+    else await runFilesUpload(p.files, sport as string);
   };
 
   // Reveal + scroll to the collapsed "get your Strava archive" how-to that
@@ -388,7 +424,9 @@ export default function ContributionDropzone() {
                 type="button"
                 data-testid={`sport-chip-${s.key}`}
                 aria-pressed={sport === s.key}
-                onClick={() => setSport(s.key)}
+                // Clicking the chosen chip again clears it (archive recap: "no
+                // sport" → files without one are skipped).
+                onClick={() => setSport(sport === s.key ? null : s.key)}
                 style={{
                   padding: '5px 10px', borderRadius: 16, fontSize: 11, cursor: 'pointer',
                   background: sport === s.key ? 'rgba(45,106,79,0.3)' : 'rgba(255,255,255,0.04)',
@@ -432,6 +470,61 @@ export default function ContributionDropzone() {
           </p>
         </div>
       </div>
+
+      {/* Pre-send sport recap (shared area): nothing is sent until confirmed;
+          the chips above stay live, so the line updates as the user changes
+          the sport. */}
+      {pending && (
+        <div
+          data-testid="upload-recap"
+          style={{
+            margin: '14px 0 0', padding: '10px 12px', borderRadius: 10, textAlign: 'left',
+            background: 'rgba(252,211,77,0.08)', border: '1px solid rgba(252,211,77,0.3)',
+          }}
+        >
+          <p data-testid="upload-recap-text" style={{ color: '#fff', fontSize: 12.5, margin: '0 0 4px', fontWeight: 600 }}>
+            {pending.kind === 'files'
+              ? t('strava.recap.files', {
+                count: pending.undeclared,
+                sport: sport ? t(`sport.${sport}`) : '—',
+              })
+              : sport
+                ? t('strava.recap.archiveSport', { sport: t(`sport.${sport}`) })
+                : t('strava.recap.archiveNoSport')}
+          </p>
+          {pending.kind === 'archive' && (
+            <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 11, margin: '0 0 4px' }}>
+              {t('strava.recap.archiveCsvNote')}
+            </p>
+          )}
+          <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 11, margin: '0 0 8px' }}>
+            {t(pending.kind === 'archive' ? 'strava.recap.change' : 'strava.recap.changeFiles')}
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              data-testid="upload-recap-confirm"
+              onClick={confirmPending}
+              disabled={pending.kind === 'files' && sport === null}
+              style={{ ...pickButtonStyle, padding: '7px 16px', border: 'none' }}
+            >
+              {t('strava.recap.confirm')}
+            </button>
+            <button
+              type="button"
+              data-testid="upload-recap-cancel"
+              onClick={() => setPending(null)}
+              style={{
+                background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.75)',
+                border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8,
+                padding: '7px 16px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              {t('strava.recap.cancel')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Live progress bar for the direct-to-storage .zip path (shared area). */}
       {view.showBar && (
