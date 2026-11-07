@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Architecture & Missing Steps — Chemins Communs
 
 > Last updated: 2026-05-09. Snapshot of what exists, what's deployed, and what's missing

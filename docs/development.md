@@ -5,9 +5,9 @@
 | Composant | Technologie |
 |-----------|-------------|
 | Backend | FastAPI + Python 3.13-slim |
-| Base de données | PostgreSQL 17 + PostGIS 3.6 + pgRouting |
+| Base de données | PostgreSQL 17 + PostGIS 3.6 |
 | Frontend | Next.js 16 + TypeScript + MapLibre GL |
-| Tests | pytest (backend) + Playwright (E2E) |
+| Tests | pytest (backend) + Vitest (frontend unit) + Playwright (E2E) |
 | CI/CD | GitHub Actions + Docker Compose |
 | Infra cible | GCP serverless (Cloud Run, Cloud SQL) |
 
@@ -22,8 +22,7 @@
 ## Démarrage local
 
 ```bash
-cp .env.example .env
-make up
+make up          # .env optionnel : les valeurs dev viennent de docker-compose.yml
 curl http://localhost:8787/healthz
 open http://localhost:3787
 ```
@@ -33,7 +32,7 @@ Compte admin auto-créé : `admin@admin` / `admin`
 ## Lancer les tests
 
 ```bash
-# Backend (pytest) — fast subset, ~616 tests, 1–2 min
+# Backend (pytest) — sous-ensemble rapide (celui de la CI)
 make test
 # ou directement :
 docker compose exec backend pytest -q -m "not slow"
@@ -44,27 +43,24 @@ make test-slow
 # Frontend build (static export)
 cd frontend && npm install && npm run build
 
+# Frontend unit (Vitest)
+cd frontend && npm run test
+
 # E2E Playwright
 cd e2e && npx playwright test
-
-# Tests unitaires client-graph (sans runner)
-npx tsx frontend/lib/__tests__/client-graph.test.ts
 ```
 
-**Pourquoi `-m "not slow"` par défaut ?** Les ~277 tests marqués `slow` exercent
-des scans complets de `heat_edges` (publish_heatmap_cache, MVT pre-generation,
-perf regression sur prod-sized data). Ils OOM-kill le container backend dès
-qu'il y a > ~10 k edges en DB de dev — ce qui arrive vite avec un import Strava
-réel. Pour les lancer proprement, il faut une DB neuve (`docker compose down -v`)
-ou un environnement isolé.
+**Pourquoi `-m "not slow"` par défaut ?** Les tests marqués `slow` exercent des
+scans complets des tables héritées `heat_edges` et peuvent OOM-kill le container
+backend sur une DB de dev chargée. Pour les lancer, partir d'une DB neuve
+(`docker compose down -v`). Détails : [`local-testing.md`](local-testing.md).
 
 ## Principes de développement
 
 ### Simplicité et explicabilité
 
-- Algorithmes déterministes (Dijkstra, pas de ML)
+- Algorithmes déterministes et explicables (pas de ML)
 - Données locales (pas de dépendance runtime à des APIs externes)
-- Routage en graphe simple avec modèle de coût multiplicatif
 
 ### Intégrité des traces (méthodologie Crouzet)
 
@@ -91,6 +87,8 @@ En `TEST_MODE=true` (défaut Docker Compose), tous les appels externes sont remp
 - Next.js 16 met à jour automatiquement `tsconfig.json` et génère `next-env.d.ts`
 
 ## CI / Branches
+
+Voir [`ci.md`](ci.md) et [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 - Ne jamais pusher directement sur `main`
 - Branches de feature : `feat/<nom>`

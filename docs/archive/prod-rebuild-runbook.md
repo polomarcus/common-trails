@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Prod elevation + surface rebuild runbook
 
 > ⚠️ **SUPERSEDED for DEPLOYS.** Prod is deployed **ONLY** via

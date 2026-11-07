@@ -2,15 +2,55 @@
 
 ## Overview
 
-The heatmap shows community cycling activity as heat-weighted trails on the map. The pipeline transforms raw GPS traces into styled vector tiles:
+**Current (prod, since 2026-07-29): raw-trace display** — selected by
+`HEATMAP_DISPLAY_SOURCE=raw` (code default is still `matched`,
+`backend/app/services/raw_trace_display.py`; prod sets `raw` in
+`scripts/deploy-prod.sh`). The heatmap is drawn from the precise GPS traces of
+consented `manual_upload` activities, read straight from `activities`:
 
 ```
-GPS Trace → Map-match (HMM) → heat_edges → by-way aggregation → MVT / PMTiles → MapLibre
+activities (manual_upload, consented) → build_pmtiles (raw export: endpoint masking,
+glitch guards, HEATMAP_MIN_USERS per-cell floor) → tippecanoe (`trails` + `heat_points`)
+→ heatmap-display-<version>.pmtiles + pointer heatmap-display.json (GCS, tiles.chemins-communs.fr)
+→ MapLibre (/ and /map)
 ```
 
-(The `heat_edges_display` materialized view was removed June 2026 — the by-way aggregation now runs from one shared SQL builder; see Stage 3.)
+The matched pipeline below (map-matching to OSM → `heat_edges` → by-way
+aggregation) is **legacy**: its substrate (`osm_road_edges`, `heat_edges_agg`, …)
+is dropped in prod. It is kept as reference only. Overall architecture:
+[`architecture.md`](architecture.md); manual rebuild:
+[`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 
-## Stage 1: GPS Trace Ingestion
+## Current: raw pipeline
+
+- **Build entry point:** `backend/app/jobs/build_pmtiles.py` → `main()`; in raw
+  mode it calls `_run_raw_export()` (a spawned child process, except under
+  pytest or with `HEATMAP_EXPORT_ISOLATED=false`) which streams activities through
+  `backend/app/services/raw_trace_display.py`.
+- **Privacy:** extrémités masquées (`TRACE_MASK_METERS`, 200 m —
+  `backend/app/services/trace_privacy.py`) + distinct-user floor
+  `HEATMAP_MIN_USERS` (`raw_trace_display.min_users()`, 1 in prod). Provenance:
+  only `source = 'manual_upload'` (`backend/app/services/provenance.py`). The
+  `--min-uc` CLI flag only applies to the legacy matched path.
+- **Region clip:** `HEATMAP_RAW_BBOX` drops wholly out-of-region (corrupt) traces.
+- **Output layers:** `trails` (LineStrings with `user_count`, `heat_score`,
+  `sport`, direction fields) and `heat_points` (weighted points for the density
+  heatmap). Optional raster XYZ pyramid (`HEATMAP_RASTER_PYRAMID=true` in prod)
+  and a gzipped GeoJSONL used by the export endpoints.
+- **Publication:** see [PMTiles versioning convention](#pmtiles-versioning-convention-phase-3)
+  below (immutable snapshot → pointer compare-and-set → mutable copy → prune).
+- **Frontend layers** (`frontend/lib/community-heatmap-layers.ts`): source
+  `community-trails` (vector, z6–14) → `community-trails-heat` (maplibre
+  `heatmap` over `heat_points`), `community-trails-glow` + `community-trails-line`
+  (over `trails`), `community-trails-arrows` (one-way direction symbols). The
+  PMTiles URL is resolved through the pointer by `frontend/lib/cdn-cache.ts`.
+- **Triggers:** event-driven only (archive drain, `/imports/files` batch end,
+  Cloud Tasks artefact rebuild, deletions) — there is no periodic rebuild
+  scheduler. See [`architecture.md`](architecture.md).
+
+## Legacy: matched pipeline (reference only)
+
+### Stage 1: GPS Trace Ingestion
 
 **Entry point:** `backend/app/services/ingest.py` → `ingest_activity()`
 
@@ -31,7 +71,7 @@ When a user uploads a GPX or syncs from Strava:
    tolerates brief off-radius excursions (no run-break at curve apexes). Setting
    `SPATIAL_HMM_ENABLED=false` falls back to the legacy per-point nearest-snap (nearest way within
    15 m). Both use the same spatial grid over `osm_road_edges` (55 m cells, 3×3-cell candidate
-   lookup). See `docs/heatmap-map-matching-plan.md`.
+   lookup). See `docs/archive/heatmap-map-matching-plan.md`.
 4. **Snap coordinates** for cross-rider edge dedup (so two riders on one road share an `edge_key`):
    - **OSM-matched:** project each point onto its matched OSM segment (`_project_onto_segment`),
      then bucket along the segment's **arc-length at 1 m** (`_snap_along_segment`) — keeps the point
@@ -51,7 +91,7 @@ When a user uploads a GPX or syncs from Strava:
 - `heat_edge_contributors` — which user contributed to which edge (drives K-anonymity + the `?days=` time filter).
 - **`osm_road_edges` — the imported OpenStreetMap road/path network.** The reference map the matcher snaps GPS onto. Built by `app/cli/import_osm_roads.py` from a Geofabrik **PBF** (e.g. `france-south.osm.pbf`), parsed with `pyosmium`. **One row per *sub-segment* of an OSM way** (a way = a road/path, split into consecutive 2-point segments), so one road becomes many rows. Each row carries `osm_way_id` + `segment_idx` (which way + position — lets the display re-assemble the whole way), `geometry` (the 2-point sub-segment the spatial grid indexes for fast nearest-lookup), **`way_geometry`** (the *full* multi-point curve of the whole way — what Stage 4's aggregation uses to render smooth roads instead of 2-point hops), and `surface`/`highway`/`bridge_yes`/`tunnel_yes` OSM tags. **Row count depends entirely on the imported region** (it's the whole OSM road graph there, not user data): local `occitanie` ≈ **7.2 M**, `france-south` ≈ **9.8 M**, `france` ≈ 50 M (too big for a laptop). Biggest table on disk (~11 GB for france-south); **read-only reference data**, rebuilt only on a PBF re-import.
 
-## Stage 2: Heat Edge Storage
+### Stage 2: Heat Edge Storage
 
 **Schema (`heat_edges`):**
 ```
@@ -74,7 +114,7 @@ highway_type TEXT       -- from OSM tags
 | 4 | 16-50 | 0.80-1.0 | Very popular |
 | 5 | 51+ | 1.0 | Highway |
 
-## Stage 3: ~~Materialized View (`heat_edges_display`)~~ — REMOVED (June 2026)
+### Stage 3: ~~Materialized View (`heat_edges_display`)~~ — REMOVED (June 2026)
 
 **The `heat_edges_display` materialized view was dropped.** It only
 accelerated the LIVE `/heatmap/tiles` MVT endpoint — which the frontend uses
@@ -95,17 +135,17 @@ matview to build, refresh, or pre-warm anymore.
 Migration `0055_drop_heat_edges_display_matview.py` drops the view + its
 indexes.
 
-## Stage 4: MVT Tile Generation
+### Stage 4: MVT Tile Generation
 
-### Why MVT tiles at all
+#### Why MVT tiles at all
 The browser can't load millions of heat_edges as GeoJSON — hundreds of MB would freeze MapLibre. **Vector tiles (MVT)** chop the world into 256-px tiles per zoom; the browser fetches only the few tiles in view, each a tiny pre-projected binary MapLibre renders on the GPU. That's what makes "millions of community edges" pannable. Two ways we produce them:
 - **Static PMTiles** (Stage 5, the DEFAULT served path) — the *whole* tileset pre-rendered once into one `heatmap-display.pmtiles` file, served from disk/CDN with **zero DB hit per tile**. The "free heatmap at scale" mechanism (`app/jobs/build_pmtiles.py`).
 - **Live MVT endpoint** (below) — generates a tile on demand from `heat_edges`. The frontend uses it only as a **fallback** behind PMTiles (`frontend/lib/cdn-cache.ts`: PMTiles → CDN → this endpoint), and for **dynamic** queries the static file can't answer (e.g. `?days=N` time-filtered heat).
 
-### Why zoom-dependent rendering
+#### Why zoom-dependent rendering
 A z6 tile spans ~150 km — drawing every edge there is pointless and huge, so low zooms **cluster** points to a coarse grid (`heat_points`). High zooms show actual trail geometry (`trails`), simplified at z11-13 and full-detail at z14+. This caps each tile's byte size so panning stays fast at every scale.
 
-### Why the by-way aggregation
+#### Why the by-way aggregation
 Both paths resolve each heat_edge to its smooth OSM `way_geometry` via the shared `app/services/heat_aggregation.py::build_heat_aggregation_sql` (GROUP BY `(osm_way_id, sport)` + LATERAL-join `osm_road_edges`). PMTiles bakes it ahead of time; the live endpoint runs it at request time (~50-200 ms — acceptable for a rarely-hit fallback). Without the by-way grouping, N traces on one road render as N overlapping 2-point segments (z16+ micro-zigzags).
 
 **Endpoint:** `GET /heatmap/tiles/{sport}/{z}/{x}/{y}.mvt`
@@ -145,7 +185,7 @@ PMTiles build, so the two display paths cannot drift.
 
 **Sport expansion:** `offroad` expands to `['gravel', 'mtb']`.
 
-## Stage 5: Frontend Rendering
+### Stage 5: Frontend Rendering
 
 **MapLibre layers (3 layers from same MVT source):**
 
@@ -157,14 +197,12 @@ Plus **`community-trails-points`** (z6-10) — Purple circles for overview zoom.
 
 **Paint properties:** All use `['interpolate', ['linear'], ['get', 'heat_score'], ...]` for data-driven styling. Popular edges render on top via `line-sort-key: ['get', 'user_count']`.
 
-**Tile prefetching:**
-- Visible tiles prefetched on sport/time filter change
-- Predictive prefetch on pan (50% viewport ahead in pan direction)
-- Service Worker cache (stale-while-revalidate)
+(Legacy layer list — the current layers are in `frontend/lib/community-heatmap-layers.ts`,
+see "Current: raw pipeline" above. The Service Worker tile cache was removed.)
 
-## Operations
+### Operations
 
-### Rebuild heatmap (re-process all activities)
+#### Rebuild heatmap (re-process all activities)
 ```bash
 docker compose exec backend python -m app.jobs.rebuild_heatmap
 # Bbox filter:
@@ -173,26 +211,21 @@ docker compose exec backend python -m app.jobs.rebuild_heatmap --bbox "3.5,43.4,
 docker compose exec backend python -m app.jobs.rebuild_heatmap --since 24h
 ```
 
-### Rebuild the display PMTiles (the browser-facing artefact)
+#### Rebuild the display PMTiles (the browser-facing artefact)
 ```bash
-docker compose exec backend python -m app.jobs.build_pmtiles --output-dir /tmp --min-uc 2
-# or: make pmtiles
+make pmtiles   # builds in the backend container, writes frontend/public/ in place
 ```
+Prod: [`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 (The `heat_edges_display` materialized view was dropped June 2026 — the live
 MVT endpoint aggregates `heat_edges` directly, so there is no matview to
 refresh. The PMTiles binary is the primary display artefact.)
 
-### Import OSM roads from PBF
+#### Import OSM roads from PBF
 ```bash
 docker compose exec backend python -m app.cli.import_osm_roads --region occitanie
 ```
 
-### Build .fgraph files (pre-built routing graphs)
-```bash
-./wasm-router/build.sh --prebuild
-```
-
-### Edge enrichment (CLI, NOT at startup)
+#### Edge enrichment (CLI, NOT at startup — legacy matched substrate)
 
 Enrichment tasks are **never run at startup** — they are baked into the
 import scripts (DEM slopes) and exposed as CLI commands for ad-hoc runs.
@@ -223,7 +256,9 @@ skips. No external API calls at boot.
 ## PMTiles: Primary Heatmap Tile System
 
 The heatmap uses **PMTiles** — a single static file containing all vector tiles for z6-z14.
-Served from Cloud Storage + CDN via HTTP range requests. Zero backend computation at runtime.
+Served from Cloud Storage + CDN (`tiles.chemins-communs.fr`) via HTTP range requests. Zero backend
+computation at runtime. (The diagram and size table below date from the matched era; in raw mode
+the export reads `activities`, not `heat_edges`.)
 
 ### How it works
 
@@ -233,7 +268,7 @@ heat_edges (PostGIS) → GeoJSON export → tippecanoe → heatmap-display.pmtil
                                                             MapLibre (pmtiles:// protocol)
 ```
 
-1. **Build**: `python -m app.jobs.build_pmtiles` (default `--min-uc 1` for dev/beta, use `--min-uc 2` for production K-anonymity)
+1. **Build**: `python -m app.jobs.build_pmtiles` (raw mode: the floor is `HEATMAP_MIN_USERS`; `--min-uc` only applies to the legacy matched path)
 2. **Upload**: single file to GCS bucket or `/frontend/public/` for dev
 3. **Serve**: MapLibre fetches tiles via HTTP range requests — 5-15ms per tile from CDN
 4. **Sport filter**: client-side `["==", "sport", "offroad"]` — all sports in one file
@@ -281,10 +316,10 @@ So the host file always wins, and the workflow is:
 # 1. Build a fresh PMTiles inside the backend container (it has access
 #    to PostGIS + tippecanoe). Output goes straight into the host's
 #    frontend/public/ via the backend volume mount on /app.
-docker compose exec backend python -m app.jobs.build_pmtiles \
-    --output-dir /tmp
-docker compose cp backend:/tmp/heatmap-display.pmtiles \
-    frontend/public/heatmap-display.pmtiles
+make pmtiles
+# NEVER `docker compose cp` onto the host file: it replaces the inode and the
+# frontend bind mount keeps serving the OLD bytes. `make pmtiles` writes in place
+# (`cat … > frontend/public/heatmap-display.pmtiles`).
 
 # 2. Hard-reload the browser. No frontend restart needed — the bind
 #    mount means MapLibre fetches the new file on the next range
@@ -309,6 +344,13 @@ frontend` cycle to see your fix. With the mount, it's
 `build_pmtiles` + browser hard-reload.
 
 ## Heatmap Export — public download (PRD #391, Phase 1 + 2 + 2.5 + 3)
+
+> **Current surface (`backend/app/api/export.py`):** `GET /export/heatmap`
+> (discovery), `GET /export/heatmap.pmtiles` and `GET /export/heatmap.geojsonl`
+> (redirects to pre-built artifacts), plus the raster calque `raster/tiles.json`.
+> The on-demand MBTiles / GeoJSON / KML and async `request` endpoints described
+> below were removed; the subsections are kept as design history. Consumer doc:
+> [`heatmap-third-party-integration.md`](heatmap-third-party-integration.md).
 
 Once the PMTiles binary is built, it is also exposed for **third-party
 consumption** under ODbL-1.0. The heatmap is reusable in MapLibre,
@@ -384,12 +426,11 @@ Client → GET /export/heatmap/{request_id}  (every 2 s)
        ← 410 (when past expires_at)
 ```
 
-The `export_requests` row carries a 24 h TTL (`expires_at`). The
-[`cleanup_export_requests`](../backend/app/jobs/cleanup_export_requests.py)
-job runs alongside the matview refresh + deletes expired rows. The
-binaries themselves are GC'd by the GCS lifecycle rule on the
-`archive/` prefix (terraform `google_storage_bucket.heatmap` declares
-`age=90, matches_prefix=['archive/']`).
+(Historical: the on-demand / async export endpoints above were removed — the
+export surface is now pre-computed static artifacts only, see
+[`heatmap-third-party-integration.md`](heatmap-third-party-integration.md). The
+`heat_edges_display` matview is gone and terraform is retired, so no terraform
+lifecycle rule applies.)
 
 ### PMTiles versioning convention (Phase 3)
 
@@ -399,7 +440,28 @@ binaries themselves are GC'd by the GCS lifecycle rule on the
 |---|---|---|---|
 | `heatmap-display.pmtiles` | mutable alias | `public, max-age=86400` | Phase 1 backwards compat. In-app heatmap + "Latest" UI choice. |
 | `heatmap-display-v{H}-{sha8}.pmtiles` | **immutable** per-build | `public, max-age=31536000, immutable` | Snapshot pinning. `H` is the epoch-hour integer + an 8-char sha256 prefix of the bytes; identical bytes within the same hour collapse onto one blob (idempotent re-upload), distinct bytes always get distinct names so the `immutable` cache contract holds across intra-day rebuilds. |
-| `heatmap-display.json` | pointer | `public, max-age=300` | `{latest, latest_url, mutable_url, size_bytes, captured_at, k_anonymity, edge_count, license, attribution}`. Atomic write (`.tmp → rewrite()`). Written LAST so it always references a snapshot that already exists. |
+| `heatmap-display.json` | pointer | `no-store` on the tmp blob | `{latest, latest_url, mutable_url, size_bytes, captured_at, snapshot_started_at, k_anonymity, edge_count?, license, license_url, attribution}`. Written AFTER the snapshot via compare-and-set (below). `k_anonymity` reports the gate the render actually used (`HEATMAP_MIN_USERS` in raw mode). |
+
+**Publication order and overlapping builds** (`_upload_to_export_bucket` /
+`_publish_pointer_cas` in `backend/app/jobs/build_pmtiles.py`). Builds can
+overlap (archive drain, `/imports/files`, Cloud Tasks), so:
+
+1. Upload the immutable snapshot `heatmap-display-<version>.pmtiles`.
+2. **Pointer compare-and-set:** publish only if our `snapshot_started_at`
+   (recorded before the export query) is strictly newer than the live
+   pointer's. Per-run unique tmp blob `heatmap-display.json.tmp-<uuid>` +
+   `rewrite(if_generation_match=<generation read>)`; one retry on a
+   precondition failure; success if the pointer already carries our snapshot
+   (lost response + client auto-retry).
+3. **Mutable copy** `heatmap-display.pmtiles`, only if the pointer is still ours
+   (re-checked just before the rewrite).
+4. **Prune** old pinned snapshots, only if the pointer is still ours: re-reads
+   the pointer, keeps ours + the one the pointer references + any created after
+   our start, never deletes an object with unknown `time_created`.
+
+A build that loses the race deletes nothing (not even its own snapshot — the
+next build's prune cleans real orphans). The raster pyramid and GeoJSONL
+secondaries are not guarded (last writer wins until the next build).
 
 Discovery payload (`GET /export/heatmap`) reads the pointer (via a
 60 s in-process cache so a hot endpoint doesn't hammer GCS) and
@@ -416,10 +478,10 @@ formats:
     pointer_url: https://.../heatmap-display.json
 ```
 
-Retention: terraform adds a second lifecycle rule
-(`age=365, matches_prefix=['heatmap-display-v']`) to cap the pinned
-archive at one year (~3.6 GB at 10 MB/snapshot). The mutable file +
-the pointer JSON are explicitly NOT touched by any lifecycle rule.
+Retention: pinned snapshots are **pruned at the next successful build**
+(step 4 above — GDPR: a deleted trace must not survive in an old snapshot).
+There is no terraform lifecycle rule. Consumers who need a snapshot must
+download it.
 
 ### Format comparison
 
@@ -540,63 +602,18 @@ ODbL attribution is enforced two ways:
 - **Phase 3 (KML/KMZ)**: For users routed via Google Earth / Garmin
   BaseCamp.
 
-## Routing Graph Tiles (Separate CTGB System — by design)
+## Routing Graph Tiles — retired
 
-Routing intentionally uses a separate CTGB binary tile system, NOT PMTiles.
-
-**Why NOT merge them:**
-1. **tippecanoe simplifies geometry** (`--simplification=5`) — drops vertices to make tiles smaller. Display can tolerate this; routing accuracy can't.
-2. **tippecanoe drops "densest" features** at low zooms — would lose routing edges in dense areas.
-3. **Wrong abstraction**: tippecanoe is a rendering tool. Routing needs exact coordinates for snapping + cost model.
-4. **MVT → CTGB conversion in JS would cost 50-200ms** per tile load — wasteful.
-
-**Architecture:**
-- **Display (PMTiles)**: simplified, dropped, optimized for fast rendering
-- **Routing (CTGB)**: exact geometry, full cost model, no simplification
-- Two purposes, two formats — no merge planned.
+The in-browser WASM router and its CTGB / `.fgraph` graph files were
+decommissioned (`wasm-router/` no longer exists). See `docs/archive/` for the
+historical design.
 
 ## Production Deploy Checklist
 
-### First deploy
-```bash
-# 1. Run migrations
-docker compose exec backend alembic upgrade head
-
-# 2. Build PMTiles heatmap (~5 min)
-docker compose run --rm backend python -m app.jobs.build_pmtiles \
-  --output /app/frontend-public/heatmap.pmtiles
-
-# Or in GCP: build + upload to Cloud Storage
-gcloud run jobs execute build-pmtiles
-gsutil cp /tmp/heatmap.pmtiles gs://common-trails-cdn/heatmap.pmtiles
-
-# 3. Build .fgraph routing graphs (~5 min, <5MB per partition)
-./wasm-router/build.sh --prebuild
-
-# 4. Verify
-curl -s -o /dev/null -w "PMTiles: %{time_total}s\n" -H "Range: bytes=0-126" \
-  https://cdn.chemins-communs.fr/heatmap.pmtiles
-# Expected: <50ms
-```
-
-### After new activities are imported
-```bash
-# 1. Incremental heatmap rebuild
-docker compose run --rm backend python -m app.jobs.rebuild_heatmap --since 24h
-
-# 2. Rebuild PMTiles (~5 min)
-docker compose run --rm backend python -m app.jobs.build_pmtiles
-
-# 3. Upload to CDN (overwrite + cache purge)
-gsutil cp /tmp/heatmap.pmtiles gs://common-trails-cdn/heatmap.pmtiles
-gcloud cdn invalidate --path "/heatmap.pmtiles"
-```
-
-### Routing graph loading (route mode)
-When user enters route mode:
-1. **Try `.fgraph`** — pre-built partition file (<5MB, served from CDN). Instant WASM routing.
-2. **If `.fgraph` too large (>5MB) or missing** → load z14 routing tiles per viewport
-3. **On pan** → `ensureTilesLoaded()` fetches additional z14 tiles incrementally
+Deploys are CD-on-merge (`deploy-gcp.yml` → `scripts/deploy-prod.sh`, see
+[`ci.md`](ci.md) and [`prod-deploy.md`](prod-deploy.md)). Heatmap rebuilds are
+event-driven; to force one, see
+[`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 
 ### Heatmap tile serving architecture
 ```
@@ -632,21 +649,6 @@ GET /heatmap/dfci
 With the standard IGN + Hérault imports (~52K edges), response is ~380KB gzipped.
 The endpoint can handle up to 100K edges safely. For larger datasets (full PBF),
 consider building a separate DFCI PMTiles file.
-
-### Build pipeline — local Mac recommended
-```bash
-# 1. Enrich DFCI/trail cache files with SRTM DEM slopes (one-time, 0.6s)
-python scripts/enrich_cache_dem.py
-
-# 2. Build PMTiles heatmap (needs tippecanoe in Docker or local)
-docker compose exec backend python -m app.jobs.build_pmtiles --min-uc 1
-
-# 3. Upload to CDN
-gsutil cp frontend/public/heatmap-display.pmtiles gs://common-trails-cdn/
-```
-
-Cloud Run has limited RAM (512MB–2GB). Your local Mac (24GB) is better for builds.
-Cloud Run should only serve pre-built assets.
 
 ## Performance: Initial Page Load (Measured April 2026)
 
@@ -713,10 +715,15 @@ Source files:
 | PostGIS (warm buffers) | 50-800ms | First-ever request, no cache |
 | PostGIS (cold buffers) | 1-4s | After restart, no cache |
 
-## K-Anonymity
+## Privacy gate (raw mode)
 
-Only edges with `user_count >= K` are included in public tiles. K=2 in production, K=1 in dev. This ensures no single user's trace is identifiable.
+Prod gate: extrémités masquées (`TRACE_MASK_METERS`, 200 m) + per-cell
+distinct-user floor `HEATMAP_MIN_USERS` (**1** during the beta, 2 planned before
+a public launch) + provenance (`manual_upload` only). This is a per-cell floor,
+not route-level anonymisation — see [`privacy-model.md`](privacy-model.md).
 
-Private tables: `activities`, `activity_cells`
-Public tables (ODbL): `heat_edges` (source of truth, partitioned by sport). The by-OSM-way display aggregation runs on read via the shared `app/services/heat_aggregation.py` builder (no separate matview since June 2026).
-`heat_cells` and `heat_cell_contributors` are legacy: no longer written (PR #214) and aggregated from `heat_edges` at query time via `get_heat_cells_aggregated`. Migration 0037 will drop them after a prod soak cycle.
+Legacy matched mode gated edges on `user_count >= HEATMAP_K_ANONYMITY`; its
+tables (`heat_edges`, `heat_edges_agg`, `heat_cells`, …) are not part of the
+raw display and may not exist in prod.
+
+Private tables: `activities`, `activity_cells`.
