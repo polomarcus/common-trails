@@ -244,7 +244,9 @@ class TestMeActivitiesCompactPayload:
 
         _set_display_null(aid)
         fallback = _list_feature(client, auth_headers, aid)["geometry"]
-        assert fallback == cached  # on-the-fly == precomputed, byte for byte
+        # Not backfilled: the pre-cache payload (every fix), no on-the-fly
+        # simplification cost in the request path.
+        assert _n_points(fallback) == len(coords)
 
         # Detail endpoint: full precision, unchanged.
         detail = client.get(f"/me/activities/{aid}", headers=auth_headers).json()["geometry"]

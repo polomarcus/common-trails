@@ -21,7 +21,6 @@ from app.services.activity_deletion import delete_user_activity
 from app.services.display_geometry import (  # noqa: F401 — re-exported (tests)
     DISPLAY_GAP_BREAK_M,
     _split_at_gaps,
-    compact_display_geometry,
 )
 from app.services.ingest import (
     count_user_map_activities,
@@ -51,18 +50,15 @@ def _activity_to_feature(act: dict, compact: bool = False) -> dict:
     precision. ``compact=True`` (the /me/activities list feeding "Ma heatmap"):
     the precomputed ``display_geojson`` cache (gap-split → Douglas-Peucker 2 m
     → 5-decimal rounding, see ``app.services.display_geometry``) when present,
-    else the same function computed on the fly from ``geometry_geojson`` — a
-    GET never writes; ``app.cli.backfill_display_geojson`` fills the cache.
+    else the full-precision gap-split geometry (exactly the pre-cache payload,
+    no extra CPU) — a GET never writes; ``app.cli.backfill_display_geojson``
+    fills the cache.
     """
-    if compact:
-        cached = act.get("display_geojson")
-        geometry = (
-            json.loads(cached)
-            if cached
-            else compact_display_geometry(json.loads(act["geometry_geojson"]))
-        )
-    else:
-        geometry = _split_at_gaps(json.loads(act["geometry_geojson"]))
+    cached = act.get("display_geojson") if compact else None
+    # Not backfilled yet (or detail view): the pre-cache behaviour, gap split
+    # only. Running Douglas-Peucker here would make every un-cached row cost
+    # MORE CPU per request than before the cache existed.
+    geometry = json.loads(cached) if cached else _split_at_gaps(json.loads(act["geometry_geojson"]))
     return {
         "type": "Feature",
         "geometry": geometry,
