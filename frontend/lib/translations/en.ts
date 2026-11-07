@@ -1057,6 +1057,7 @@ const en: Translations = {
   'map.empty.processing': 'Processing — your rides will show up here, and an email will let you know.',
   'map.empty.dismiss': 'Close',
   'map.activitiesCapped': '{count} most recent rides shown',
+  'map.heatmapUnavailable': 'The heatmap is temporarily unavailable.',
   'map.addAnnotation': 'Add annotation',
   'map.annotationNotePlaceholder': 'Note (optional)',
   'map.segmentHeatmap': 'Heatmap segment',

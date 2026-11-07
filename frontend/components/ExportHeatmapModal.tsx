@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { API_URL } from '@/lib/api-client';
 import { useI18n } from '@/lib/i18n';
 import { getCurrentUserId } from '@/lib/auth';
 import EmailLoginForm from '@/components/EmailLoginForm';
+import { useModalFocus } from '@/hooks/useModalFocus';
 
 export type Bbox = {
   minLon: number;
@@ -19,6 +20,9 @@ interface ExportHeatmapModalProps {
   /** Retained for call-site compatibility — the pre-computed export has no
    *  bbox editor, so this is ignored. */
   initialBbox?: Bbox | null;
+  /** Where focus goes on close when the opener is gone (the menu item that
+   *  opened the modal is unmounted by that same click). */
+  returnFocusTo?: () => HTMLElement | null;
 }
 
 /**
@@ -40,8 +44,12 @@ interface ExportHeatmapModalProps {
  * The bulk export is the ONE members-only affordance (the MAP itself stays
  * public); anonymous visitors get a login CTA instead of the download links.
  */
-export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps) {
+export default function ExportHeatmapModal({ onClose, returnFocusTo }: ExportHeatmapModalProps) {
   const { t } = useI18n();
+  // Keyboard contract: focus in on open, Tab trapped, Escape closes, focus
+  // back to the opener (or `returnFocusTo`) on close.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalFocus(panelRef, onClose, returnFocusTo);
   // ── Members-only EXPORT gate (2026-07 posture) ─────────────────────────────
   // The community MAP is PUBLIC — anyone can view the heatmap. The bulk ODbL
   // community-data EXPORT is the ONE members-only affordance: it's the growth
@@ -91,6 +99,8 @@ export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps)
         onClick={onClose}
       >
         <div
+          ref={panelRef}
+          tabIndex={-1}
           data-testid="export-login-gate"
           style={{
             background: '#0d1420', borderRadius: 10, padding: 24,
@@ -165,6 +175,8 @@ export default function ExportHeatmapModal({ onClose }: ExportHeatmapModalProps)
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         style={{
           background: '#fff', borderRadius: 10, padding: 24,
           width: 480, maxWidth: '92vw', maxHeight: '92vh', overflowY: 'auto',

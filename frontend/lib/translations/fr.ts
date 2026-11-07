@@ -1058,6 +1058,7 @@ const fr: Translations = {
   'map.empty.processing': 'Traitement en cours — vos sorties apparaîtront ici, un email vous préviendra.',
   'map.empty.dismiss': 'Fermer',
   'map.activitiesCapped': '{count} sorties les plus récentes affichées',
+  'map.heatmapUnavailable': 'La heatmap est momentanément indisponible.',
   'map.addAnnotation': 'Ajouter une annotation',
   'map.annotationNotePlaceholder': 'Note (optionnel)',
   'map.segmentHeatmap': 'Segment heatmap',

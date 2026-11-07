@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { apiFetchSafe, apiFetch } from '@/lib/api-client';
+import { isAuthenticated } from '@/lib/auth';
 import { useT } from '@/lib/i18n';
 import { notificationDisplay } from '@/lib/notification-display';
 
@@ -35,6 +36,9 @@ export default function NotificationToasts() {
   const [items, setItems] = useState<NotificationItem[]>([]);
 
   useEffect(() => {
+    // Logged out → no call (it was a 401 + red console line on every page).
+    // Read post-mount, never at render: static export hydration (#418).
+    if (!isAuthenticated()) return;
     let cancelled = false;
     void (async () => {
       const data = await apiFetchSafe<NotificationList>('/me/notifications?unread_only=true&limit=20');

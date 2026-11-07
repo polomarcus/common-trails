@@ -9,12 +9,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import sentry_sdk
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from slowapi.errors import RateLimitExceeded
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import JSONResponse
 
+from app.frontend_static import html_response, register_frontend
 from app.logging_config import setup_logging
 from app.rate_limit import limiter
 
@@ -881,75 +882,9 @@ app.include_router(internal_strava_webhook_router)
 app.include_router(internal_strava_health_router)
 
 # ── Frontend static file serving (baked into Docker image) ────────────────────
+# GET+HEAD catch-all, real 404 + 404.html, trailing slash → 308 bare path.
+# Logic + rationale in app/frontend_static.py. Registered LAST: API routes win.
 _FRONTEND_DIR = Path(os.environ.get("FRONTEND_DIR", "/app/static-frontend"))
+_html_response = html_response  # kept: tests import it from app.main
 
-# Middleware: serve frontend HTML for browser navigation that conflicts with API paths.
-# Without this, GET /collections from a browser returns JSON instead of the collections page.
-_FRONTEND_PAGES = {"collections", "routes", "discover", "stats", "strava", "account", "activities", "admin", "methode", "privacy"}
-
-
-# The Next.js static export references content-HASHED chunks from the HTML
-# entry (index.html / map.html / …). If the browser heuristically caches the
-# HTML (which it does when NO Cache-Control is sent), a returning visitor keeps
-# an OLD HTML → old chunk refs → a stale JS bundle even after a fresh deploy.
-# That stranded users on a broken build after a bad deploy window (2026-08-08:
-# the heatmap URL was empty in the cached bundle → "no heatmap on /map"). Fix:
-# HTML always revalidates (cheap 304 via etag), hashed assets stay immutable.
-_HTML_HEADERS = {"Cache-Control": "no-cache"}
-
-
-def _html_response(path: "Path") -> FileResponse:
-    return FileResponse(path, media_type="text/html", headers=_HTML_HEADERS)
-
-
-@app.middleware("http")
-async def frontend_html_priority(request: Request, call_next):
-    """If a browser navigates to a known frontend page, serve the HTML file
-    instead of letting the API router handle it."""
-    if _FRONTEND_DIR.is_dir() and request.method == "GET":
-        path = request.url.path.strip("/").split("/")[0]
-        accept = request.headers.get("accept", "")
-        if path in _FRONTEND_PAGES and "text/html" in accept:
-            html_file = _FRONTEND_DIR / f"{path}.html"
-            if html_file.is_file():
-                return _html_response(html_file)
-    return await call_next(request)
-
-
-if _FRONTEND_DIR.is_dir():
-    from fastapi.staticfiles import StaticFiles
-
-    class _ImmutableStaticFiles(StaticFiles):
-        """/_next assets are content-hashed → cache them hard + immutable."""
-        def file_response(self, *args, **kwargs):  # type: ignore[override]
-            resp = super().file_response(*args, **kwargs)
-            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-            return resp
-
-    # Serve /_next/static assets with immutable cache (hashed filenames).
-    _next_dir = _FRONTEND_DIR / "_next"
-    if _next_dir.is_dir():
-        app.mount("/_next", _ImmutableStaticFiles(directory=_next_dir), name="next-static")
-
-    @app.get("/{path:path}")
-    async def serve_frontend(path: str):
-        """Catch-all: serve frontend static files with clean URL support."""
-        # Try exact file (e.g. /favicon.ico, /robots.txt, /og-card.svg,
-        # service workers). Not content-hashed → revalidate (no-cache) so a
-        # deploy can never strand a stale service worker or asset.
-        file_path = _FRONTEND_DIR / path
-        if file_path.is_file() and ".." not in path:
-            return FileResponse(file_path, headers=_HTML_HEADERS)
-        # Clean URL: /map → map.html, /discover → discover.html
-        html_path = _FRONTEND_DIR / f"{path}.html"
-        if html_path.is_file() and ".." not in path:
-            return _html_response(html_path)
-        # Directory index: /me/routes → me/routes/index.html
-        index_path = _FRONTEND_DIR / path / "index.html"
-        if index_path.is_file() and ".." not in path:
-            return _html_response(index_path)
-        # SPA fallback → index.html
-        index = _FRONTEND_DIR / "index.html"
-        if index.is_file():
-            return _html_response(index)
-        return JSONResponse({"detail": "Not Found"}, status_code=404)
+register_frontend(app, _FRONTEND_DIR)
