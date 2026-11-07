@@ -26,6 +26,7 @@ import { useState, useEffect, type ReactNode } from 'react';
 import Link from 'next/link';
 import { API_URL } from '@/lib/api-client';
 import { getToken, setAuthState, clearAuthState } from '@/lib/auth';
+import { fetchContributionStatus } from '@/lib/contribution-status';
 import { useI18n } from '@/lib/i18n';
 import ContributionDropzone from '@/components/ContributionDropzone';
 import StravaArchiveImport from '@/components/StravaArchiveImport';
@@ -120,10 +121,8 @@ export default function StravaPage() {
   useEffect(() => {
     if (!ready || !token) return;
     let cancelled = false;
-    fetch(`${API_URL}/me/contribution-status`, { credentials: 'include', headers: { Authorization: `Bearer ${token}` } })
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (!cancelled && d) setContrib({ contributed: d.contributed, count: d.count, last: d.last_contribution_at }); })
-      .catch(() => {});
+    fetchContributionStatus(API_URL, token)
+      .then(s => { if (!cancelled && s) setContrib(s); });
     return () => { cancelled = true; };
   }, [ready, token]);
 

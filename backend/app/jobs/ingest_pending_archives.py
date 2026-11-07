@@ -780,7 +780,7 @@ def _claim_archives(db, limit: int) -> list[dict]:
     """
     rows = db.execute(sa_text(f"""
         SELECT id, user_id, storage_backend, bucket_key, fallback_sport,
-               contribute_heatmap, source
+               contribute_heatmap, source, attempts
         FROM pending_archives
         WHERE status = 'uploaded'
            OR (status = 'processing'
@@ -856,23 +856,11 @@ def _notify_archive_terminal(
     One email per terminal TRANSITION: a requeued archive that finishes again
     sends again — acceptable, each drain completion is fresh news to the user.
     """
-    from app.db.session import SessionLocal
-
     try:
-        db = SessionLocal()
-        try:
-            row = db.execute(sa_text("""
-                SELECT u.email AS email, cc.locale AS locale
-                FROM pending_archives pa
-                JOIN users u ON u.id::text = pa.user_id
-                LEFT JOIN contribution_consents cc ON cc.id = pa.consent_id
-                WHERE pa.id = :id
-            """), {"id": archive_id}).mappings().first()
-        finally:
-            db.close()
-        if row is None or not row["email"] or row["email"].endswith("@strava.local"):
+        contact = _archive_owner_contact(archive_id)
+        if contact is None:
             return
-        locale = "en" if (row["locale"] or "fr").lower().startswith("en") else "fr"
+        to, locale = contact
         if status == "done":
             subject, html = email_service.render_archive_done_email(
                 imported=counts.get("imported", 0),
@@ -884,9 +872,78 @@ def _notify_archive_terminal(
             )
         else:
             subject, html = email_service.render_archive_failed_email(error, locale=locale)
-        email_service.send_email(row["email"], subject, html)
+        email_service.send_email(to, subject, html)
     except Exception:
         log.warning("terminal email for archive %s failed", archive_id, exc_info=True)
+
+
+def _archive_owner_contact(archive_id: str) -> tuple[str, str] | None:
+    """``(email, locale)`` of the archive's owner, or ``None`` when no email
+    must be sent (missing user / synthetic ``@strava.local`` address). SSOT
+    for BOTH archive emails (start + terminal) so their recipient rules can't
+    drift. Locale comes from the consent row (FR default). May raise — the
+    callers are best-effort and swallow."""
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        row = db.execute(sa_text("""
+            SELECT u.email AS email, cc.locale AS locale
+            FROM pending_archives pa
+            JOIN users u ON u.id::text = pa.user_id
+            LEFT JOIN contribution_consents cc ON cc.id = pa.consent_id
+            WHERE pa.id = :id
+        """), {"id": archive_id}).mappings().first()
+    finally:
+        db.close()
+    if row is None or not row["email"] or row["email"].endswith("@strava.local"):
+        return None
+    locale = "en" if (row["locale"] or "fr").lower().startswith("en") else "fr"
+    return row["email"], locale
+
+
+def estimate_archive_seconds(members: int) -> float:
+    """Estimated drain wall-time for ``members`` ingestible members
+    (per-member cost × count + fixed overhead, both from app.config)."""
+    from app.config import (
+        ARCHIVE_ESTIMATE_OVERHEAD_SECONDS,
+        ARCHIVE_ESTIMATE_SECONDS_PER_MEMBER,
+    )
+
+    return ARCHIVE_ESTIMATE_OVERHEAD_SECONDS + max(0, members) * ARCHIVE_ESTIMATE_SECONDS_PER_MEMBER
+
+
+def _notify_archive_started(arch: dict, zf) -> None:
+    """Email the owner when the drain STARTS processing an archive, with an
+    estimated duration ("Début de votre import, estimé à environ XX minutes").
+
+    Sent once per archive: only on the FIRST claim (``attempts`` read by
+    ``_claim_archives`` BEFORE its increment is 0). A drain killed mid-way and
+    re-claimed, or an admin requeue (which never resets ``attempts``), does
+    not re-send it. Skipped below ``ARCHIVE_START_EMAIL_MIN_SECONDS`` (a small
+    archive is done before the email would be read; the end email suffices).
+
+    Best-effort: never raises, never affects the drain.
+    """
+    from app.config import ARCHIVE_START_EMAIL_MIN_SECONDS
+
+    if int(arch.get("attempts") or 0) != 0:
+        return
+    try:
+        members = archive_intake.estimate_member_count(zf)
+        seconds = estimate_archive_seconds(members)
+        if members <= 0 or seconds < ARCHIVE_START_EMAIL_MIN_SECONDS:
+            return
+        contact = _archive_owner_contact(arch["id"])
+        if contact is None:
+            return
+        to, locale = contact
+        subject, html = email_service.render_archive_started_email(
+            members=members, estimated_seconds=seconds, locale=locale,
+        )
+        email_service.send_email(to, subject, html)
+    except Exception:  # noqa: BLE001 — a start email must never break the drain
+        log.warning("start email for archive %s failed", arch.get("id"), exc_info=True)
 
 
 def drain_pending_archives(
@@ -981,6 +1038,10 @@ def drain_pending_archives(
                 # each sleep is the PREVIOUS member's real ingest time × ratio
                 # (capped), so the drain self-tunes to the DB; iter_zip_members
                 # enforces the zip-bomb caps.
+                # "Début de votre import, estimé à …" — once per archive, when
+                # processing actually starts (not at upload: queue time would
+                # skew the estimate).
+                _notify_archive_started(arch, zf)
                 first = True
                 ingested = 0
                 last_work_s: float | None = None

@@ -17,6 +17,7 @@ export default defineConfig({
       'lib/__tests__/i18n-parity.test.ts',
       'lib/__tests__/strava-archive-consent.test.ts',
       'lib/__tests__/strava-archive-upload.test.ts',
+      'lib/__tests__/contribution-status.test.ts',
       'lib/__tests__/strava-archive-resumable.test.ts',
       'lib/__tests__/strava-upload-summary.test.ts',
       'lib/__tests__/upload-progress.test.ts',
