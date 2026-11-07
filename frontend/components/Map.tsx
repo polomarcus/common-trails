@@ -109,6 +109,11 @@ export default function Map({
         });
 
         if (!useOffline) {
+          // Locate button ONLY: never `geolocate.trigger()` on load. The home
+          // hero reuses this component, so an auto-trigger fired the browser's
+          // location-permission prompt over the landing page for every visitor
+          // (frontend audit 2026-11-07). The rider asks for it by pressing the
+          // button, on / and on /map alike.
           // @ts-ignore maplibre dynamic import default
           const geolocate = new maplibregl.default.GeolocateControl({
             positionOptions: { enableHighAccuracy: false },
@@ -116,12 +121,6 @@ export default function Map({
           });
           // @ts-expect-error maplibre types
           mapInstance.addControl(geolocate);
-          // @ts-expect-error maplibre types
-          mapInstance.on('load', () => {
-            if (!cancelled) {
-              geolocate.trigger();
-            }
-          });
         }
 
         // @ts-expect-error maplibre types
@@ -133,10 +132,11 @@ export default function Map({
         });
 
         // @ts-expect-error maplibre types
-        mapInstance.on('error', (e: unknown) => {
-          // In offline mode, tile errors are expected — ignore them
+        mapInstance.on('error', (e: { error?: { message?: string } }) => {
+          // In offline mode, tile errors are expected — ignore them. Log the
+          // message, not the event object (it printed as a useless "en").
           if (!useOffline) {
-            console.warn('MapLibre error:', e);
+            console.warn('MapLibre error:', e?.error?.message ?? e);
           }
         });
 

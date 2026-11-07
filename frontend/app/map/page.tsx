@@ -17,6 +17,8 @@ import MapToolbar from '@/components/map/MapToolbar';
 import MapLegend from '@/components/map/MapLegend';
 import SelectedActivityCard from '@/components/map/SelectedActivityCard';
 import MapActivitiesNotice, { MAP_ACTIVITIES_LIMIT } from '@/components/map/MapActivitiesNotice';
+import HeatmapUnavailableNotice from '@/components/map/HeatmapUnavailableNotice';
+import { watchHeatmapAvailability } from '@/lib/heatmap-availability';
 import ElevationProfile from '@/components/ElevationProfile';
 import PublicRoutesPanel from '@/components/PublicRoutesPanel';
 import { useLayerToggles } from '@/hooks/useLayerToggles';
@@ -90,6 +92,8 @@ export default function MapPage() {
   // single canonical import place (/strava) — no in-map upload form.
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  // Community heatmap source failed (tiles host down) → small notice.
+  const [heatmapUnavailable, setHeatmapUnavailable] = useState(false);
 
   // User menu — state + actions from useUserMenu hook
   const reloadActivitiesRef = useRef<(() => void) | null>(null);
@@ -222,6 +226,13 @@ export default function MapPage() {
 
     // Pure layer/source setup (view-only) — extracted to lib/init-map-layers.ts
     addMapSourcesAndLayers(m);
+    // Right after the source is added: its PMTiles header load is async, so
+    // a host-down error is caught here instead of failing silently.
+    try {
+      watchHeatmapAvailability(m, setHeatmapUnavailable);
+    } catch (e) {
+      console.error('[map] heatmap availability watch failed:', e);
+    }
 
     // View-only event wiring (trace popup, activity select, heatmap inspect, photos).
     // Isolated: the INTERACTIONS are a bonus, the LAYERS are the product. A throw
@@ -631,6 +642,9 @@ export default function MapPage() {
         {/* Signed-in rider with 0 activities → import CTA; 5000 → cap note */}
         <MapActivitiesNotice count={activitiesReturned} />
 
+        {/* Tiles host down → say so instead of a silent bare basemap */}
+        <HeatmapUnavailableNotice unavailable={heatmapUnavailable} />
+
         {/* ── GPX Preview panel (dropped-file preview + contribute) ── */}
         {gpxPreview && (
           <div style={{
@@ -1031,6 +1045,7 @@ export default function MapPage() {
       {showExportModal && (
         <ExportHeatmapModal
           onClose={() => setShowExportModal(false)}
+          returnFocusTo={() => document.querySelector<HTMLElement>('[data-testid="map-layers-btn"]')}
           initialBbox={(() => {
             // Seed the bbox-editor from the current viewport so the
             // MBTiles + GeoJSON formats default to "the area I'm looking at".

@@ -162,6 +162,8 @@ export default function MapToolbar(props: MapToolbarProps) {
       <div ref={layersMenuRef} style={{ position: 'relative' }}>
         <button
           data-testid="map-layers-btn"
+          aria-expanded={showLayersMenu}
+          aria-controls="map-layers-menu"
           onClick={() => setShowLayersMenu(v => !v)}
           style={{
             padding: '3px 10px',
@@ -181,7 +183,7 @@ export default function MapToolbar(props: MapToolbarProps) {
           </svg>
         </button>
         {showLayersMenu && (
-          <div style={{
+          <div id="map-layers-menu" style={{
             position: 'absolute', top: '100%', left: 0, marginTop: 6,
             background: '#fff', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
             border: '1px solid #e8e8e8', minWidth: 240, maxHeight: '80vh', overflowY: 'auto',
