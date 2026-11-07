@@ -7,7 +7,7 @@ import dynamic from 'next/dynamic';
 import TopNav from '@/components/TopNav';
 import PlaceSearch from '@/components/PlaceSearch';
 import EmailLoginForm from '@/components/EmailLoginForm';
-import { HERO_MAP_CENTER, HERO_MAP_ZOOM, DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY } from '@/lib/routing-style';
+import { HERO_MAP_CENTER, HERO_MAP_ZOOM, DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY, DFCI_MIN_ZOOM } from '@/lib/routing-style';
 import { API_URL } from '@/lib/api-client';
 import { isAuthenticated, setAuthState, clearAuthState } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
@@ -348,6 +348,7 @@ export default function HomePage() {
       id: 'dfci-trails-casing',
       type: 'line',
       source: 'dfci-trails',
+      minzoom: DFCI_MIN_ZOOM,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': DFCI_COLOR_WHITE,
@@ -359,6 +360,7 @@ export default function HomePage() {
       id: 'dfci-trails-line',
       type: 'line',
       source: 'dfci-trails',
+      minzoom: DFCI_MIN_ZOOM,
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': DFCI_COLOR,
