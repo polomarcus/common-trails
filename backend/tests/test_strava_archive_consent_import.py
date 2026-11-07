@@ -1102,8 +1102,10 @@ class TestExplicitSportPickForUserZip:
             "activities.csv": csv,
             "activities/1.gpx": _gpx("Footing", 44.60, 3.60),
             "activities/2.gpx": _gpx("Sortie", 44.70, 3.70),
-            "activities/3.gpx": _gpx("Hors CSV", 44.80, 3.80),  # no CSV row → the pick
+            # No CSV row in a Strava export → NOT an activity (like routes/*.gpx,
+            # planned routes): never ingested, the pick does not rescue it.
+            "activities/3.gpx": _gpx("Hors CSV", 44.80, 3.80),
         })
         summary = _drain_archive(client, auth_headers, zb, sport="mtb")
-        assert summary["imported"] == 3, summary
-        assert _sports(uid) == ["mtb", "road", "running"]
+        assert summary["imported"] == 2, summary
+        assert _sports(uid) == ["road", "running"]

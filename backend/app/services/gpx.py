@@ -198,10 +198,32 @@ def parse_strava_activities_csv(csv_bytes: bytes) -> dict[str, str | None]:
     (returns empty dict, no raise), malformed CSV (same), and rows with
     no Filename (skipped). Empty bytes → empty dict.
     """
+    return parse_strava_activities_csv_checked(csv_bytes)[0]
+
+
+# A Strava activity description can exceed the csv module's default
+# 131072-char field limit; one such row used to raise csv.Error mid-file and
+# silently truncate the map. activities.csv itself is capped at
+# MAX_ZIP_MEMBER_UNCOMPRESSED before it is read, so a field can never be
+# larger than that.
+_CSV_FIELD_LIMIT = 64 * 1024 * 1024
+
+
+def parse_strava_activities_csv_checked(csv_bytes: bytes) -> tuple[dict[str, str | None], bool]:
+    """:func:`parse_strava_activities_csv` + a ``complete`` flag.
+
+    ``complete`` is True only when the headers were recognised AND every row
+    was read without error. Callers that drop members NOT listed in the CSV
+    must only do so on a complete map — a partial map (parse error half-way)
+    would otherwise drop every later activity.
+    """
     if not csv_bytes:
-        return {}
+        return {}, False
     import csv as _csv
     import io as _io
+
+    if _csv.field_size_limit() < _CSV_FIELD_LIMIT:
+        _csv.field_size_limit(_CSV_FIELD_LIMIT)
 
     out: dict[str, str | None] = {}
     try:
@@ -211,7 +233,7 @@ def parse_strava_activities_csv(csv_bytes: bytes) -> dict[str, str | None]:
         reader = _csv.DictReader(_io.StringIO(text))
         col_file, col_type, col_name = _resolve_csv_columns(reader.fieldnames or [])
         if col_file is None or col_type is None:
-            return out
+            return out, False
         for row in reader:
             filename = (row.get(col_file) or "").strip()
             activity_type = (row.get(col_type) or "").strip()
@@ -229,8 +251,8 @@ def parse_strava_activities_csv(csv_bytes: bytes) -> dict[str, str | None]:
                 activity_type, activity_name,
             )
     except Exception:
-        return out
-    return out
+        return out, False
+    return out, True
 
 
 GPX_TRACK_TYPE_TO_SPORT: dict[str, str | None] = {
@@ -803,12 +825,14 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
             # hand-edited archives (`Activities/100.GPX` vs
             # `activities/100.gpx`).
             sport_by_filename: dict[str, str | None] = {}
+            has_strava_csv = False
             for info in infos:
                 if info.filename.startswith("/") or ".." in info.filename.split("/"):
                     # Same guard as the GPX loop; rejecting up front
                     # rather than partway through.
                     raise ZipBombError(f"ZIP member has unsafe path: {info.filename!r}")
                 if info.filename.lower() == "activities.csv" and info.file_size <= MAX_ZIP_MEMBER_UNCOMPRESSED:
+                    has_strava_csv = True
                     try:
                         csv_bytes = zf.read(info.filename)
                         raw_map = parse_strava_activities_csv(csv_bytes)
@@ -859,6 +883,10 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                 # GPX-S1.1.
                 lower = name.lower()
                 if not is_ingestible_zip_member(name):
+                    continue
+                if has_strava_csv and lower.startswith("routes/"):
+                    # Strava export ``routes/*.gpx`` = PLANNED routes (no
+                    # <time>, no CSV row), never rides — never ingested.
                     continue
                 is_fit = lower.endswith(".fit") or lower.endswith(".fit.gz")
                 try:

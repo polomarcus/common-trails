@@ -32,6 +32,24 @@ SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "paul@epauler.fr")
 # single-use and should not linger valid in an inbox.
 MAGIC_LINK_TTL_MIN = int(os.environ.get("MAGIC_LINK_TTL_MIN", "15"))
 
+# ── Start-of-import email (archive drain) ───────────────────────────────────
+# When the drain starts processing an archive it emails the owner an ESTIMATED
+# duration: members × per-member cost + fixed overhead. Conservative on
+# purpose (a local drain of a real ~1500-member Strava export ran at
+# ~3.4 members/s; prod is slower: shared CPU, db-f1-micro, adaptive pacing).
+ARCHIVE_ESTIMATE_SECONDS_PER_MEMBER = float(
+    os.environ.get("ARCHIVE_ESTIMATE_SECONDS_PER_MEMBER", "0.4")
+)
+ARCHIVE_ESTIMATE_OVERHEAD_SECONDS = float(
+    os.environ.get("ARCHIVE_ESTIMATE_OVERHEAD_SECONDS", "60")
+)
+# Below this estimate no start email is sent: a small archive finishes within
+# a couple of minutes and the end email alone is enough (two emails a few
+# seconds apart would be noise). 0 → always send.
+ARCHIVE_START_EMAIL_MIN_SECONDS = float(
+    os.environ.get("ARCHIVE_START_EMAIL_MIN_SECONDS", "180")
+)
+
 # Fernet key (base64-urlsafe 32 bytes) used to encrypt
 # IntegrationAccount.access_token / refresh_token at rest. Empty/unset
 # means "no encryption" — fine for local dev + TEST_MODE; in prod it

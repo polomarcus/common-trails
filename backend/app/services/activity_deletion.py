@@ -154,8 +154,15 @@ def purge_activity_heat(db: Session, activity_id: str) -> list[int]:
     return _recompute_touched_heat_edges(db, edge_keys)
 
 
-def delete_user_activity(db: Session, user_id: str, activity_id: str) -> bool:
+def delete_user_activity(
+    db: Session, user_id: str, activity_id: str, *, trigger_rebuild: bool = True,
+) -> bool:
     """Delete ``activity_id`` if it belongs to ``user_id``.
+
+    ``trigger_rebuild=False`` skips the per-deletion build-pmtiles ping (step
+    6) — ONLY for a batch caller that fires ONE ping itself after its last
+    deletion (e.g. ``app.cli.purge_strava_route_activities``), so N deletions
+    don't start N Cloud Run builds.
 
     Returns False when the activity doesn't exist OR belongs to another
     user (the caller answers 404 either way — no existence leak).
@@ -189,12 +196,13 @@ def delete_user_activity(db: Session, user_id: str, activity_id: str) -> bool:
     # indefinitely (GDPR exposure). Fire it best-effort: never raises, and it is
     # an env-gated no-op locally / in TEST_MODE (see run_jobs._is_enabled). A
     # missed ping is the same residual risk the addition paths carry.
-    try:
-        from app.services.run_jobs import trigger_build_pmtiles_job
+    if trigger_rebuild:
+        try:
+            from app.services.run_jobs import trigger_build_pmtiles_job
 
-        trigger_build_pmtiles_job()
-    except Exception:  # pragma: no cover - defense in depth
-        logger.warning("build-pmtiles trigger failed after activity deletion", exc_info=True)
+            trigger_build_pmtiles_job()
+        except Exception:  # pragma: no cover - defense in depth
+            logger.warning("build-pmtiles trigger failed after activity deletion", exc_info=True)
 
     logger.info(
         "activity deleted: id=%s user=%s ways_recomputed=%d",

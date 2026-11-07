@@ -20,6 +20,7 @@ backend's health (no account enumeration, no 500 on a transient SMTP hiccup).
 from __future__ import annotations
 
 import logging
+import math
 import os
 
 import httpx
@@ -179,7 +180,10 @@ def render_archive_done_email(
     ``skipped`` is the total; ``skipped_no_sport`` (members whose sport could
     not be identified — no activities.csv row, no usable FIT/GPX sport, no
     sport picked) is part of it but gets its OWN actionable line instead of
-    being passed off as duplicates / out-of-scope.
+    being passed off as duplicates / out-of-scope. Strava-export planned
+    routes (``routes/*.gpx``) are never yielded by the drain (no bucket); an
+    ``activities/`` file the activities.csv doesn't list counts as an
+    out-of-scope skip — never in "pick a sport and re-import them".
     """
     map_url = "https://chemins-communs.fr/map"
     no_sport = max(0, min(skipped_no_sport, skipped))
@@ -274,6 +278,86 @@ def render_archive_done_email(
     <p style="font-size:14px;line-height:1.5;color:#333;margin:0 0 8px">{calque_body}</p>
     <p style="font-size:12px;color:#2d6a4f;word-break:break-all;font-family:monospace;margin:0">{calque_url}</p>
   </div>
+"""
+    return subject, _wrap_html(body)
+
+
+def format_duration_estimate(seconds: float, locale: str = "fr") -> str:
+    """Friendly, rounded-UP duration for the start-of-import email.
+
+    Never "0 minute": anything under a minute reads "about 1 minute". Under
+    10 min → to the minute; under an hour → next 5 min; beyond → next half
+    hour ("environ 1 heure", "environ 1 h 30", "environ 2 heures").
+    """
+    minutes = max(1, math.ceil(max(0.0, float(seconds)) / 60))
+    if minutes >= 10:
+        minutes = math.ceil(minutes / 5) * 5
+    if minutes >= 60:
+        minutes = math.ceil(minutes / 30) * 30
+        hours, rest = divmod(minutes, 60)
+        if locale == "en":
+            label = f"{hours} hour{'s' if hours > 1 else ''}"
+            return f"about {label}" + (" 30 minutes" if rest else "")
+        if rest:
+            return f"environ {hours} h 30"
+        return f"environ {hours} heure{'s' if hours > 1 else ''}"
+    if locale == "en":
+        return f"about {minutes} minute{'s' if minutes > 1 else ''}"
+    return f"environ {minutes} minute{'s' if minutes > 1 else ''}"
+
+
+def render_archive_started_email(
+    *,
+    members: int,
+    estimated_seconds: float,
+    locale: str = "fr",
+) -> tuple[str, str]:
+    """Return ``(subject, html)`` for the "your import has started" email.
+
+    Sent ONCE when the drain actually starts processing the archive (not at
+    upload, so queue time doesn't skew the estimate). Same shell / styling /
+    provider-neutral wording as :func:`render_archive_done_email`, which
+    follows at the end. The duration is an ESTIMATE ("environ …"); the copy
+    says so and promises the end-of-import email.
+    """
+    map_url = "https://chemins-communs.fr/map"
+    duration = format_duration_estimate(estimated_seconds, locale)
+    if locale == "en":
+        subject = f"Your import has started ({duration})"
+        intro = (
+            "Processing of your archive has just started: "
+            f"<strong>{members}</strong> activity file{'s' if members != 1 else ''} to import, "
+            f"estimated at <strong>{duration}</strong>."
+        )
+        detail = (
+            "Your rides appear progressively in the <strong>My heatmap</strong> layer "
+            "on the map. You will receive a second email as soon as the import is finished."
+        )
+        button = "See the map"
+    else:
+        subject = f"Début de votre import, estimé à {duration}"
+        intro = (
+            "Le traitement de votre archive vient de commencer : "
+            f"<strong>{members}</strong> fichier{'s' if members > 1 else ''} d'activité à importer, "
+            f"durée estimée à <strong>{duration}</strong>."
+        )
+        detail = (
+            "Vos sorties apparaissent au fur et à mesure dans le calque "
+            "<strong>Ma heatmap</strong> de la carte. Vous recevrez un second email "
+            "dès que l'import sera terminé."
+        )
+        button = "Voir la carte"
+    body = f"""\
+  <p style="font-size:15px;line-height:1.5;margin:0 0 16px">{intro}</p>
+  <p style="font-size:15px;line-height:1.5;margin:0 0 24px">{detail}</p>
+  <p style="margin:0 0 24px">
+    <a href="{map_url}"
+       style="display:inline-block;padding:12px 28px;background:#2d6a4f;color:#fff;
+              text-decoration:none;border-radius:10px;font-weight:600;font-size:15px">
+      {button}
+    </a>
+  </p>
+  <p style="font-size:12px;color:#999;word-break:break-all;margin:0">{map_url}</p>
 """
     return subject, _wrap_html(body)
 
