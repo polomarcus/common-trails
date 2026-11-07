@@ -66,11 +66,14 @@ Two independent mechanisms, both always applicable to the published map:
 1. **Endpoint masking (always on, radial).** Every point lying within
    `TRACE_MASK_METERS` (**default 200 m**) of an activity's physical start *or*
    end is removed — anywhere in the trace, so a loop that swings back past the
-   house mid-ride is masked there too. The cut is interpolated exactly on the
-   circle, and each circle is widened by the spread of the GPS fixes recorded
-   while the rider waits at the door (≤ 30 m), so the hole is ≥ 200 m around
-   every one of those fixes. An out-and-back ride has *both* physical ends
-   masked. (Until 2026-11 the trim was 200 m *along-track*, which stationary
+   house mid-ride is masked there too. "Start" and "end" are *zones*, not a
+   single point: the first (and last) 10 recorded fixes plus every following
+   fix still within 30 m of them (the rider waiting at the door). A 200 m disc
+   is centred on every zone fix, and everything before the start zone's last
+   fix (after the end zone's first fix) is dropped. This covers a stale first
+   fix far from home, up to 9 such fixes. Masking runs on the raw fixes,
+   before densification. Cuts are interpolated exactly on the circle. An
+   out-and-back ride has *both* physical ends masked. (Until 2026-11 the trim was 200 m *along-track*, which stationary
    GPS jitter at the door could consume within a few metres of home — fixed.)
 2. **Tunable distinct-user gate `HEATMAP_MIN_USERS`.** A fine display cell is
    only rendered once at least *K* **distinct users** have passed through it.

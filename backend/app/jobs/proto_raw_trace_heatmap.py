@@ -40,6 +40,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from app.db.session import SessionLocal
+from app.services.raw_trace_display import mask_then_densify
 from app.services.trace_privacy import mask_endpoints, mask_meters
 
 # lon_min, lat_min, lon_max, lat_max — same window as the grid prototype.
@@ -83,14 +84,14 @@ def _load_activities(db) -> list[tuple[int, str]]:
 
 
 def _parse_coords(geojson_str: str) -> list:
-    from app.services.ingest import _densify_coords
+    """RAW fixes (mask BEFORE densify — see ``mask_then_densify``)."""
     try:
         coords = json.loads(geojson_str).get("coordinates", [])
     except (json.JSONDecodeError, AttributeError, TypeError):
         return []
     if not coords or len(coords) < 2:
         return []
-    return _densify_coords(coords, max_gap=3.0)
+    return coords
 
 
 def _accumulate(runs_per_activity, bbox, nx, ny) -> np.ndarray:
@@ -145,7 +146,7 @@ def render_full(db) -> dict:
         if not coords:
             continue
         total_pts += len(coords)
-        all_runs.append(mask_endpoints(coords, m))
+        all_runs.append(mask_then_densify(coords, m))
         parsed += 1
     mask_s = time.perf_counter() - t0
 

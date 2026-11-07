@@ -10,8 +10,16 @@ from __future__ import annotations
 import math
 import random
 
+import pytest
+
 from app.services.geo import haversine_m
-from app.services.trace_privacy import DWELL_METERS, mask_endpoints, mask_meters
+from app.services.raw_trace_display import mask_then_densify
+from app.services.trace_privacy import (
+    DWELL_METERS,
+    HEAD_FIXES,
+    mask_endpoints,
+    mask_meters,
+)
 
 LAT = 43.6
 # ~10 m north-south step (1° lat ≈ 110_574 m).
@@ -20,6 +28,10 @@ STEP = 10.0 / 110_574
 
 def _line(n: int, step: float = STEP, lon: float = 3.8, lat0: float = LAT) -> list:
     return [[lon, lat0 + i * step] for i in range(n)]
+
+
+def _min_dist_runs(runs: list, p: list) -> float:
+    return min(haversine_m(p[0], p[1], q[0], q[1]) for run in runs for q in run)
 
 
 def _run_length(run: list) -> float:
@@ -48,10 +60,15 @@ def test_point_to_point_trims_both_ends():
     runs = mask_endpoints(line, mask_m=200.0)
     assert len(runs) == 1
     remaining = _run_length(runs[0])
-    # Radial mask: each disc is 200 m + the GPS-dwell margin (<= DWELL_METERS,
-    # here ~30 m because the line keeps moving within 30 m of each end). Was
-    # `isclose(total - 400)` under the along-track trim, which had no margin.
-    assert total - 2 * (200.0 + DWELL_METERS) - 1.0 <= remaining <= total - 400.0
+    # Radial mask with end ZONES: discs of 200 m sit on each of the first/last
+    # HEAD_FIXES fixes (here 0–90 m and 900–990 m) plus the dwell margin, so the
+    # hole is larger than 200 m. Was `isclose(total - 400)` under the
+    # along-track trim. Pin: strictly more than 400 m removed, and every kept
+    # point >= 200 m from every end-zone fix.
+    assert 0.0 < remaining <= total - 400.0
+    zone = line[:HEAD_FIXES] + line[-HEAD_FIXES:]
+    for fix in zone:
+        assert _min_dist_runs(runs, fix) >= 199.0
     # The kept trace starts ~200 m in and ends ~200 m before the true end.
     assert haversine_m(line[0][0], line[0][1], runs[0][0][0], runs[0][0][1]) >= 190.0
     assert haversine_m(line[-1][0], line[-1][1], runs[0][-1][0], runs[0][-1][1]) >= 190.0
@@ -200,12 +217,15 @@ def test_mid_ride_pass_near_home_is_masked():
     assert _min_dist(runs, HOME) >= R - 1.0
     assert _min_dist(runs, end) >= R - 1.0
     # The pass splits the ride into the northern out-and-back and the southern
-    # exit; every cut point lies on one of the two circles (R + dwell margin).
+    # exit; every cut point lies on the boundary of the end-zone discs: >= R
+    # from every zone fix, and within R + dwell margin of the nearest one.
     assert len(runs) == 2
+    # (the zone holds at least the first/last HEAD_FIXES fixes, 5 m apart).
+    zone = trace[:HEAD_FIXES] + trace[-HEAD_FIXES:]
     for run in runs:
         for pt in (run[0], run[-1]):
-            assert (R <= _d(HOME, pt) <= R + DWELL_METERS + 1.0
-                    or R <= _d(end, pt) <= R + DWELL_METERS + 1.0)
+            nearest = min(_d(f, pt) for f in zone)
+            assert R - 1.0 <= nearest <= R + 2 * DWELL_METERS + 1.0
 
 
 def test_multi_run_dropout_near_home_is_masked():
@@ -237,6 +257,66 @@ def test_boundary_point_interpolates_elevation():
     assert trace == snapshot
     first = runs[0][0]
     assert len(first) == 3
-    # Cut at 200 m + dwell margin (<= 30 m) north of a 1 m / 10 m ramp
-    # starting at 100 m → elevation interpolated in [120, 123].
-    assert 120.0 - 0.1 <= first[2] <= 100.0 + (R + DWELL_METERS) / 10.0 + 0.1
+    # The cut point is interpolated (not a recorded fix) and its elevation
+    # follows the 1 m / 10 m ramp at its own position.
+    assert first not in trace
+    assert math.isclose(first[2], 100.0 + _d(trace[0], first) / 10.0, abs_tol=0.05)
+
+
+# ── Stale first/last fix far from home (review of #36) ───────────────────────
+#
+# A stale / cell-based first fix 250 m–2.5 km from home used to be bridged to
+# home by ``_densify_coords`` (3 m points), the mask anchored on the outlier
+# and published the bridge AND the home jitter cluster (home drawn at 0.0 m).
+# These drive the REAL production order: ``mask_then_densify`` (raw fixes →
+# mask → densify), exactly what ``iter_masked_runs`` yields.
+
+def _bridge_dist(p: list, a: list, b: list) -> float:
+    """Distance (m) from p to segment a–b, local projection around a."""
+    k = M_PER_DEG_LAT * math.cos(math.radians(a[1]))
+    bx, by = (b[0] - a[0]) * k, (b[1] - a[1]) * M_PER_DEG_LAT
+    px, py = (p[0] - a[0]) * k, (p[1] - a[1]) * M_PER_DEG_LAT
+    L2 = bx * bx + by * by
+    t = max(0.0, min(1.0, (px * bx + py * by) / L2))
+    return math.hypot(px - t * bx, py - t * by)
+
+
+@pytest.mark.parametrize("outlier_m", [250.0, 600.0, 2400.0])
+@pytest.mark.parametrize("with_jitter", [True, False])
+def test_stale_first_fix_does_not_leak_home(outlier_m, with_jitter):
+    outlier = _offset(HOME, 0.0, outlier_m)  # north; the ride goes east
+    home_fixes = _jitter(HOME, 180, seed=7) if with_jitter else [list(HOME)]
+    trace = [outlier] + home_fixes + _leg(0, 0, 3000, 0, step=8.0)
+    runs = mask_then_densify(trace, R)
+    assert runs, "the ride itself must survive"
+    for fix in home_fixes:
+        assert _min_dist(runs, fix) >= R - 1.0
+    assert _min_dist(runs, HOME) >= R - 1.0
+    # No phantom outlier→home bridge either.
+    assert all(_bridge_dist(p, outlier, HOME) > 5.0
+               for run in runs for p in run if _d(p, HOME) < outlier_m)
+
+
+@pytest.mark.parametrize("outlier_m", [250.0, 600.0, 2400.0])
+@pytest.mark.parametrize("with_jitter", [True, False])
+def test_stale_last_fix_does_not_leak_destination(outlier_m, with_jitter):
+    outlier = _offset(WORK, 0.0, outlier_m)
+    work_fixes = _jitter(WORK, 180, seed=8) if with_jitter else [list(WORK)]
+    trace = _leg(0, 0, 3000, 0, step=8.0) + work_fixes + [outlier]
+    runs = mask_then_densify(trace, R)
+    assert runs
+    for fix in work_fixes:
+        assert _min_dist(runs, fix) >= R - 1.0
+    assert all(_bridge_dist(p, outlier, WORK) > 5.0
+               for run in runs for p in run if _d(p, WORK) < outlier_m)
+
+
+def test_mask_then_densify_output_is_dense_and_far_jump_stays_a_break():
+    # Output runs are densified (< 6 m spacing: max_gap=3 → floor) for the lattice, and a raw
+    # jump above the 2.5 km bridge cap is a break, never a drawn segment.
+    far = _leg(6000, 0, 9000, 0, step=8.0)
+    trace = _leg(0, 0, 3000, 0, step=8.0) + far
+    runs = mask_then_densify(trace, R)
+    assert len(runs) == 2
+    for run in runs:
+        assert all(_d(run[i], run[i + 1]) <= 6.01 for i in range(len(run) - 1))

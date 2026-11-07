@@ -54,7 +54,6 @@ _FIT_EXTRA_SKIP: set[str] = {
     "indoor_rowing",
     "indoor_skiing",
     "treadmill",
-    "e_bike_fitness",      # e-bike on a trainer
     "elliptical",
     "stair_climbing",
     "cardio_training",

@@ -127,7 +127,6 @@ def _make_fit(sport: str, sub_sport: str, manufacturer: str = "garmin",
     ("cycling", "virtual_activity", "development"),  # Rouvy/Kinomap app export
     ("cycling", "spin", "garmin"),                   # turbo trainer / spin bike
     ("cycling", "indoor_cycling", "garmin"),
-    ("cycling", "e_bike_fitness", "garmin"),
     ("running", "treadmill", "garmin"),
     ("training", "generic", "garmin"),
     ("cycling", "generic", "zwift"),                 # Zwift file, plain sub_sport
@@ -143,6 +142,9 @@ def test_real_fit_indoor_or_virtual_is_skipped(sport, sub_sport, manufacturer):
 
 @pytest.mark.parametrize("sport,sub_sport", [
     ("cycling", "road"), ("cycling", "generic"), ("running", "generic"),
+    # e_bike_fitness is Garmin's OUTDOOR e-bike sub_sport; e-bike rides are
+    # kept as road everywhere else (gpx.py e_bike, strava_utils "ebikeride").
+    ("cycling", "e_bike_fitness"),
 ])
 def test_real_fit_outdoor_ride_is_kept(sport, sub_sport):
     parsed = parse_fit(_make_fit(sport, sub_sport, "garmin"))
@@ -158,7 +160,7 @@ def test_virtual_fit_strings_are_the_ones_fitparse_yields():
     subs = FIELD_TYPES["sub_sport"].values
     assert subs[58] == "virtual_activity" and subs[5] == "spin"
     assert FIELD_TYPES["manufacturer"].values[260] == "zwift"
-    for s in ("virtual_activity", "spin", "indoor_cycling", "e_bike_fitness"):
+    for s in ("virtual_activity", "spin", "indoor_cycling"):
         assert _skip("cycling", s) is not None
 
 
