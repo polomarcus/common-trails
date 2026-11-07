@@ -40,7 +40,7 @@ const INITIAL_LAYERS: LayerToggles = {
 
 let latestLayers: LayerToggles = INITIAL_LAYERS;
 
-function Harness({ menuOpen = false, isAdmin }: { menuOpen?: boolean; isAdmin?: boolean } = {}) {
+function Harness({ menuOpen = false, isAdmin, activitiesLoading }: { menuOpen?: boolean; isAdmin?: boolean; activitiesLoading?: boolean } = {}) {
   const [layers, setLayers] = useState<LayerToggles>(INITIAL_LAYERS);
   latestLayers = layers;
   const noop = () => {};
@@ -61,7 +61,7 @@ function Harness({ menuOpen = false, isAdmin }: { menuOpen?: boolean; isAdmin?: 
     showUserMenu: menuOpen, setShowUserMenu: noop, isAdmin,
     userEmail: null, stravaName: null, stravaSyncing: false, stravaSyncMsg: null, lastSyncedAt: null,
     handleLogout: noop, setShowImportModal: noop, setShowExportModal: noop,
-    activitiesCount: 0, mapInstance: null, dateLocale: 'fr-FR',
+    activitiesCount: 0, mapInstance: null, dateLocale: 'fr-FR', activitiesLoading,
   };
   return (
     <I18nProvider>
@@ -162,6 +162,64 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
 
     await act(async () => { checkbox(container, 'toggle-my-traces').click(); });
     expect(latestLayers).toMatchObject({ heatmap: true, myTraces: true });
+  });
+});
+
+describe('MapToolbar — "Ma heatmap" loading hint while /me/activities is in flight', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  beforeEach(() => {
+    auth.token = null;
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container.remove();
+  });
+
+  const hint = () => container.querySelector('[data-testid="my-traces-loading"]');
+
+  it('signed in + loading: "Chargement de tes traces…" sits on the "Ma heatmap" row', async () => {
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(<Harness activitiesLoading />); });
+    const row = container.querySelector('[data-testid="toggle-my-traces"]')!;
+    expect(hint()).not.toBeNull();
+    expect(row.contains(hint())).toBe(true);
+    expect(hint()!.textContent).toBe('Chargement de tes traces…');
+    expect(hint()!.getAttribute('role')).toBe('status');
+  });
+
+  it('signed in + loaded: no hint', async () => {
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(<Harness activitiesLoading={false} />); });
+    expect(container.querySelector('[data-testid="toggle-my-traces"]')).not.toBeNull();
+    expect(hint()).toBeNull();
+  });
+
+  it('flips off when the load finishes (re-render with loading=false)', async () => {
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(<Harness activitiesLoading />); });
+    expect(hint()).not.toBeNull();
+    await act(async () => { root!.render(<Harness activitiesLoading={false} />); });
+    expect(hint()).toBeNull();
+  });
+
+  it('logged out: never shown, and the static render never contains it (#418)', async () => {
+    auth.token = 'cookie-auth';
+    expect(renderToString(<Harness activitiesLoading />)).not.toContain('my-traces-loading');
+    auth.token = null;
+    await act(async () => { root = createRoot(container); root.render(<Harness activitiesLoading />); });
+    expect(hint()).toBeNull();
+  });
+
+  it('FR and EN strings exist', async () => {
+    const fr = (await import('@/lib/translations/fr')).default;
+    const en = (await import('@/lib/translations/en')).default;
+    expect(fr['map.toolbar.myHeatmapLoading']).toBe('Chargement de tes traces…');
+    expect(en['map.toolbar.myHeatmapLoading']).toBe('Loading your traces…');
   });
 });
 

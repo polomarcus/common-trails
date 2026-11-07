@@ -163,6 +163,10 @@ export default function MapPage() {
   const [activitiesError, setActivitiesError] = useState<boolean>(false);
   // null until /me/activities answered (never shown for logged-out visitors).
   const [activitiesReturned, setActivitiesReturned] = useState<number | null>(null);
+  // True while /me/activities is in flight → "Chargement de tes traces…" on the
+  // "Ma heatmap" row. Only ever set inside loadActivities (post-mount, token
+  // present), so the static/first render stays identical (#418).
+  const [activitiesLoading, setActivitiesLoading] = useState<boolean>(false);
   const activitiesRef = useRef<ActivityItem[]>([]);
   const [selectedActivity, setSelectedActivity] = useState<ActivityItem | null>(null);
   const layersBeforeActivityRef = useRef<LayerToggles | null>(null);
@@ -266,6 +270,7 @@ export default function MapPage() {
     const token = getToken();
     if (!token) return;
     const m = map as any;
+    setActivitiesLoading(true);
     try {
       const resp = await fetch(`${API_URL}/me/activities?limit=${MAP_ACTIVITIES_LIMIT}`, {
         credentials: 'include',
@@ -350,6 +355,8 @@ export default function MapPage() {
       // real failure (network / 500) is visible rather than an empty sidebar.
       console.error('[map] /me/activities load error:', e);
       setActivitiesError(true);
+    } finally {
+      setActivitiesLoading(false);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -554,6 +561,7 @@ export default function MapPage() {
         setShowImportModal={setShowImportModal}
         setShowExportModal={setShowExportModal}
         activitiesCount={activities.length}
+        activitiesLoading={activitiesLoading}
         isAdmin={isAdmin}
         mapInstance={mapInstance}
         dateLocale={dateLocale}

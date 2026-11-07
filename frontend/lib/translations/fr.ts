@@ -992,6 +992,7 @@ const fr: Translations = {
   // Toolbar
   'map.toolbar.heatmapLayer': 'Heatmap commune',
   'map.toolbar.myHeatmap': 'Ma heatmap',
+  'map.toolbar.myHeatmapLoading': 'Chargement de tes traces…',
   'map.offroadCombined': 'Off-road (VTT+Gravel)',
   'map.toolbar.timeAll': 'Tout',
   'map.toolbar.time1y': '1 an',

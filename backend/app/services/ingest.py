@@ -28,6 +28,7 @@ from sqlalchemy import func
 from sqlalchemy import text as sa_text
 
 from app.config import TEST_MODE
+from app.services.display_geometry import compact_display_geojson
 from app.services.geo import haversine_m as _haversine_m
 from app.services.provenance import (
     COMMUNITY_SOURCE,
@@ -59,6 +60,18 @@ def _display_coords_pair(geometry_geojson, source, contribute_heatmap):
     if blob is None:
         return None, None
     return blob, display_coords_fingerprint()
+
+
+def _display_geojson(geometry_geojson):
+    """Compact display geometry for the personal map (``activities.display_geojson``,
+    migration 0067) — ALL rows (every activity is drawn on "Ma heatmap").
+    Derived cache, never the source of truth (Crouzet). Best-effort: a failure
+    here must never fail an ingest — /me/activities recomputes on the fly when
+    the cache is NULL."""
+    try:
+        return compact_display_geojson(geometry_geojson)
+    except Exception:  # noqa: BLE001 — derived cache is strictly optional
+        return None
 
 HEATMAP_K_ANONYMITY = int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
 
@@ -3083,6 +3096,7 @@ def _promote_activity_to_community(
         # follow the NEW authoritative geometry or the map would draw the old.
         act.display_coords, act.display_coords_params = _display_coords_pair(
             geo, COMMUNITY_SOURCE, contribute_heatmap)
+        act.display_geojson = _display_geojson(geo)
         db.query(ActivityCell).filter(ActivityCell.activity_id == activity_id).delete()
         for cell_key in _geojson_to_cells(geo):
             db.add(ActivityCell(
@@ -3274,6 +3288,7 @@ def ingest_activity(
             geometry_geojson=geometry_geojson,
             display_coords=dc_blob,
             display_coords_params=dc_params,
+            display_geojson=_display_geojson(geometry_geojson),
             # Dual-write: populate the binary PostGIS column (added in
             # migration 0036) alongside the legacy TEXT column. Once all
             # readers move to the binary column, the TEXT column will be
@@ -3722,6 +3737,7 @@ def _ingest_activities_bulk_impl(
                             sport=sport,
                             name=act_data.get("name"),
                             geometry_geojson=geometry_geojson,
+                            display_geojson=_display_geojson(geometry_geojson),
                             geometry=_geom_from_geojson_sql(geometry_geojson),
                             distance_m=act_data.get("distance_m"),
                             elevation_gain_m=act_data.get("elevation_gain_m"),
@@ -4205,6 +4221,7 @@ def _load_fixture_to_db() -> int:
                     sport=act.get("sport", "road"),
                     name=act.get("name"),
                     geometry_geojson=act.get("geometry_geojson"),
+                    display_geojson=_display_geojson(act.get("geometry_geojson")),
                     geometry=_geom_from_geojson_sql(act.get("geometry_geojson")),
                     distance_m=act.get("distance_m"),
                     elevation_gain_m=act.get("elevation_gain_m"),
@@ -4642,15 +4659,16 @@ def iter_user_map_activities(
     - rows come back ASCENDING by that date (the old code returned the tail
       of an insertion-ordered list, so the newest activity streamed LAST —
       the frontend and tests rely on ``features[-1]`` being the newest);
-    - only the columns the /me/activities Feature serialises are projected
-      (``geometry_geojson`` IS served per-feature, so it's fetched — but only
-      for the ``limit`` selected rows);
+    - only the columns the /me/activities Feature serialises are projected:
+      the compact ``display_geojson`` cache (migration 0067), and the
+      full-resolution ``geometry_geojson`` ONLY for rows whose cache is NULL
+      (``None`` otherwise) — only for the ``limit`` selected rows;
     - ``yield_per`` streams rows through a server-side cursor so at most a
       small window of geometries is in memory at once. The session stays
       open until the generator is exhausted or closed (StreamingResponse
       closes it on client disconnect via the ``finally``).
     """
-    from sqlalchemy import func, select
+    from sqlalchemy import case, func, select
 
     from app.db.models import Activity
     from app.db.session import SessionLocal
@@ -4663,7 +4681,14 @@ def iter_user_map_activities(
             Activity.provider_activity_id,
             Activity.sport,
             Activity.name,
-            Activity.geometry_geojson,
+            # The full-resolution TEXT is only shipped off the db-f1-micro when
+            # the compact cache is missing (pre-backfill rows) — the handler
+            # then derives the display geometry on the fly.
+            case(
+                (Activity.display_geojson.is_(None), Activity.geometry_geojson),
+                else_=None,
+            ).label("geometry_geojson"),
+            Activity.display_geojson,
             Activity.distance_m,
             Activity.elevation_gain_m,
             Activity.moving_time,
@@ -4694,6 +4719,7 @@ def iter_user_map_activities(
                 "sport": r.sport,
                 "name": r.name,
                 "geometry_geojson": r.geometry_geojson,
+                "display_geojson": r.display_geojson,
                 "distance_m": r.distance_m,
                 "elevation_gain_m": r.elevation_gain_m,
                 "moving_time": r.moving_time,

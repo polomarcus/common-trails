@@ -1085,7 +1085,7 @@ def _gps_apply_batch(
     """
     if not upgrades and not upgraded_delta and not last_error:
         return
-    from app.services.ingest import _geom_from_geojson_sql
+    from app.services.ingest import _display_geojson, _geom_from_geojson_sql
     db = SessionLocal()
     try:
         for activity_id, geojson_str in upgrades:
@@ -1095,6 +1095,9 @@ def _gps_apply_batch(
             if geojson_str:
                 act.geometry_geojson = geojson_str
                 act.geometry = _geom_from_geojson_sql(geojson_str)
+                # The compact personal-map cache (0067) must follow the
+                # upgraded stream geometry, or "Ma heatmap" keeps the polyline.
+                act.display_geojson = _display_geojson(geojson_str)
             act.geometry_source = "stream"
         if upgraded_delta or last_error:
             job = db.query(ImportJob).filter(ImportJob.id == job_id).first()
