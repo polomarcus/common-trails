@@ -17,7 +17,10 @@
  * a `heatmap` over `heat_points` with a transparent 0-density stop.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
+  HEAT_RADIUS_RAMP,
   communityTrailsSourceSpec,
   communityTrailsGlowLayerSpec,
   communityTrailsLineLayerSpec,
@@ -516,5 +519,21 @@ describe('applyCommunityHeatSportFilter (SSOT — home + /map)', () => {
   it('is safe on a partial map (community layers skipped when URL unset)', () => {
     const m = { getLayer: () => undefined, setFilter: () => { throw new Error('should not be called'); } };
     expect(() => applyCommunityHeatSportFilter(m, 'road')).not.toThrow();
+  });
+});
+
+// fix/heatmap-beads (2026-11): the backend thins `heat_points` per zoom so the
+// spacing along a lone trace stays below THIS kernel radius (else beads). It
+// reads the radius from backend/app/services/heatmap_radius_ramp.json — pin the
+// frontend ramp to that SSOT so retuning one without the other fails here.
+describe('HEAT_RADIUS_RAMP ↔ backend heatmap_radius_ramp.json', () => {
+  it('matches the backend LOD radius stops exactly', () => {
+    const json = JSON.parse(readFileSync(
+      path.resolve(__dirname, '../../../backend/app/services/heatmap_radius_ramp.json'), 'utf8'));
+    const ramp = HEAT_RADIUS_RAMP as unknown[];
+    expect(ramp.slice(0, 3)).toEqual(['interpolate', ['linear'], ['zoom']]);
+    const stops: number[][] = [];
+    for (let i = 3; i < ramp.length; i += 2) stops.push([ramp[i] as number, ramp[i + 1] as number]);
+    expect(stops).toEqual(json.stops);
   });
 });

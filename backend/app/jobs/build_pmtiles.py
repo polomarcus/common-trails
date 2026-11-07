@@ -247,6 +247,17 @@ def run_tippecanoe(geojson_path: str, output: str, min_zoom: int, max_zoom: int,
     ]
     if points_path is not None:
         cmd += ["-L", f"trails:{geojson_path}", "-L", f"heat_points:{points_path}"]
+        # -r1 / --drop-rate=1: NO rate-based dot dropping below the max zoom.
+        # tippecanoe's default (-r 2.5) kept 1/2.5 of the heat_points per zoom,
+        # chosen along its spatial index → a lone trace's 20 m points became
+        # ~150 m mean / 750 m max gaps at z13 (~100 px between ~8 px kernels)
+        # = the "beads" bug (fix/heatmap-beads). The per-zoom thinning is now
+        # decided by the export (each point carries a tippecanoe ``minzoom``,
+        # raw_trace_display.heat_point_levels) so the spacing along every trace
+        # tracks the heatmap radius. Rate dropping only ever applies to POINTS
+        # (lines are untouched without --drop-lines); --drop-densest-as-needed
+        # below still caps tile bytes.
+        cmd += ["-r1"]
     else:
         cmd += ["-l", "trails", geojson_path]
     cmd += [
