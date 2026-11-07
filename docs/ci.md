@@ -11,6 +11,11 @@ Trois workflows GitHub Actions dans `.github/workflows/`.
 | **E2E tests (shard 1/2)**, **E2E tests (shard 2/2)** | Backend en compose + `npm run build` du frontend + fixture `e2e/fixtures/heatmap-display.pmtiles` copiée dans `out/`, puis Playwright (`e2e/`) en 2 shards — timeout 20 min | oui |
 | **Frontend unit** | `npx tsc --noEmit` + Vitest (`npm run test`), sans Docker, ~1 min | **non** (pas encore dans la protection de branche) |
 
+Import d'archive complète : un export Strava/Garmin **synthétique** passe
+par tout le pipeline dans `Backend tests` (`test_archive_import_e2e.py`) et dans
+les shards E2E (`archive-import-synthetic.spec.ts`, qui lance le vrai drain via
+`E2E_ARCHIVE_DRAIN_CMD`) — voir [archive-import-testing.md](archive-import-testing.md).
+
 Checks requis par la protection de `main` : `Lint`, `Backend tests`,
 `E2E tests (shard 1/2)`, `E2E tests (shard 2/2)`. La branche est en mode
 strict (à jour avec `main` avant merge).

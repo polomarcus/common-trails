@@ -293,6 +293,11 @@ jobs:
           BASE_URL: "http://localhost:3787"
           CI: "true"
           NODE_OPTIONS: "--max-old-space-size=4096"
+          # archive-import-synthetic.spec.ts runs the REAL archive drain job
+          # on the compose backend after its dropzone upload (CI-only: the
+          # spec stops at upload completion when this is unset, so a local
+          # run never drains someone's dev queue).
+          E2E_ARCHIVE_DRAIN_CMD: "docker compose -f ../docker-compose.backend.yml exec -T backend python -m app.jobs.ingest_pending_archives --pace 0"
 
       - name: Dump backend logs on failure
         if: failure()

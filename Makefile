@@ -1,4 +1,4 @@
-.PHONY: up down logs test test-slow test-golden heatmap-rebuild heat-quality backend frontend dev dev-frontend lint format dfci-download dfci-extract dfci-upload pmtiles heat-edges heatmap-deploy heatmap-status gcp-precheck prod-import-osm prod-import-osm-south import-osm-roads-local heatmap-clean-rebuild import-trails-pbf prod-import-trails-south prod-recompute-elevation-gain prod-group-edges-osm-job
+.PHONY: up down logs test test-slow test-golden e2e-import-real heatmap-rebuild heat-quality backend frontend dev dev-frontend lint format dfci-download dfci-extract dfci-upload pmtiles heat-edges heatmap-deploy heatmap-status gcp-precheck prod-import-osm prod-import-osm-south import-osm-roads-local heatmap-clean-rebuild import-trails-pbf prod-import-trails-south prod-recompute-elevation-gain prod-group-edges-osm-job
 
 ## GOLDEN RULE: any GCP action must verify BOTH gcloud config AND ADC
 ## (Application Default Credentials — what terraform/gsutil/google-cloud
@@ -450,6 +450,16 @@ test-slow:
 	docker compose --env-file .env.test up -d
 	docker compose exec backend pytest -q
 	docker compose down
+
+## Full import of a REAL export (Strava / Garmin .zip) through the real drain,
+## in THROWAWAY containers (internal network, no host port, DB deleted on exit).
+## LOCAL ONLY — never in CI. Prints counts, skip reasons, sports, emails,
+## timings, peak memory. REDROP=1 re-drops it (idempotence).
+## Usage: make e2e-import-real ARCHIVE=/path/to/export.zip
+## See docs/archive-import-testing.md.
+e2e-import-real:
+	@test -n "$(ARCHIVE)" || { echo "usage: make e2e-import-real ARCHIVE=/path/to/export.zip"; exit 2; }
+	REDROP=$(REDROP) scripts/e2e-import-real.sh "$(ARCHIVE)"
 
 ## Run the GOLDEN + SLOW tests against the DEV stack (real occitanie OSM PBF
 ## in osm_road_edges + data/ mounted). These pin the ingestion → heatmap
