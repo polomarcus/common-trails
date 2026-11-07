@@ -554,6 +554,43 @@ def generate_signed_put_url(bucket_key: str) -> str:
     )
 
 
+# Resumable uploads (GCS backend). A single signed PUT of a 1.8 GB export means
+# any network blip restarts from byte 0; a resumable SESSION lets the browser
+# send 16 MiB chunks and resume from the server-persisted offset (even after a
+# tab reload — sessions live ~1 week). Kill switch: set to "false" to force the
+# legacy single signed PUT (e.g. if the bucket CORS isn't applied yet).
+RESUMABLE_UPLOADS_ENABLED = (
+    os.environ.get("ARCHIVE_RESUMABLE_UPLOADS", "true").strip().lower() != "false"
+)
+
+
+def create_resumable_session(bucket_key: str, size: int, origin: str) -> str:
+    """Open a GCS resumable upload session for ``bucket_key``; return its URL.
+
+    Created SERVER-side with the API's own credentials (a plain authenticated
+    POST — no signing, so no signBlob dependency). What it binds:
+
+    * ``size`` → ``X-Upload-Content-Length``: GCS refuses any byte past the
+      declared total, so — unlike the signed PUT, which binds the type but
+      not the size — the object can never exceed what init validated
+      against ``MAX_ARCHIVE_BYTES`` (``/complete`` still re-checks).
+    * ``content_type`` → the object's Content-Type (chunk PUTs needn't send it).
+    * ``origin`` → GCS answers CORS on the session URL for THIS origin only, so
+      it must be the site origin the browser uploads from.
+
+    ``checksum=None``: the browser uploads, not this client, so there is
+    nothing for the library to verify locally.
+    """
+    client = _get_client()
+    blob = client.bucket(_require_bucket()).blob(bucket_key)
+    return blob.create_resumable_upload_session(
+        content_type=ARCHIVE_CONTENT_TYPE,
+        size=size,
+        origin=origin,
+        checksum=None,
+    )
+
+
 def generate_signed_get_url(
     bucket_name: str, bucket_key: str, ttl: timedelta
 ) -> str:
