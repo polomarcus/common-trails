@@ -366,6 +366,12 @@ class Activity(Base):
     # the current env (see raw_trace_display.display_coords_fingerprint).
     display_coords = Column(LargeBinary, nullable=True)
     display_coords_params = Column(Text, nullable=True)
+    # Compact DISPLAY-ONLY geometry for the personal map (migration 0067):
+    # gap-split → Douglas-Peucker 2 m → 5-decimal coords, the exact GeoJSON
+    # GET /me/activities serves (app.services.display_geometry). Derived cache —
+    # geometry_geojson stays the untouched source of truth (Crouzet); NULL →
+    # the endpoint recomputes on the fly.
+    display_geojson = Column(Text, nullable=True)
     distance_m = Column(Float, nullable=True)
     elevation_gain_m = Column(Float, nullable=True)
     file_hash = Column(String(64), nullable=True)  # SHA256 for file dedup

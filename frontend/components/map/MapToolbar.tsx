@@ -56,6 +56,9 @@ export interface MapToolbarProps {
   setShowImportModal: (v: boolean) => void;
   setShowExportModal: (v: boolean) => void;
   activitiesCount: number;
+  /** True while GET /me/activities is in flight ("Ma heatmap" row shows a
+   *  loading hint). Set by /map's load effect — never derived from auth at render. */
+  activitiesLoading?: boolean;
   /** From GET /auth/me (fetched post-mount by useUserMenu). Gates the Admin entry. */
   isAdmin?: boolean;
 
@@ -84,7 +87,7 @@ export default function MapToolbar(props: MapToolbarProps) {
     handleLogout, setShowImportModal,
     setShowExportModal,
     activitiesCount, mapInstance, dateLocale,
-    isAdmin = false,
+    isAdmin = false, activitiesLoading = false,
   } = props;
 
   // Read auth AFTER mount, not during render. Calling getToken() (reads
@@ -214,6 +217,16 @@ export default function MapToolbar(props: MapToolbarProps) {
                 />
                 <span aria-hidden="true" data-testid="swatch-my-traces" style={{ width: 18, height: 5, borderRadius: 3, background: MY_TRACES_COLOR, flexShrink: 0 }} />
                 <span>{t('map.toolbar.myHeatmap')}</span>
+                {activitiesLoading && (
+                  <span
+                    data-testid="my-traces-loading"
+                    role="status"
+                    aria-live="polite"
+                    style={{ marginLeft: 'auto', fontSize: 11, color: '#888', fontStyle: 'italic', whiteSpace: 'nowrap' }}
+                  >
+                    {t('map.toolbar.myHeatmapLoading')}
+                  </span>
+                )}
               </label>
             )}
             {/* Community heatmap toggle + inline sport filter */}
