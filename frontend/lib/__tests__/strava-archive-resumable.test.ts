@@ -248,6 +248,8 @@ describe('uploadArchive — resumable mode + resume after reload', () => {
   beforeEach(() => {
     noSleep.mockClear();
     storage = new MemoryStorage();
+    storage.setItem('user_id', 'user-1'); // lib/auth getCurrentUserId()
+    vi.stubGlobal('window', {});
     vi.stubGlobal('localStorage', storage);
   });
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -362,7 +364,7 @@ describe('uploadArchive — resumable mode + resume after reload', () => {
     const total = CHUNK;
     const file = zipFile(total);
     storage.setItem(RESUME_STORAGE_KEY, JSON.stringify({
-      name: file.name, size: total, lastModified: file.lastModified,
+      user_id: 'user-1', name: file.name, size: total, lastModified: file.lastModified,
       session_url: 'https://session/dead', archive_id: 'dead', init: resumableInit('dead', 'https://session/dead'),
       saved_at: Date.now(),
     }));
@@ -444,6 +446,91 @@ describe('uploadArchive — resumable mode + resume after reload', () => {
     expect(warn).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2); // init + complete, no re-init
     expect(s.data).toEqual(patterned(total));
+  });
+
+  it('308 WITHOUT a readable Range on every chunk (CORS hides it) → falls back to the single PUT and completes', async () => {
+    const total = 3 * CHUNK;
+    const s = new FakeSession(total);
+    // The server persists, but the browser never sees `Range` (not exposed).
+    const hidden = async (req: ChunkRequest) => {
+      const r = await s.transport(req);
+      return r.status === 308 ? { status: 308, range: null } : r;
+    };
+    const putInit = { ...resumableInit('h1', 'x'), upload_mode: 'put' as const, session_url: null, upload_url: 'https://signed/h1' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(resumableInit('h1', 'https://session/h1')))
+      .mockResolvedValueOnce(jsonResponse(putInit))
+      .mockResolvedValueOnce(completed('h1'));
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const put = vi.fn().mockResolvedValue(undefined);
+
+    const res = await uploadArchive({
+      apiUrl: API, token: null, blob: zipFile(total), payload, put, transport: hidden, sleep: noSleep, chunkBytes: CHUNK,
+    });
+
+    expect(res.status).toBe('uploaded');
+    expect(s.calls.length).toBe(2); // gave up after 2 "stalled" chunks, not 8
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).reuse_archive_id).toBe('h1');
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-gone 4xx on a chunk clears the resume slot (next attempt re-inits)', async () => {
+    const s = new FakeSession(2 * CHUNK);
+    s.faults.set(1, { kind: 'status', code: 403 });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse(resumableInit('e1', 'https://session/e1'))));
+    const err = await uploadArchive({
+      apiUrl: API, token: null, blob: zipFile(2 * CHUNK), payload, transport: s.transport, sleep: noSleep, chunkBytes: CHUNK,
+    }).catch((e) => e);
+    expect(err.status).toBe(403);
+    expect(storage.getItem(RESUME_STORAGE_KEY)).toBeNull();
+  });
+
+  it('another account on the same browser never resumes the stored session', async () => {
+    const total = 2 * CHUNK;
+    const old = new FakeSession(total);
+    old.failAllFrom = 1;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(jsonResponse(resumableInit('u1', 'https://session/u1'))));
+    await uploadArchive({
+      apiUrl: API, token: null, blob: zipFile(total), payload, transport: old.transport, sleep: noSleep, chunkBytes: CHUNK,
+    }).catch(() => {});
+    expect(JSON.parse(storage.getItem(RESUME_STORAGE_KEY)!).user_id).toBe('user-1');
+
+    storage.setItem('user_id', 'user-2'); // log out / log in as someone else
+    const oldCalls = old.calls.length;
+    const fresh = new FakeSession(total);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(resumableInit('u2', 'https://session/u2')))
+      .mockResolvedValueOnce(completed('u2'));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await uploadArchive({
+      apiUrl: API, token: null, blob: zipFile(total), payload, transport: fresh.transport, sleep: noSleep, chunkBytes: CHUNK,
+    });
+    expect(res.archive_id).toBe('u2');
+    expect(fetchMock.mock.calls[0][0]).toBe(`${API}/imports/strava-archive/init`);
+    expect(old.calls).toHaveLength(oldCalls);
+  });
+
+  it('a stored session older than 40 h (awaiting_upload reaper is 48 h) is not resumed', async () => {
+    const file = zipFile(CHUNK);
+    storage.setItem(RESUME_STORAGE_KEY, JSON.stringify({
+      user_id: 'user-1', name: file.name, size: CHUNK, lastModified: file.lastModified,
+      session_url: 'https://session/old', archive_id: 'old', init: resumableInit('old', 'https://session/old'),
+      saved_at: Date.now() - 41 * 3600 * 1000,
+    }));
+    const fresh = new FakeSession(CHUNK);
+    const urls: string[] = [];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(resumableInit('y1', 'https://session/y1')))
+      .mockResolvedValueOnce(completed('y1'));
+    vi.stubGlobal('fetch', fetchMock);
+    await uploadArchive({
+      apiUrl: API, token: null, blob: file, payload, sleep: noSleep, chunkBytes: CHUNK,
+      transport: (req) => { urls.push(req.url); return fresh.transport(req); },
+    });
+    expect(urls).not.toContain('https://session/old');
+    expect(fetchMock.mock.calls[0][0]).toBe(`${API}/imports/strava-archive/init`);
   });
 
   it('broken localStorage never breaks the upload', async () => {

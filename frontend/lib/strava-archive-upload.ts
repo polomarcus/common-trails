@@ -25,6 +25,8 @@
  * single PUT above.
  */
 
+import { getCurrentUserId } from './auth';
+
 export interface ArchiveInitPayload {
   sport: string;
   consent: boolean;
@@ -402,6 +404,11 @@ export async function uploadResumable(
       // A chunk PUT that persisted nothing (sentEnd > offset but Range didn't
       // move): count it, so an unreadable Range header can't loop forever.
       failures += 1;
+      // Nothing EVER acknowledged and a second full chunk "persisted nothing":
+      // that is the signature of a `Range` header the browser can't read (CORS
+      // exposure on the session URL) — every zip > 1 chunk would stall. Hand
+      // over to the single-PUT fallback instead of resending 16 MiB 8 times.
+      if (failFastIfUnreachable && confirmed === 0 && failures >= 2) throw new ResumableUnreachableError();
       if (sentEnd > offset && failures <= MAX_RESUMABLE_RETRIES) { await sleep(backoffMs(failures)); continue; }
       throw new ArchiveUploadError('upload stalled (no bytes persisted)', 'upload_failed', status);
     }
@@ -425,12 +432,17 @@ export async function uploadResumable(
 /** localStorage key holding the one in-flight resumable session. */
 export const RESUME_STORAGE_KEY = 'ct.archiveUpload.resumable.v1';
 
-/** GCS sessions live ~1 week; don't trust a stored one older than 6 days. */
-const RESUME_MAX_AGE_MS = 6 * 24 * 3600 * 1000;
+/** GCS sessions live ~1 week, but the drain job's reaper FAILS a still-
+ *  'awaiting_upload' archive after 48 h (`_AWAITING_UPLOAD_TTL_HOURS` in
+ *  backend/app/jobs/ingest_pending_archives.py). Stay well below it so a
+ *  resume never lands on a reaped row. */
+const RESUME_MAX_AGE_MS = 40 * 3600 * 1000;
 
 interface FileFingerprint { name: string; size: number; lastModified: number }
 
 interface PersistedSession extends FileFingerprint {
+  /** Owner: another account on this browser never resumes this session. */
+  user_id: string;
   session_url: string;
   archive_id: string;
   init: ArchiveInitResult;
@@ -445,14 +457,19 @@ function fingerprint(blob: Blob): FileFingerprint | null {
     : null;
 }
 
+function currentUserId(): string | null {
+  try { return getCurrentUserId(); } catch { return null; }
+}
+
 // Every storage access is try/catch: private mode / blocked storage / SSR must
 // degrade to "no resume", never break the upload itself.
-function loadSession(fp: FileFingerprint): PersistedSession | null {
+function loadSession(fp: FileFingerprint, userId: string): PersistedSession | null {
   try {
     const raw = globalThis.localStorage?.getItem(RESUME_STORAGE_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw) as PersistedSession;
-    const same = s.name === fp.name && s.size === fp.size && s.lastModified === fp.lastModified;
+    const same = s.user_id === userId
+      && s.name === fp.name && s.size === fp.size && s.lastModified === fp.lastModified;
     const fresh = Date.now() - s.saved_at < RESUME_MAX_AGE_MS;
     return same && fresh && s.session_url && s.init ? s : null;
   } catch {
@@ -460,10 +477,10 @@ function loadSession(fp: FileFingerprint): PersistedSession | null {
   }
 }
 
-function saveSession(fp: FileFingerprint, init: ArchiveInitResult): void {
+function saveSession(fp: FileFingerprint, userId: string, init: ArchiveInitResult): void {
   try {
     const s: PersistedSession = {
-      ...fp, session_url: init.session_url as string, archive_id: init.archive_id, init, saved_at: Date.now(),
+      ...fp, user_id: userId, session_url: init.session_url as string, archive_id: init.archive_id, init, saved_at: Date.now(),
     };
     globalThis.localStorage?.setItem(RESUME_STORAGE_KEY, JSON.stringify(s));
   } catch { /* storage unavailable — upload still works, just not across reloads */ }
@@ -471,6 +488,14 @@ function saveSession(fp: FileFingerprint, init: ArchiveInitResult): void {
 
 function clearSession(): void {
   try { globalThis.localStorage?.removeItem(RESUME_STORAGE_KEY); } catch { /* idem */ }
+}
+
+/** A chunk answer that is final for this session (403, 400, 413…): retrying
+ *  the same session would just repeat it, so the next attempt must re-init.
+ *  429 (throttled, retried until exhausted) is NOT final. */
+function isFinalClientError(err: unknown): boolean {
+  const st = err instanceof ArchiveUploadError ? err.status : undefined;
+  return st !== undefined && st >= 400 && st < 500 && st !== 429;
 }
 
 export type UploadStage = 'init' | 'uploading' | 'finalizing' | 'done';
@@ -505,18 +530,24 @@ export async function uploadArchive(args: UploadArchiveArgs): Promise<ArchiveCom
   const ctx: AuthCtx = { apiUrl, token };
   const tooBig = checkArchiveSize(blob);
   if (tooBig) throw tooBig;
-  const fp = fingerprint(blob);
+  // Resume slot is keyed by file AND account; the id is read NOW (upload
+  // time), never captured at render. No user id → no resume.
+  const userId = currentUserId();
+  const fp = userId ? fingerprint(blob) : null;
   onStage?.('init');
 
   let init: ArchiveInitResult | null = null;
-  const stored = fp ? loadSession(fp) : null;
+  const stored = fp && userId ? loadSession(fp, userId) : null;
   if (stored) {
     onStage?.('uploading');
     try {
       await uploadResumable(stored.session_url, blob, { ...chunkOpts, queryFirst: true });
       init = stored.init;
     } catch (err) {
-      if (!(err instanceof SessionGoneError)) throw err; // keep it: a retry resumes again
+      if (!(err instanceof SessionGoneError)) {
+        if (isFinalClientError(err)) clearSession();
+        throw err; // network / 5xx: keep it, a retry resumes again
+      }
       clearSession();
     }
   }
@@ -525,11 +556,11 @@ export async function uploadArchive(args: UploadArchiveArgs): Promise<ArchiveCom
     init = await initArchiveUpload(ctx, { ...payload, size: blob.size });
     onStage?.('uploading');
     if (init.upload_mode === 'resumable' && init.session_url) {
-      if (fp) saveSession(fp, init);
+      if (fp && userId) saveSession(fp, userId, init);
       try {
         await uploadResumable(init.session_url, blob, { ...chunkOpts, failFastIfUnreachable: true });
       } catch (err) {
-        if (err instanceof SessionGoneError) clearSession();
+        if (err instanceof SessionGoneError || isFinalClientError(err)) clearSession();
         if (!(err instanceof ResumableUnreachableError)) throw err;
         // Safety net: the browser can't talk to the session URL and not one
         // byte landed — fall back to the single signed PUT for the SAME
