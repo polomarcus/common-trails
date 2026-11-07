@@ -37,12 +37,12 @@ import time
 
 from sqlalchemy import text as sa_text
 
-from app.config import VALID_SPORTS
 from app.services import archive_intake
 from app.services import email as email_service
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
 from app.services.run_jobs import trigger_build_pmtiles_job
+from app.services.strava_utils import resolve_sport_cascade
 
 log = logging.getLogger(__name__)
 
@@ -446,21 +446,23 @@ def _parse_member(raw: bytes, filename: str) -> dict:
     return gpx_service.parse_gpx(raw)
 
 
-def _effective_sport(parsed: dict, pending_sport: str | None) -> str:
-    """Sport cascade for the archive path: FIT device sport → in-GPX
-    ``<trk><type>`` → the queue row's pre-resolved sport (which already
-    carries the authoritative activities.csv value when the export had one,
-    else the form fallback). Mirrors the imports.py cascade ranking.
+def _effective_sport(parsed: dict, csv_sport: str | None) -> str | None:
+    """Sport cascade for the archive path (SSOT
+    ``strava_utils.resolve_sport_cascade``): activities.csv → FIT
+    sport/sub_sport → in-GPX ``<trk><type>``.
+
+    The CSV ranks first: it is the type the user set (and possibly
+    corrected) on Strava, while the original FIT inside a Strava export
+    still says the device's generic "cycling". A generic CSV "Ride"
+    (road) is still refined by a specific FIT/GPX gravel/mtb.
+
+    There is NO form fallback for archives (an archive mixes sports — a
+    blanket sport is how runs/hikes ended up on the VTT layer) and no
+    default: None → the caller skips the member.
     """
-    fit_sport = parsed.get("sport")
-    if fit_sport in VALID_SPORTS:
-        return fit_sport
-    gpx_sport = parsed.get("sport_from_gpx")
-    if gpx_sport in VALID_SPORTS:
-        return gpx_sport
-    if pending_sport in VALID_SPORTS:
-        return pending_sport
-    return "road"
+    return resolve_sport_cascade(
+        csv_sport, parsed.get("sport"), parsed.get("sport_from_gpx"),
+    )
 
 
 def _claim_batch(db, limit: int) -> list[dict]:
@@ -551,11 +553,18 @@ def _ingest_member_bytes(
     if not parsed.get("geometry_geojson"):
         return "skipped", None, "no_geometry"
 
+    # Unknown / ambiguous sport (no CSV row, FIT without a usable
+    # sport/sub_sport, GPX typed only "cycling" or untyped) → SKIP. Never a
+    # default layer: skip beats pollute.
+    sport = _effective_sport(parsed, resolved_sport)
+    if sport is None:
+        return "skipped", None, "sport_unknown"
+
     activity_data = {
         "provider": "file",
         "provider_activity_id": None,
         "source": source or archive_intake.ARCHIVE_PROVENANCE,
-        "sport": _effective_sport(parsed, resolved_sport),
+        "sport": sport,
         "name": parsed.get("name"),
         "geometry_geojson": parsed.get("geometry_geojson"),
         "distance_m": parsed.get("distance_m"),
@@ -976,9 +985,12 @@ def drain_pending_archives(
                         # activities.csv marked this out-of-scope (yoga/virtual/…).
                         counts["skipped"] += 1
                         continue
-                    resolved_sport = (
-                        csv_sport if isinstance(csv_sport, str) else arch["fallback_sport"]
-                    )
+                    # activities.csv sport, or None (no CSV row). The archive's
+                    # ``fallback_sport`` (the form value) is deliberately NOT
+                    # used: an archive mixes sports, so a blanket sport mislabels
+                    # every member whose own file can't tell (older clients sent
+                    # a silent 'mtb'). Unknown → the member is skipped.
+                    resolved_sport = csv_sport if isinstance(csv_sport, str) else None
                     if not first:
                         pace = _next_pace(pace_mode, pace_value, last_work_s, pace_cap)
                         if pace > 0:

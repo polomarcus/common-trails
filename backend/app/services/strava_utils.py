@@ -24,6 +24,7 @@ polluting the heatmap is community-wide + propagated through PMTiles
 cache. We err on the side of "miss it" every time.
 """
 
+import unicodedata
 
 # ── SINGLE SOURCE OF TRUTH for sport classification ──────────────────
 #
@@ -93,6 +94,43 @@ _STRAVA_SPORT_MAP: dict[str, str | None] = {
     "handcycle": None,
     "elliptical": None,
     "stairstepper": None,
+    # ── Localized Strava labels (French UI) ────────────────────────────
+    # The reference export is English, but a bulk export / hand-made CSV
+    # can carry the labels the French Strava UI displays. Keys are already
+    # in `_norm_type` form (lower-case, accents folded, non-alphanumerics
+    # stripped). Anything not listed stays unknown → skip.
+    "velo": "road",
+    "veloderoute": "road",
+    "veloelectrique": "road",
+    "vae": "road",
+    "velogravel": "gravel",
+    "gravel": "gravel",
+    "vtt": "mtb",
+    "velotoutterrain": "mtb",
+    "vttelectrique": "mtb",
+    "vtae": "mtb",
+    "courseapied": "running",
+    "trail": "running",
+    "randonnee": "running",
+    "marche": "running",
+    "velovirtuel": None,
+    "courseapiedvirtuelle": None,
+    "natation": None,
+    "skialpin": None,
+    "skiderandonnee": None,
+    "skidefond": None,
+    "raquettes": None,
+    "entrainement": None,
+    "musculation": None,
+    "aviron": None,
+    "kayak": None,
+    "canoe": None,
+    "surf": None,
+    "escalade": None,
+    "elliptique": None,
+    "patinageaglace": None,
+    "roller": None,
+    "fauteuilroulant": None,
 }
 
 # Generic cycling sports whose name can be refined into gravel/mtb.
@@ -105,11 +143,61 @@ _NAME_REFINABLE: frozenset[str] = frozenset({"road"})
 def _norm_type(activity_type: str) -> str:
     """Normalize a Strava Activity Type to the map key form.
 
-    Lower-cases and strips every non-alphanumeric char so both the API
-    "MountainBikeRide" and the CSV "Mountain Bike Ride" (and hand-edited
-    "mountain_bike_ride", "E-Bike Ride", etc.) collapse to the same key.
+    Lower-cases, folds accents and strips every non-alphanumeric char so
+    the API "MountainBikeRide", the CSV "Mountain Bike Ride", hand-edited
+    "mountain_bike_ride" / "E-Bike Ride" and a localized "Vélo électrique"
+    all collapse to a stable ASCII key.
     """
-    return "".join(c for c in activity_type.lower() if c.isalnum())
+    folded = unicodedata.normalize("NFKD", activity_type.lower())
+    return "".join(c for c in folded if c.isascii() and c.isalnum())
+
+
+def lookup_activity_type(activity_type: str | None) -> tuple[str | None, bool]:
+    """Raw type lookup in the SSOT map, WITHOUT name refinement.
+
+    Returns ``(sport, known)``: ``known`` is True when the type is in the
+    catalog (``sport`` is then the mapped sport, or None for an explicit
+    out-of-scope type the caller must skip); ``(None, False)`` means the
+    type is unknown — no information.
+    """
+    if not activity_type:
+        return None, False
+    key = _norm_type(activity_type)
+    if key in _STRAVA_SPORT_MAP:
+        return _STRAVA_SPORT_MAP[key], True
+    return None, False
+
+
+# Sports a generic "road" classification may be refined into by a more
+# specific, lower-priority source (see `resolve_sport_cascade`).
+_SPECIFIC_CYCLING: frozenset[str] = frozenset({"gravel", "mtb"})
+
+
+def resolve_sport_cascade(*candidates: str | None) -> str | None:
+    """Pick the sport of an imported file from candidates ordered by
+    authority (most authoritative first), e.g. ``(activities.csv sport,
+    FIT/GPX sport, user-chosen sport)``.
+
+    * The first candidate that is a valid sport wins…
+    * …except a generic ``road`` (Strava "Ride", FIT cycling/generic):
+      a LATER candidate that is gravel/mtb is more specific and wins
+      (the CSV says "Ride" but the Garmin FIT says sub_sport=mountain;
+      the user picked "gravel" for a FIT recorded on the generic Bike
+      profile).
+    * No valid candidate → None: the caller MUST skip the file. There is
+      no default sport — an unknown sport never lands on a heatmap layer.
+    """
+    from app.config import VALID_SPORTS
+
+    valid = [c for c in candidates if c in VALID_SPORTS]
+    if not valid:
+        return None
+    first = valid[0]
+    if first == "road":
+        for later in valid[1:]:
+            if later in _SPECIFIC_CYCLING:
+                return later
+    return first
 
 
 def classify_sport(
@@ -139,9 +227,7 @@ def classify_sport(
 
     Case-insensitive, whitespace/punctuation-tolerant. Never raises.
     """
-    if not activity_type:
-        return None
-    sport = _STRAVA_SPORT_MAP.get(_norm_type(activity_type))
+    sport, _known = lookup_activity_type(activity_type)
     if sport in _NAME_REFINABLE and activity_name:
         n = activity_name.lower()
         if "gravel" in n:

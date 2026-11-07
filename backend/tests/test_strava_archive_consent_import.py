@@ -623,8 +623,9 @@ class TestWholeArchiveWorkerStreamsAndIngests:
             assert len(acts) == 2
             # #453 provenance separation: community-eligible source stamped.
             assert {a.source for a in acts} == {"manual_upload"}
-            # GPX member → road (CSV), FIT member → gravel (FIT device sport).
-            assert sorted(a.sport for a in acts) == ["gravel", "road"]
+            # GPX member → road (CSV "Ride"); FIT member → mtb: its CSV row
+            # (MountainBikeRide) outranks the device sport (stub: gravel).
+            assert sorted(a.sport for a in acts) == ["mtb", "road"]
             arch = db.get(PendingArchive, body["archive_id"])
             assert arch.status == "done"
             assert arch.imported == 2

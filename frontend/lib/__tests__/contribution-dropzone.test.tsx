@@ -144,6 +144,20 @@ describe('ContributionDropzone', () => {
     expect(isArchivePending()).toBe(true);
   });
 
+  it('an archive init never carries a blanket sport (not even a chosen chip)', async () => {
+    fetchSpy.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    // No chip: the old client silently sent sport='mtb' for the whole archive.
+    await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    // A chip chosen for loose files must not leak into an archive either.
+    await act(async () => { (q(container, 'sport-chip-road') as HTMLButtonElement).click(); });
+    await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    const inits = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/imports/strava-archive/init'));
+    expect(inits.length).toBe(2);
+    for (const [, init] of inits) {
+      expect(JSON.parse(String(init.body))).not.toHaveProperty('sport');
+    }
+  });
+
   it('warns on beforeunload only while an upload is in flight', async () => {
     const unload = () => {
       const ev = new Event('beforeunload', { cancelable: true });

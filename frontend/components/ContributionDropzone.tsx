@@ -120,9 +120,9 @@ export default function ContributionDropzone() {
         token,
         blob: file,
         payload: {
-          // Fallback only (unchanged): a Strava archive's activities.csv / the
-          // server classifier is authoritative.
-          sport: sport ?? 'mtb',
+          // No sport for an archive: activities.csv / each file's own FIT/GPX
+          // sport decides server-side, and a member it can't classify is
+          // skipped. (A blanket 'mtb' here used to file runs/hikes under VTT.)
           consent: true,
           consent_version: CONTRIBUTION_CONSENT_VERSION,
           consent_text: t('strava.archive.consentLabel'),

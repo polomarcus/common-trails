@@ -27,6 +27,7 @@ from app.services.cloud_tasks import enqueue_heat_compute
 from app.services.gpx_archive import archive_bundle, archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
 from app.services.run_jobs import trigger_ingest_archives_job
+from app.services.strava_utils import resolve_sport_cascade
 
 router = APIRouter(tags=["imports"])
 log = logging.getLogger(__name__)
@@ -85,7 +86,9 @@ class ArchiveIntakeResult(BaseModel):
 class ArchiveInitRequest(BaseModel):
     """Body of ``POST /imports/strava-archive/init``. No file — the archive
     is PUT straight to the bucket via the returned signed URL."""
-    sport: str = "road"  # fallback only; activities.csv is authoritative
+    # Accepted for back-compat, NOT used: each member's sport comes from
+    # activities.csv or its own FIT/GPX, else the member is skipped.
+    sport: str | None = None
     consent: bool = False
     consent_version: str
     consent_text: str
@@ -135,7 +138,11 @@ async def import_files(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    sport: str = Form("road"),
+    # The user's EXPLICIT sport for a loose .gpx/.fit (the UI requires one).
+    # No default: a file whose own data can't tell its sport and that comes
+    # without one is skipped, never filed under a guessed layer. Ignored for
+    # a .zip (mixed sports — see the cascade below).
+    sport: str | None = Form(None),
     contribute_heatmap: bool = Form(False),
     consent_version: str | None = Form(None),
     consent_text: str | None = Form(None),
@@ -162,7 +169,7 @@ async def import_files(
     All fields optional — a bare upload (CLI, older clients) still works and
     simply records no consent (``consent_id=None`` in the response).
     """
-    if sport not in VALID_SPORTS:
+    if sport is not None and sport not in VALID_SPORTS:
         raise HTTPException(status_code=422, detail=f"Invalid sport: {sport}")
 
     # Record/resolve the consent audit row FIRST (mirrors the archive path:
@@ -206,6 +213,7 @@ async def import_files(
         raise HTTPException(status_code=413, detail="File too large (max 50 MB)")
 
     filename = (file.filename or "").lower()
+    is_zip = filename.endswith(".zip")
     parsed_list: list[dict] = []
     errors: list[str] = []
 
@@ -256,9 +264,6 @@ async def import_files(
         try:
             from app.services.fit_parser import parse_fit
             parsed = parse_fit(content)
-            # FIT parser infers sport — override with user selection if provided
-            if sport != "road" and parsed.get("sport") == "road":
-                parsed["sport"] = sport
             if _check_coord_cap(parsed, filename or "upload.fit"):
                 parsed_list.append(parsed)
         except ImportError:
@@ -311,31 +316,32 @@ async def import_files(
                 )
                 continue
 
-            # Sport cascade (most → least authoritative):
-            #   1. FIT — the parser writes the device's sport field
-            #      directly into parsed["sport"]
-            #   2. Strava activities.csv — when a ZIP archive contained
-            #      activities.csv, parse_zip_of_gpx stamped the
-            #      per-file sport mapped from the CSV's "Activity Type"
-            #      column. This is more reliable than the in-GPX hint
-            #      because Strava collapses sub-types to generic
-            #      "cycling" when generating the GPX.
-            #   3. GPX <trk><type> — Garmin Connect emits granular
-            #      values like mountain_biking, gravel_cycling that
-            #      classify_sport_from_gpx_type maps to our enum.
-            #   4. Form-supplied — the dropdown in the modal, used
-            #      only when none of the above resolved.
-            sport_from_fit = parsed.get("sport")
-            sport_from_csv = parsed.get("sport_from_csv")
-            sport_from_gpx = parsed.get("sport_from_gpx")
-            if sport_from_fit in VALID_SPORTS:
-                effective_sport = sport_from_fit
-            elif sport_from_csv in VALID_SPORTS:
-                effective_sport = sport_from_csv
-            elif sport_from_gpx in VALID_SPORTS:
-                effective_sport = sport_from_gpx
-            else:
-                effective_sport = sport
+            # Sport cascade — SSOT `strava_utils.resolve_sport_cascade`
+            # (most → least authoritative; a generic "road" is refined by a
+            # later gravel/mtb):
+            #   1. Strava activities.csv (ZIP only) — the type the user set
+            #      on Strava; the original FIT inside the export still says
+            #      the device's generic "cycling".
+            #   2. FIT sport + sub_sport (parsed["sport"]) / GPX
+            #      <trk><type> (parsed["sport_from_gpx"]).
+            #   3. The user's explicit choice — LOOSE files only. A ZIP
+            #      mixes sports: a blanket form sport would mislabel every
+            #      member its own file can't classify.
+            #   Nothing → SKIP (never a default layer).
+            effective_sport = resolve_sport_cascade(
+                parsed.get("sport_from_csv"),
+                parsed.get("sport"),
+                parsed.get("sport_from_gpx"),
+                None if is_zip else sport,
+            )
+            if effective_sport is None:
+                skipped += 1
+                errors.append(
+                    f"{parsed.get('source_file') or file.filename or '?'}: "
+                    "sport inconnu — choisissez le sport de cette trace "
+                    "(unknown sport: pick one)",
+                )
+                continue
 
             activity_data = {
                 "provider": "file",
@@ -469,7 +475,9 @@ async def import_files(
 async def import_strava_archive(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     file: UploadFile = File(...),
-    sport: str = Form("road"),
+    # Accepted for API back-compat, NOT used: an archive's members get their
+    # sport from activities.csv or their own file, else they are skipped.
+    sport: str | None = Form(None),
     consent: bool = Form(False),
     consent_version: str = Form(...),
     consent_text: str = Form(...),
@@ -495,7 +503,7 @@ async def import_strava_archive(
             status_code=422,
             detail="Consent is required to contribute your archive to the community heatmap.",
         )
-    if sport not in VALID_SPORTS:
+    if sport is not None and sport not in VALID_SPORTS:
         raise HTTPException(status_code=422, detail=f"Invalid sport: {sport}")
     if not consent_version.strip() or not consent_text.strip():
         raise HTTPException(status_code=422, detail="Missing consent version/text.")
@@ -529,7 +537,6 @@ async def import_strava_archive(
                 user_id=current_user.user_id,
                 content=content,
                 filename=filename,
-                fallback_sport=sport,
                 contribute_heatmap=True,
                 consent_id=consent_id,
                 source=archive_intake.ARCHIVE_PROVENANCE,
@@ -550,14 +557,17 @@ async def import_strava_archive(
     )
 
 
-def _validate_consent(consent: bool, consent_version: str, consent_text: str, sport: str) -> None:
-    """Shared consent + sport gate (reused by the direct + signed-URL flows)."""
+def _validate_consent(
+    consent: bool, consent_version: str, consent_text: str, sport: str | None,
+) -> None:
+    """Shared consent + sport gate (reused by the direct + signed-URL flows).
+    ``sport`` is optional (and unused downstream) for archives."""
     if not consent:
         raise HTTPException(
             status_code=422,
             detail="Consent is required to contribute your archive to the community heatmap.",
         )
-    if sport not in VALID_SPORTS:
+    if sport is not None and sport not in VALID_SPORTS:
         raise HTTPException(status_code=422, detail=f"Invalid sport: {sport}")
     if not consent_version.strip() or not consent_text.strip():
         raise HTTPException(status_code=422, detail="Missing consent version/text.")
@@ -778,7 +788,9 @@ async def init_strava_archive(
             source=archive_intake.ARCHIVE_PROVENANCE,
             storage_backend=backend,
             bucket_key=bucket_key,
-            fallback_sport=body.sport,
+            # Never a blanket sport for an archive (see _effective_sport in
+            # the drain): the column is NOT NULL, so store the no-hint marker.
+            fallback_sport=archive_intake.NO_SPORT_HINT,
             contribute_heatmap=True,
             status="awaiting_upload",
         )

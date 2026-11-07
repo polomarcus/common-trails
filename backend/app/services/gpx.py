@@ -102,7 +102,9 @@ def _smoothed_elevation_gain(elevations: list[float | None]) -> float:
 # `STRAVA_CSV_TYPE_TO_SPORT` map was deleted to remove the drift that
 # let a "Gravel paradise" Ride classify as road on this path while the
 # CLI classified it as gravel.
-from app.services.strava_utils import classify_sport as _classify_sport
+from app.services.strava_utils import _norm_type  # noqa: E402
+from app.services.strava_utils import classify_sport as _classify_sport  # noqa: E402
+from app.services.strava_utils import lookup_activity_type as _lookup_activity_type  # noqa: E402
 
 
 def classify_sport_from_strava_csv_type(
@@ -142,6 +144,35 @@ def _normalize_archive_path(path: str) -> str:
     return s
 
 
+# activities.csv header aliases, in `_norm_type` form. The English export
+# headers are "Filename" / "Activity Type" / "Activity Name"; a localized
+# (French) export or a spreadsheet round-trip can rename them. A header we
+# don't recognise → no CSV hint at all (never a guessed column).
+_CSV_FILENAME_HEADERS = frozenset({"filename", "nomdufichier", "nomfichier", "fichier"})
+_CSV_TYPE_HEADERS = frozenset({
+    "activitytype", "typedactivite", "typedelactivite", "typeactivite",
+})
+_CSV_NAME_HEADERS = frozenset({
+    "activityname", "nomdelactivite", "nomdactivite", "nomactivite",
+})
+
+
+def _resolve_csv_columns(fieldnames: list[str]) -> tuple[str | None, str | None, str | None]:
+    """Return the actual (filename, type, name) header strings of an
+    activities.csv, matched case/accent/punctuation-insensitively."""
+    found: dict[str, str] = {}
+    for header in fieldnames:
+        if header is None:
+            continue
+        key = _norm_type(header)
+        for role, aliases in (("file", _CSV_FILENAME_HEADERS),
+                              ("type", _CSV_TYPE_HEADERS),
+                              ("name", _CSV_NAME_HEADERS)):
+            if key in aliases and role not in found:
+                found[role] = header
+    return found.get("file"), found.get("type"), found.get("name")
+
+
 def parse_strava_activities_csv(csv_bytes: bytes) -> dict[str, str | None]:
     """Parse `activities.csv` from a Strava bulk-export ZIP.
 
@@ -178,14 +209,17 @@ def parse_strava_activities_csv(csv_bytes: bytes) -> dict[str, str | None]:
         # plain utf-8 transparently when no BOM is present.
         text = csv_bytes.decode("utf-8-sig", errors="replace")
         reader = _csv.DictReader(_io.StringIO(text))
+        col_file, col_type, col_name = _resolve_csv_columns(reader.fieldnames or [])
+        if col_file is None or col_type is None:
+            return out
         for row in reader:
-            filename = (row.get("Filename") or "").strip()
-            activity_type = (row.get("Activity Type") or "").strip()
+            filename = (row.get(col_file) or "").strip()
+            activity_type = (row.get(col_type) or "").strip()
             # The Activity Name is the real gravel/mtb signal: Strava
             # collapses nearly all cycling to "Ride" (→ road) so the
             # name keyword ("Gravel ...", "VTT ...") is what upgrades a
             # generic Ride to gravel/mtb. Pass it to the SSOT classifier.
-            activity_name = (row.get("Activity Name") or "").strip()
+            activity_name = ((row.get(col_name) if col_name else "") or "").strip()
             if not filename:
                 continue
             # Store every row regardless — out-of-scope rows store None
@@ -209,6 +243,16 @@ GPX_TRACK_TYPE_TO_SPORT: dict[str, str | None] = {
     "road cycling": "road",
     "cyclocross": "gravel",
     "bmx": "mtb",
+    # Garmin Connect activity-type keys (GPX export) + FIT sub_sport names.
+    "road_biking": "road",
+    "recumbent_cycling": "road",
+    "track_cycling": "road",
+    "e_bike_fitness": "road",  # Garmin's OUTDOOR e-bike sub-sport
+    "downhill_biking": "mtb",
+    "e_bike_mountain": "mtb",
+    "mixed_surface": "gravel",
+    "mtb": "mtb",
+    "gravel": "gravel",
     # ── Strava-export variants (PascalCase lower-cased + underscore). ─
     # Strava emits these as the GPX `<trk><type>` when re-exporting,
     # NOT just in the activities.csv. Without explicit entries here a
@@ -221,17 +265,30 @@ GPX_TRACK_TYPE_TO_SPORT: dict[str, str | None] = {
     "e_mountain_bike_ride": "mtb",
     "emountainbikeride": "mtb",
     # ── Garmin / Strava generic — too coarse, defer to caller ─────────
+    # Strava GPX exports collapse EVERY cycling variant (road, gravel,
+    # MTB, e-bike) to "cycling" — or to the numeric Strava type "1".
+    # These carry no road/gravel/mtb signal: the caller resolves them
+    # from activities.csv or the user's explicit choice, else SKIPS.
     "cycling": None,
     "ride": None,
+    "biking": None,
+    "bike": None,
+    "e_biking": None,
+    "1": None,
+    # ── Strava numeric type for Run ("9") ─────────────────────────────
+    "9": "running",
     # ── Running family ────────────────────────────────────────────────
     "running": "running",
     "trail_running": "running",
     "trail running": "running",
     "trail_run": "running",
     "track_running": "running",
+    "street_running": "running",
     "run": "running",
     # ── Hike / walk: no dedicated sport, map to nearest ───────────────
     "walking": "running",
+    "casual_walking": "running",
+    "speed_walking": "running",
     "hiking": "running",
     "hike": "running",
     "walk": "running",
@@ -340,6 +397,14 @@ GPX_TRACK_TYPE_SKIP: set[str] = {
     "skateboard",
 }
 
+# Separator/case/accent-insensitive views of the two tables above, keyed
+# by the SSOT normalizer — "Gravel Ride", "gravel_ride" and "GravelRide"
+# (Strava PascalCase in a GPX <type>) must classify identically.
+_GPX_TYPE_NORM: dict[str, str | None] = {
+    _norm_type(k): v for k, v in GPX_TRACK_TYPE_TO_SPORT.items()
+}
+_GPX_SKIP_NORM: frozenset[str] = frozenset(_norm_type(k) for k in GPX_TRACK_TYPE_SKIP)
+
 
 def classify_sport_from_gpx_type(track_type: str | None) -> str | None:
     """Map a GPX `<trk><type>` string to our sport enum, or None if the
@@ -359,9 +424,7 @@ def classify_sport_from_gpx_type(track_type: str | None) -> str | None:
     on a yoga GPX pollutes the heatmap when the user picked MTB on
     the form.
     """
-    if not track_type:
-        return None
-    return GPX_TRACK_TYPE_TO_SPORT.get(track_type.lower().strip())
+    return gpx_track_type_skip_or_sport(track_type)[0]
 
 
 def gpx_track_type_skip_or_sport(track_type: str | None) -> tuple[str | None, bool]:
@@ -377,7 +440,14 @@ def gpx_track_type_skip_or_sport(track_type: str | None) -> tuple[str | None, bo
         unknown type, or empty). Caller falls through to the next
         cascade layer (FIT field, activities.csv hint, form sport).
 
-    Case-insensitive, whitespace-stripped match. Never raises.
+    Matching is separator/case/accent-insensitive (``_norm_type``, the
+    SSOT normalizer): "gravel_ride", "GravelRide" and "Gravel Ride" are
+    the same key. Lookup order: the skip set, then the GPX/Garmin map
+    (where generic "cycling"/"ride"/"1" deliberately mean "no
+    information"), then the Strava SSOT catalog (`lookup_activity_type`) so a
+    GPX whose ``<type>`` is a Strava type name ("MountainBikeRide",
+    "TrailRun", "Yoga"…) classifies exactly like the API/CSV paths.
+    Never raises.
 
     Uses the same skip-beats-pollute bias as the Strava-CSV path
     (`classify_strava_sport_or_skip` in `strava_utils.py`): if a hint
@@ -386,10 +456,17 @@ def gpx_track_type_skip_or_sport(track_type: str | None) -> tuple[str | None, bo
     """
     if not track_type:
         return None, False
-    key = track_type.lower().strip()
-    if key in GPX_TRACK_TYPE_SKIP:
+    key = _norm_type(track_type)
+    if not key:
+        return None, False
+    if key in _GPX_SKIP_NORM:
         return None, True
-    return GPX_TRACK_TYPE_TO_SPORT.get(key), False
+    if key in _GPX_TYPE_NORM:
+        return _GPX_TYPE_NORM[key], False
+    sport, known = _lookup_activity_type(track_type)
+    if known:
+        return sport, sport is None
+    return None, False
 
 
 def _coord_is_valid(lat: float, lon: float, ele: float | None) -> bool:

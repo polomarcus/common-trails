@@ -364,6 +364,11 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
 _NO_CSV = object()
 _OVERSIZE = object()
 
+# Stored in the NOT NULL ``sport`` / ``fallback_sport`` columns when there is
+# no sport hint. Deliberately NOT a valid sport: the drain's cascade ignores
+# it, so the member's sport comes from its own file or it is skipped.
+NO_SPORT_HINT = "unknown"
+
 
 # NOTE: iter_zip_members above yields Garmin "Export All" nested members
 # (``<inner.zip>!<member>``) WITH their already-read inner bytes. The drain now
@@ -378,7 +383,6 @@ def enqueue_archive(
     user_id: str,
     content: bytes,
     filename: str,
-    fallback_sport: str,
     contribute_heatmap: bool,
     consent_id: str,
     source: str = ARCHIVE_PROVENANCE,
@@ -397,8 +401,10 @@ def enqueue_archive(
             # Skip beats pollute — never store or ingest it.
             result.skipped += 1
             continue
-        # csv_sport is either a sport string or the _NO_CSV sentinel.
-        resolved_sport = csv_sport if isinstance(csv_sport, str) else fallback_sport
+        # csv_sport is either a sport string or the _NO_CSV sentinel. No CSV
+        # row → NO_SPORT_HINT (never a form-supplied sport): the drain
+        # then resolves the sport from the file itself, or skips the member.
+        resolved_sport = csv_sport if isinstance(csv_sport, str) else NO_SPORT_HINT
         member_id = str(uuid.uuid4())
         try:
             backend, storage_key = store_member(user_id, member_id, name, raw)

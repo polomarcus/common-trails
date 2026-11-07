@@ -28,7 +28,10 @@
 import { getCurrentUserId } from './auth';
 
 export interface ArchiveInitPayload {
-  sport: string;
+  /** Ignored by the backend (kept optional for API back-compat): an archive's
+   *  members get their sport from activities.csv or their own FIT/GPX, else
+   *  they are skipped — never a blanket sport. */
+  sport?: string;
   consent: boolean;
   consent_version: string;
   consent_text: string;
