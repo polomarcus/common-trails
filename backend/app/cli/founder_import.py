@@ -61,11 +61,11 @@ from app.services import archive_intake
 
 log = logging.getLogger("founder_import")
 
-# Sport used when a member has neither a FIT device sport, an in-GPX
-# ``<trk><type>``, nor an activities.csv hint. Mirrors the archive worker's
-# ``fallback_sport`` default; ``_effective_sport`` inside ``_ingest_member_bytes``
-# applies the same final "road" floor, so this is belt-and-braces.
-_FALLBACK_SPORT = "road"
+# No fallback sport: a member with neither an activities.csv hint, a usable
+# FIT sport/sub_sport nor an in-GPX ``<trk><type>`` is SKIPPED by
+# ``_effective_sport`` inside ``_ingest_member_bytes`` — same rule as the
+# archive worker (skip beats pollute; never a default layer).
+_FALLBACK_SPORT = None
 
 
 def _backend() -> str:

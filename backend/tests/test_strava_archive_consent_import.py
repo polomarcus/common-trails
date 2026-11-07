@@ -623,8 +623,9 @@ class TestWholeArchiveWorkerStreamsAndIngests:
             assert len(acts) == 2
             # #453 provenance separation: community-eligible source stamped.
             assert {a.source for a in acts} == {"manual_upload"}
-            # GPX member → road (CSV), FIT member → gravel (FIT device sport).
-            assert sorted(a.sport for a in acts) == ["gravel", "road"]
+            # GPX member → road (CSV "Ride"); FIT member → mtb: its CSV row
+            # (MountainBikeRide) outranks the device sport (stub: gravel).
+            assert sorted(a.sport for a in acts) == ["mtb", "road"]
             arch = db.get(PendingArchive, body["archive_id"])
             assert arch.status == "done"
             assert arch.imported == 2
@@ -1022,3 +1023,87 @@ class TestDrainPingsPmtilesRebuild:
 
         assert summary["imported"] == 2, summary
         ping.assert_not_called()
+
+
+# ── Explicit sport pick for a user-built zip (PR #42 review) ─────────────────
+#
+# A zip the user assembled (untyped GPX, no activities.csv) carries no sport
+# of its own. The sport the user EXPLICITLY picked travels in /init and is the
+# drain's LAST resort; no pick → such members are skipped; activities.csv and
+# a file's own sport always win over the pick. REAL init → PUT → complete →
+# whole-archive drain.
+
+def _drain_archive(client, auth_headers, zip_bytes: bytes, sport: str | None):
+    from app.jobs.ingest_pending_archives import drain_pending_archives
+
+    payload = {
+        "consent": True,
+        "consent_version": "strava-archive-2026-07-v1",
+        "consent_text": "Je consens à contribuer mes traces (ODbL).",
+        "locale": "fr",
+        "filename": "export.zip",
+    }
+    if sport is not None:
+        payload["sport"] = sport
+    body = client.post("/imports/strava-archive/init", headers=auth_headers, json=payload).json()
+    client.put(body["upload_url"], headers=auth_headers, content=zip_bytes)
+    client.post(
+        "/imports/strava-archive/complete", headers=auth_headers,
+        json={"archive_id": body["archive_id"], "key": body["bucket_key"]},
+    )
+    return drain_pending_archives(limit=5, pace_seconds=0.0, skip_heat_computation=True)
+
+
+def _zip(members: dict[str, str]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, content in members.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def _sports(uid: str) -> list[str]:
+    from app.db.models import Activity
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        return sorted(a.sport for a in db.query(Activity).filter(Activity.user_id == uid))
+    finally:
+        db.close()
+
+
+class TestExplicitSportPickForUserZip:
+    # `_gpx` builds a gpxpy track WITHOUT <type>: no sport of its own.
+
+    def test_user_zip_of_untyped_gpx_takes_the_picked_sport(self, client, auth_headers):
+        uid = _user_id(client, auth_headers)
+        zb = _zip({"a.gpx": _gpx("A", 44.30, 3.60), "b.gpx": _gpx("B", 44.40, 3.70)})
+        summary = _drain_archive(client, auth_headers, zb, sport="gravel")
+        assert summary["imported"] == 2, summary
+        assert _sports(uid) == ["gravel", "gravel"]
+
+    def test_no_pick_and_untyped_gpx_is_skipped(self, client, auth_headers):
+        uid = _user_id(client, auth_headers)
+        zb = _zip({"a.gpx": _gpx("A", 44.50, 3.60)})
+        summary = _drain_archive(client, auth_headers, zb, sport=None)
+        assert summary["imported"] == 0 and summary["skipped"] == 1, summary
+        assert _sports(uid) == []
+
+    def test_activities_csv_beats_the_pick_and_the_pick_never_refines_a_ride(
+        self, client, auth_headers,
+    ):
+        uid = _user_id(client, auth_headers)
+        csv = (
+            "Activity ID,Activity Date,Activity Name,Activity Type,Filename\n"
+            "1,2024-01-01,Footing,Run,activities/1.gpx\n"
+            "2,2024-01-02,Sortie,Ride,activities/2.gpx\n"
+        )
+        zb = _zip({
+            "activities.csv": csv,
+            "activities/1.gpx": _gpx("Footing", 44.60, 3.60),
+            "activities/2.gpx": _gpx("Sortie", 44.70, 3.70),
+            "activities/3.gpx": _gpx("Hors CSV", 44.80, 3.80),  # no CSV row → the pick
+        })
+        summary = _drain_archive(client, auth_headers, zb, sport="mtb")
+        assert summary["imported"] == 3, summary
+        assert _sports(uid) == ["mtb", "road", "running"]

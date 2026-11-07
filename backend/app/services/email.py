@@ -155,6 +155,7 @@ def render_archive_done_email(
     failed: int,
     locale: str = "fr",
     contribute_heatmap: bool = True,
+    skipped_no_sport: int = 0,
 ) -> tuple[str, str]:
     """Return ``(subject, html)`` for the "your archive finished draining" email.
 
@@ -175,9 +176,14 @@ def render_archive_done_email(
     Provider-neutral wording ("Votre archive", never "archive Strava"): the
     drain does not record which platform produced the .zip (pending_archives
     has no provider column; Garmin/Komoot/… exports go through the same path).
-    The skip count is a single total — the drain does not split it by reason.
+    ``skipped`` is the total; ``skipped_no_sport`` (members whose sport could
+    not be identified — no activities.csv row, no usable FIT/GPX sport, no
+    sport picked) is part of it but gets its OWN actionable line instead of
+    being passed off as duplicates / out-of-scope.
     """
     map_url = "https://chemins-communs.fr/map"
+    no_sport = max(0, min(skipped_no_sport, skipped))
+    other_skipped = skipped - no_sport
     # The community heatmap is also published as a raster XYZ tile pyramid on
     # public GCS, so it can be added as a custom OVERLAY ("calque") in gpx.studio
     # / VisuGPX via one URL. Promote it in the done email — closes the loop
@@ -199,8 +205,13 @@ def render_archive_done_email(
                 "(virtual rides, other sports…)."
             )
         lines = [f"<strong>{imported}</strong> imported"]
-        if skipped:
-            lines.append(f"<strong>{skipped}</strong> skipped (out of scope / duplicates)")
+        if other_skipped:
+            lines.append(f"<strong>{other_skipped}</strong> skipped (out of scope / duplicates)")
+        if no_sport:
+            lines.append(
+                f"<strong>{no_sport}</strong> with no identifiable sport — "
+                "pick a sport and re-import them"
+            )
         if failed:
             lines.append(f"<strong>{failed}</strong> failed")
         button = "See the map"
@@ -226,8 +237,16 @@ def render_archive_done_email(
                 "périmètre (sorties virtuelles, autres sports…)."
             )
         lines = [f"<strong>{imported}</strong> importée{'s' if imported > 1 else ''}"]
-        if skipped:
-            lines.append(f"<strong>{skipped}</strong> ignorée{'s' if skipped > 1 else ''} (hors-scope / doublons)")
+        if other_skipped:
+            lines.append(
+                f"<strong>{other_skipped}</strong> ignorée{'s' if other_skipped > 1 else ''} "
+                "(hors-scope / doublons)"
+            )
+        if no_sport:
+            lines.append(
+                f"<strong>{no_sport}</strong> sans sport identifiable — "
+                "choisissez un sport et réimportez-les"
+            )
         if failed:
             lines.append(f"<strong>{failed}</strong> en erreur")
         button = "Voir la carte"

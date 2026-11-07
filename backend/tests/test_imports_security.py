@@ -36,7 +36,7 @@ from app.services.gpx import (
 
 VALID_GPX = b"""<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk><name>tiny</name><trkseg>
+  <trk><name>tiny</name><type>road_biking</type><trkseg>
     <trkpt lat="43.61" lon="3.87"><ele>100</ele></trkpt>
     <trkpt lat="43.62" lon="3.88"><ele>110</ele></trkpt>
   </trkseg></trk>

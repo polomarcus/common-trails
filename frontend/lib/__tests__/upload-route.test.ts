@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { chooseUploadPath, isZipName } from '../upload-route';
+import { chooseUploadPath, countUndeclaredSport, gpxDeclaresSport, isZipName } from '../upload-route';
 
 describe('isZipName', () => {
   it('matches .zip case-insensitively', () => {
@@ -42,5 +42,31 @@ describe('chooseUploadPath', () => {
   it('accepts an ArrayLike (FileList-shaped) input', () => {
     const arrayLike = { 0: { name: 'ride.gpx' }, length: 1 } as ArrayLike<{ name: string }>;
     expect(chooseUploadPath(arrayLike)).toEqual({ kind: 'files', files: [{ name: 'ride.gpx' }] });
+  });
+});
+
+describe('gpxDeclaresSport (pre-send recap wording only)', () => {
+  it('a specific <type> declares a sport', () => {
+    for (const t of ['mountain_biking', 'GravelRide', 'running', 'Hike', '9']) {
+      expect(gpxDeclaresSport(`<gpx><trk><type>${t}</type></trk></gpx>`)).toBe(true);
+    }
+  });
+  it('missing, empty or generic <type> does not', () => {
+    expect(gpxDeclaresSport('<gpx><trk><name>x</name></trk></gpx>')).toBe(false);
+    for (const t of ['', 'cycling', 'Ride', 'biking', '1', 'E-Biking']) {
+      expect(gpxDeclaresSport(`<gpx><trk><type>${t}</type></trk></gpx>`)).toBe(false);
+    }
+  });
+});
+
+describe('countUndeclaredSport', () => {
+  it('counts GPX without a usable sport; FIT carries its device sport', async () => {
+    const files = [
+      new File(['<gpx><trk><type>cycling</type></trk></gpx>'], 'a.gpx'),
+      new File(['<gpx><trk></trk></gpx>'], 'b.GPX'),
+      new File(['<gpx><trk><type>trail_running</type></trk></gpx>'], 'c.gpx'),
+      new File([new Uint8Array([14, 16])], 'd.fit'),
+    ];
+    expect(await countUndeclaredSport(files)).toBe(2);
   });
 });

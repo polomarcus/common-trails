@@ -46,7 +46,7 @@ needs_db = pytest.mark.skipif(not _HAS_DB, reason="needs the PostGIS DB")
 
 _GOOD_GPX = (
     '<?xml version="1.0"?><gpx version="1.1" creator="test"><trk><name>ride'
-    "</name><trkseg>"
+    "</name><type>road_biking</type><trkseg>"
     + "".join(
         f'<trkpt lat="{43.6 + i * 0.001}" lon="{3.87 + i * 0.001}">'
         f"<ele>{100 + i}</ele></trkpt>"

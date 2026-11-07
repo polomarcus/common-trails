@@ -43,6 +43,16 @@ async function drop(target: Element, files: File[]) {
 
 const q = (c: HTMLElement, id: string) => c.querySelector(`[data-testid="${id}"]`);
 
+/** A loose GPX whose content is real text (the recap reads its `<type>`). */
+function gpxFile(name: string, type: string | null): File {
+  const typeXml = type === null ? '' : `<type>${type}</type>`;
+  return new File([`<?xml version="1.0"?><gpx><trk><name>x</name>${typeXml}<trkseg/></trk></gpx>`], name);
+}
+
+async function click(c: HTMLElement, id: string) {
+  await act(async () => { (q(c, id) as HTMLButtonElement).click(); });
+}
+
 describe('ContributionDropzone', () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
@@ -85,6 +95,9 @@ describe('ContributionDropzone', () => {
     await act(async () => { (q(container, 'sport-chip-road') as HTMLButtonElement).click(); });
     expect((q(container, 'files-input') as HTMLInputElement).disabled).toBe(false);
     await drop(q(container, 'files-block')!, [fakeFile('ride.gpx')]);
+    // untyped GPX → pre-send recap first, nothing sent yet
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await click(container, 'upload-recap-confirm');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const body = fetchSpy.mock.calls[0][1].body as FormData;
     expect(body.get('sport')).toBe('road');
@@ -93,6 +106,7 @@ describe('ContributionDropzone', () => {
   it('reports ignored files (unsupported formats) instead of dropping them silently', async () => {
     await act(async () => { (q(container, 'sport-chip-gravel') as HTMLButtonElement).click(); });
     await drop(q(container, 'files-block')!, [fakeFile('ride.gpx'), fakeFile('notes.txt')]);
+    await click(container, 'upload-recap-confirm');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const note = q(container, 'upload-ignored-files')!.textContent!;
     expect(note).toContain('1 fichier');
@@ -114,6 +128,7 @@ describe('ContributionDropzone', () => {
   it('maps a server failure to a translated message (no raw English)', async () => {
     fetchSpy.mockResolvedValue({ ok: false, status: 500, json: async () => ({ detail: 'init failed boom' }) });
     await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    await click(container, 'upload-recap-confirm');
     const err = q(container, 'hero-upload-error')!.textContent!;
     expect(err).not.toContain('boom');
     expect(err).toContain('serveur');
@@ -139,9 +154,25 @@ describe('ContributionDropzone', () => {
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ archive_id: 'a1', status: 'uploaded', enqueue: 'ok' }) });
     expect(isArchivePending()).toBe(false);
     await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    await click(container, 'upload-recap-confirm');
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(q(container, 'archive-see-map')).not.toBeNull();
     expect(isArchivePending()).toBe(true);
+  });
+
+  it('an archive init carries a sport ONLY when the user explicitly picked one', async () => {
+    fetchSpy.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    // No chip: the old client silently sent sport='mtb' for the whole archive.
+    await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    await click(container, 'upload-recap-confirm');
+    // Explicit chip → sent as the server-side last resort.
+    await click(container, 'sport-chip-gravel');
+    await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    await click(container, 'upload-recap-confirm');
+    const inits = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/imports/strava-archive/init'));
+    expect(inits.length).toBe(2);
+    expect(JSON.parse(String(inits[0][1].body))).not.toHaveProperty('sport');
+    expect(JSON.parse(String(inits[1][1].body)).sport).toBe('gravel');
   });
 
   it('warns on beforeunload only while an upload is in flight', async () => {
@@ -155,11 +186,52 @@ describe('ContributionDropzone', () => {
     let release: (v: unknown) => void = () => {};
     fetchSpy.mockReturnValue(new Promise((r) => { release = r; }));
     await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    await click(container, 'upload-recap-confirm');
     expect(unload()).toBe(true); // init request pending → upload in flight
 
     await act(async () => {
       release({ ok: false, status: 500, json: async () => ({}) });
     });
     expect(unload()).toBe(false); // listener removed once the upload ended
+  });
+
+  // ── Pre-send sport recap ────────────────────────────────────────────────
+  it('recaps how many loose files lack a sport, live with the chip, before sending', async () => {
+    await click(container, 'sport-chip-road');
+    await drop(q(container, 'files-block')!, [
+      gpxFile('a.gpx', null), gpxFile('b.gpx', 'cycling'), gpxFile('c.gpx', 'mountain_biking'),
+    ]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(q(container, 'upload-recap-text')!.textContent)
+      .toBe('2 fichier(s) ne précisent pas leur sport : ils seront classés Route.');
+    // change the chip → the recap follows, and the upload uses the new sport
+    await click(container, 'sport-chip-gravel');
+    expect(q(container, 'upload-recap-text')!.textContent).toContain('ils seront classés Gravel');
+    await click(container, 'upload-recap-confirm');
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect((fetchSpy.mock.calls[0][1].body as FormData).get('sport')).toBe('gravel');
+    expect(q(container, 'upload-recap')).toBeNull();
+  });
+
+  it('files that all declare their sport upload at once, without a recap', async () => {
+    await click(container, 'sport-chip-road');
+    await drop(q(container, 'files-block')!, [gpxFile('a.gpx', 'GravelRide'), fakeFile('b.fit')]);
+    expect(q(container, 'upload-recap')).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('an archive is recapped with the zip wording; cancel sends nothing', async () => {
+    await drop(q(container, 'archive-block')!, [fakeFile('export.zip', 10_000)]);
+    expect(q(container, 'upload-recap-text')!.textContent)
+      .toBe('Les fichiers sans sport de cette archive seront ignorés.');
+    await click(container, 'sport-chip-mtb');
+    expect(q(container, 'upload-recap-text')!.textContent)
+      .toBe('Les fichiers sans sport de cette archive seront classés VTT.');
+    // clicking the chosen chip again picks none
+    await click(container, 'sport-chip-mtb');
+    expect(q(container, 'upload-recap-text')!.textContent).toContain('seront ignorés');
+    await click(container, 'upload-recap-cancel');
+    expect(q(container, 'upload-recap')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

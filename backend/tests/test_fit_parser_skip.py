@@ -86,15 +86,24 @@ def _fit_crc(data: bytes, crc: int = 0) -> int:
 
 
 # FIT enum ids (FIT SDK profile, as decoded by fitparse 1.2.0).
-SPORT = {"cycling": 2, "running": 1, "training": 10}
+SPORT = {"generic": 0, "cycling": 2, "running": 1, "training": 10,
+         "walking": 11, "hiking": 17, "e_biking": 21, "mountaineering": 16}
 SUB_SPORT = {"generic": 0, "road": 7, "spin": 5, "indoor_cycling": 6,
-             "virtual_activity": 58, "e_bike_fitness": 28, "treadmill": 1}
+             "virtual_activity": 58, "e_bike_fitness": 28, "treadmill": 1,
+             "trail": 3, "mountain": 8, "downhill": 9, "cyclocross": 11,
+             "hand_cycling": 12, "gravel_cycling": 46, "e_bike_mountain": 47,
+             "commuting": 48, "mixed_surface": 49}
 MANUFACTURER = {"garmin": 1, "zwift": 260, "development": 255}
 
 
-def _make_fit(sport: str, sub_sport: str, manufacturer: str = "garmin",
+def _make_fit(sport: str | int, sub_sport: str | int, manufacturer: str = "garmin",
               n_points: int = 20) -> bytes:
-    """A minimal valid .FIT activity: file_id + n GPS records + one session."""
+    """A minimal valid .FIT activity: file_id + n GPS records + one session.
+    ``sport`` / ``sub_sport`` are profile names or raw enum ids (a raw id
+    unknown to fitparse's profile reaches the parser as a bare int)."""
+    sport_id = sport if isinstance(sport, int) else SPORT[sport]
+    sub_id = sub_sport if isinstance(sub_sport, int) else SUB_SPORT[sub_sport]
+
     def definition(local: int, global_num: int, fields: list) -> bytes:
         out = struct.pack("<BBBHB", 0x40 | local, 0, 0, global_num, len(fields))
         for num, size, base in fields:
@@ -114,7 +123,7 @@ def _make_fit(sport: str, sub_sport: str, manufacturer: str = "garmin",
                             1_000_000_000 + i)
     # session (global 18): sport, sub_sport, total_distance (cm)
     body += definition(2, 18, [(5, 1, 0x00), (6, 1, 0x00), (9, 4, 0x86)])
-    body += struct.pack("<BBBI", 2, SPORT[sport], SUB_SPORT[sub_sport], 200_000)
+    body += struct.pack("<BBBI", 2, sport_id, sub_id, 200_000)
 
     header = struct.pack("<BBHI4s", 14, 0x10, 2093, len(body), b".FIT")
     header += struct.pack("<H", _fit_crc(header))

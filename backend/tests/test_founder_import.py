@@ -186,13 +186,17 @@ class TestFounderImport:
             assert len(acts) == 3
             # #453 provenance separation: community-eligible source stamped.
             assert {a.source for a in acts} == {"manual_upload"}
-            # GPX members → CSV sports; FIT member → gravel (device sport stub).
-            assert sorted(a.sport for a in acts) == ["gravel", "mtb", "road"]
+            # activities.csv is authoritative over the file's own sport: the
+            # FIT member's CSV row says MountainBikeRide → mtb, even though
+            # the (stubbed) device sport says gravel.
+            assert sorted(a.sport for a in acts) == ["mtb", "mtb", "road"]
         finally:
             db.close()
 
     def test_fit_member_handled(self):
-        """The .fit.gz member lands as a real Activity (gravel, manual_upload)."""
+        """The .fit.gz member lands as a real Activity (manual_upload), with
+        its activities.csv sport (MountainBikeRide → mtb) winning over the
+        device sport (stub: gravel)."""
         from app.cli.founder_import import import_founder_archive
         from app.db.models import Activity
         from app.db.session import SessionLocal
@@ -206,11 +210,11 @@ class TestFounderImport:
         )
         db = SessionLocal()
         try:
-            gravel = db.query(Activity).filter(
-                Activity.user_id == uid, Activity.sport == "gravel").all()
-            assert len(gravel) == 1
-            assert gravel[0].source == "manual_upload"
-            assert gravel[0].name == "Garmin Activity"
+            fit_rows = db.query(Activity).filter(
+                Activity.user_id == uid, Activity.name == "Garmin Activity").all()
+            assert len(fit_rows) == 1
+            assert fit_rows[0].source == "manual_upload"
+            assert fit_rows[0].sport == "mtb"
         finally:
             db.close()
 

@@ -37,12 +37,12 @@ import time
 
 from sqlalchemy import text as sa_text
 
-from app.config import VALID_SPORTS
 from app.services import archive_intake
 from app.services import email as email_service
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
 from app.services.run_jobs import trigger_build_pmtiles_job
+from app.services.strava_utils import resolve_sport_cascade
 
 log = logging.getLogger(__name__)
 
@@ -446,21 +446,28 @@ def _parse_member(raw: bytes, filename: str) -> dict:
     return gpx_service.parse_gpx(raw)
 
 
-def _effective_sport(parsed: dict, pending_sport: str | None) -> str:
-    """Sport cascade for the archive path: FIT device sport → in-GPX
-    ``<trk><type>`` → the queue row's pre-resolved sport (which already
-    carries the authoritative activities.csv value when the export had one,
-    else the form fallback). Mirrors the imports.py cascade ranking.
+def _effective_sport(
+    parsed: dict, csv_sport: str | None, fallback_sport: str | None = None,
+) -> str | None:
+    """Sport cascade for the archive path (SSOT
+    ``strava_utils.resolve_sport_cascade``): activities.csv → FIT
+    sport/sub_sport → in-GPX ``<trk><type>`` → the user's explicit pick.
+
+    The CSV ranks first: it is the type the user set (and possibly
+    corrected) on Strava, while the original FIT inside a Strava export
+    still says the device's generic "cycling". A generic CSV "Ride"
+    (road) is still refined by a specific FIT/GPX gravel/mtb.
+
+    ``fallback_sport`` (the sport the user EXPLICITLY picked for the zip —
+    the UI sends none otherwise; or a legacy per-member queue row's stored
+    sport) is a PURE last resort: used only when no CSV row and no file
+    sport resolved, and it never refines a generic road (picking "VTT" for a
+    Strava export must not turn every "Ride" into VTT). Nothing → None →
+    the caller skips the member; there is no default.
     """
-    fit_sport = parsed.get("sport")
-    if fit_sport in VALID_SPORTS:
-        return fit_sport
-    gpx_sport = parsed.get("sport_from_gpx")
-    if gpx_sport in VALID_SPORTS:
-        return gpx_sport
-    if pending_sport in VALID_SPORTS:
-        return pending_sport
-    return "road"
+    return resolve_sport_cascade(
+        csv_sport, parsed.get("sport"), parsed.get("sport_from_gpx"),
+    ) or resolve_sport_cascade(fallback_sport)
 
 
 def _claim_batch(db, limit: int) -> list[dict]:
@@ -523,6 +530,7 @@ def _ingest_member_bytes(
     source: str | None,
     skip_heat_computation: bool,
     collect_touched_ways: set[int] | None = None,
+    fallback_sport: str | None = None,
 ) -> tuple[str, str | None, str | None]:
     """Parse + ingest ONE archive member. Shared by both drains (per-member
     queue AND the whole-archive streaming drain) so provenance stamping +
@@ -551,11 +559,18 @@ def _ingest_member_bytes(
     if not parsed.get("geometry_geojson"):
         return "skipped", None, "no_geometry"
 
+    # Unknown / ambiguous sport (no CSV row, FIT without a usable
+    # sport/sub_sport, GPX typed only "cycling" or untyped) → SKIP. Never a
+    # default layer: skip beats pollute.
+    sport = _effective_sport(parsed, resolved_sport, fallback_sport)
+    if sport is None:
+        return "skipped", None, "sport_unknown"
+
     activity_data = {
         "provider": "file",
         "provider_activity_id": None,
         "source": source or archive_intake.ARCHIVE_PROVENANCE,
-        "sport": _effective_sport(parsed, resolved_sport),
+        "sport": sport,
         "name": parsed.get("name"),
         "geometry_geojson": parsed.get("geometry_geojson"),
         "distance_m": parsed.get("distance_m"),
@@ -631,11 +646,15 @@ def drain_pending(
         _t0 = time.monotonic()
         try:
             raw = archive_intake.load_member(row["storage_backend"], row["storage_key"])
+            # CSV sport ranks FIRST, the user's pick ("pick:" prefix) LAST —
+            # see archive_intake.split_queued_sport.
+            queued_csv, queued_pick = archive_intake.split_queued_sport(row["sport"])
             outcome, activity_id, error = _ingest_member_bytes(
                 user_id=row["user_id"],
                 filename=row["original_filename"] or "member.gpx",
                 raw=raw,
-                resolved_sport=row["sport"],
+                resolved_sport=queued_csv,
+                fallback_sport=queued_pick,
                 contribute_heatmap=bool(row["contribute_heatmap"]),
                 source=row["source"],
                 skip_heat_computation=skip_heat_computation,
@@ -858,6 +877,7 @@ def _notify_archive_terminal(
             subject, html = email_service.render_archive_done_email(
                 imported=counts.get("imported", 0),
                 skipped=counts.get("skipped", 0),
+                skipped_no_sport=counts.get("skipped_no_sport", 0),
                 failed=counts.get("failed", 0),
                 locale=locale,
                 contribute_heatmap=contribute_heatmap,
@@ -976,9 +996,11 @@ def drain_pending_archives(
                         # activities.csv marked this out-of-scope (yoga/virtual/…).
                         counts["skipped"] += 1
                         continue
-                    resolved_sport = (
-                        csv_sport if isinstance(csv_sport, str) else arch["fallback_sport"]
-                    )
+                    # activities.csv sport, or None (no CSV row). The archive's
+                    # ``fallback_sport`` (the user's EXPLICIT pick, else the
+                    # NO_SPORT_HINT marker) is passed as the LAST resort only —
+                    # see _effective_sport. Unknown → the member is skipped.
+                    resolved_sport = csv_sport if isinstance(csv_sport, str) else None
                     if not first:
                         pace = _next_pace(pace_mode, pace_value, last_work_s, pace_cap)
                         if pace > 0:
@@ -1002,12 +1024,18 @@ def drain_pending_archives(
                             filename=name,
                             raw=raw,
                             resolved_sport=resolved_sport,
+                            fallback_sport=arch["fallback_sport"],
                             contribute_heatmap=bool(arch["contribute_heatmap"]),
                             source=arch["source"],
                             skip_heat_computation=skip_heat_computation,
                             collect_touched_ways=touched_ways,
                         )
                         counts[outcome] += 1
+                        if _err == "sport_unknown":
+                            # Own line in the done email ("no identifiable
+                            # sport — pick one and re-import"), not lumped
+                            # with duplicates / out-of-scope.
+                            counts["skipped_no_sport"] = counts.get("skipped_no_sport", 0) + 1
                     except Exception as exc:  # noqa: BLE001 — one bad member ≠ fail the archive
                         counts["failed"] += 1
                         sentry_sdk.capture_exception(exc)

@@ -28,8 +28,10 @@ from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
 from app.services.cloud_tasks import enqueue_heat_compute
+from app.services.gpx import _sanitize_track_type
 from app.services.gpx_archive import archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
+from app.services.strava_utils import resolve_sport_cascade
 
 router = APIRouter(tags=["gpx"])
 log = logging.getLogger(__name__)
@@ -69,7 +71,9 @@ async def gpx_upload(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    sport: str = Form("road"),
+    # The user's explicit sport. No default: a GPX whose <trk><type> can't
+    # tell and that comes without one is refused (422 SPORT_REQUIRED).
+    sport: str | None = Form(None),
     contribute_heatmap: bool = Form(True),
     consent_version: str | None = Form(None),
     consent_text: str | None = Form(None),
@@ -87,7 +91,7 @@ async def gpx_upload(
     ``contribute_heatmap=true`` upload with NO consent is ingested as PERSONAL
     (never published) — closing the community-write-without-consent hole.
     """
-    if sport not in VALID_SPORTS:
+    if sport is not None and sport not in VALID_SPORTS:
         raise HTTPException(status_code=422, detail=f"Invalid sport: {sport}")
 
     # Resolve/record consent (SSOT) → community publication requires it.
@@ -165,13 +169,22 @@ async def gpx_upload(
             },
         )
 
-    # Sport resolution cascade: the GPX `<trk><type>` overrides the
-    # form-supplied `sport` when it's granular enough to map (Garmin
-    # Connect: mountain_biking → mtb, gravel_cycling → gravel, …). When
-    # it's the generic `cycling` (Strava export) or absent, we keep the
-    # form value. See classify_sport_from_gpx_type for the mapping.
-    sport_from_gpx = parsed.get("sport_from_gpx")
-    effective_sport = sport_from_gpx if sport_from_gpx in VALID_SPORTS else sport
+    # Sport resolution cascade (SSOT `strava_utils.resolve_sport_cascade`):
+    # the GPX `<trk><type>` wins when it's granular enough to map (Garmin
+    # Connect: mountain_biking → mtb, gravel_cycling → gravel, …), except
+    # that a generic road is refined by the user's gravel/mtb. Generic
+    # `cycling` (Strava export) or absent → the user's explicit choice.
+    # Nothing at all → 422: never a default layer.
+    effective_sport = resolve_sport_cascade(parsed.get("sport_from_gpx"), sport)
+    if effective_sport is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "SPORT_REQUIRED",
+                "message": "Sport inconnu : choisissez le sport de cette trace.",
+                "track_type": _sanitize_track_type(parsed.get("track_type")),
+            },
+        )
 
     activity_data = {
         "provider": "file",
