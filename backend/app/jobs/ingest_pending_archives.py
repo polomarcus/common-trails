@@ -646,15 +646,15 @@ def drain_pending(
         _t0 = time.monotonic()
         try:
             raw = archive_intake.load_member(row["storage_backend"], row["storage_key"])
+            # CSV sport ranks FIRST, the user's pick ("pick:" prefix) LAST —
+            # see archive_intake.split_queued_sport.
+            queued_csv, queued_pick = archive_intake.split_queued_sport(row["sport"])
             outcome, activity_id, error = _ingest_member_bytes(
                 user_id=row["user_id"],
                 filename=row["original_filename"] or "member.gpx",
                 raw=raw,
-                # The row's stored sport mixes a CSV value with the old form
-                # sport (rows queued before this fix may hold a silent 'mtb'):
-                # rank it LAST, so the file's own FIT/GPX sport wins.
-                resolved_sport=None,
-                fallback_sport=row["sport"],
+                resolved_sport=queued_csv,
+                fallback_sport=queued_pick,
                 contribute_heatmap=bool(row["contribute_heatmap"]),
                 source=row["source"],
                 skip_heat_computation=skip_heat_computation,

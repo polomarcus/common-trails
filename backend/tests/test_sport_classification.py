@@ -405,3 +405,29 @@ def test_zip_pick_is_last_resort_only(client, auth_headers):
     sports = sorted(_sport_of(client, auth_headers, a) for a in body["activity_ids"])
     # CSV row keeps its Gravel Ride; only the unclassifiable member takes the pick
     assert sports == ["gravel", "mtb"]
+
+
+class TestQueuedMemberSportPrecedence:
+    """Review finding (PR #42): the legacy per-member queue stores EITHER the
+    activities.csv sport OR the user's pick in one column. The CSV must rank
+    first (it beats a FIT's generic cycling), the pick last."""
+
+    def test_split_queued_sport(self):
+        from app.services.archive_intake import NO_SPORT_HINT, split_queued_sport
+
+        assert split_queued_sport("gravel") == ("gravel", None)
+        assert split_queued_sport("pick:mtb") == (None, "mtb")
+        assert split_queued_sport(NO_SPORT_HINT) == (None, None)
+        assert split_queued_sport(None) == (None, None)
+
+    def test_csv_gravel_beats_fit_generic_cycling_but_pick_does_not(self):
+        from app.jobs.ingest_pending_archives import _effective_sport
+        from app.services.archive_intake import split_queued_sport
+
+        fit_generic = {"sport": "road", "sport_from_gpx": None}
+        csv, pick = split_queued_sport("gravel")
+        assert _effective_sport(fit_generic, csv, pick) == "gravel"
+        csv, pick = split_queued_sport("pick:mtb")
+        assert _effective_sport(fit_generic, csv, pick) == "road"
+        untyped = {"sport": None, "sport_from_gpx": None}
+        assert _effective_sport(untyped, csv, pick) == "mtb"
