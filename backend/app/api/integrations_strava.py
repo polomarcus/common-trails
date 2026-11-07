@@ -1634,7 +1634,7 @@ async def strava_callback(
 
     db = SessionLocal()
     try:
-        if TEST_MODE or code == "stub_code_test":
+        if TEST_MODE:
             stub_strava_id = "strava_stub_user_42"
             stub_athlete_name = "Test Athlete"
 
