@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Sources de données
 
 Le graphe de routage est construit à partir de trois sources. Il **n'inclut pas** le réseau routier OSM complet.

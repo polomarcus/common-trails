@@ -393,7 +393,7 @@ const en: Translations = {
   'strava.archive.acceptedQueued': 'Archive received — processing. You will get an email when it is done; your rides will show up in “My heatmap”, and the community heatmap usually updates within the hour.',
   'strava.archive.failed': 'Archive upload failed.',
   'strava.archive.err.tooLarge': 'Archive too large (max 2 GB). Split your export into several smaller .zip files and upload them one by one.',
-  'strava.archive.err.network': 'The connection dropped during the upload. Check your network and try again.',
+  'strava.archive.err.network': 'The connection dropped during the upload. Check your network and drop the same file again: the upload resumes where it stopped.',
   'strava.archive.err.server': 'The server could not receive your archive. Please try again in a few minutes.',
   'strava.archive.maxSize': 'max 2 GB',
   'strava.archive.seeMap': 'See the map →',

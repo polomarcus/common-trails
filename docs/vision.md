@@ -8,7 +8,7 @@ Chemins Communs est une plateforme open source de cartographie multi-sport (rout
 
 La plupart des outils de routage (Strava, Komoot, etc.) sont propriétaires. Ils collectent d'énormes quantités de données d'usage des sentiers mais ne partagent pas les connaissances qui en résultent.
 
-Chemins Communs construit un **moteur de routage communautaire** dont les données sont ouvertes (ODbL) et les algorithmes transparents.
+Chemins Communs construit une **heatmap communautaire ouverte** : les traces consenties alimentent une carte de popularité publiée sous ODbL, que chacun peut exporter vers l'outil de routage de son choix (gpx.studio, BRouter, GraphHopper…). Le projet n'est pas (plus) un moteur de routage : le routeur in-app a été retiré.
 
 ## Principes fondateurs
 
@@ -22,25 +22,19 @@ Vos activités personnelles sont privées par défaut. Vous choisissez ce que vo
 
 ### Plus on est nombreux, plus c'est fiable
 
-Le routage s'appuie uniquement sur les traces GPS de la communauté, les pistes DFCI et les sentiers balisés. Il n'y a pas de réseau routier OSM complet en fallback. Chaque trace partagée comble un trou dans le graphe.
+La heatmap repose sur la loi des grands nombres : chaque trace partagée renforce le signal des chemins réellement pratiqués, y compris les « lignes de désir » absentes d'OSM.
 
 ### La transparence est non négociable
 
-Les algorithmes, les données communes et les règles de confidentialité sont publics et auditables. Le code source est sous licence MIT, les données communautaires sous ODbL 1.0.
+Les algorithmes, les données communes et les règles de confidentialité sont publics et auditables. Le code source est sous licence AGPL-3.0, les données communautaires sous ODbL 1.0 (avec une licence commerciale en parallèle, voir le [README](../README.md#-licence)).
 
 ## Ce que nous refusons
 
 - Scraping de services tiers ou usage d'APIs privées
 - Reproduction ou import de heatmaps propriétaires (Strava, Komoot, etc.)
 - Partage de données personnelles sans consentement explicite
-- Routage opaque ou résultats sponsorisés
+- Classements opaques ou résultats sponsorisés
 
 ## Différence avec les outils existants
 
-Contrairement aux routeurs classiques qui utilisent le réseau routier OSM complet, Chemins Communs ne route que sur des chemins **connus et validés** :
-
-- Des cyclistes y sont déjà passés (heatmap)
-- Le chemin est officiellement balisé (GR, GT, PR, EuroVelo)
-- Le chemin est une piste forestière référencée (DFCI)
-
-Quand aucun chemin connu ne relie deux points, le routeur trace une ligne droite plutôt que d'inventer un itinéraire non vérifié.
+Les heatmaps des grandes plateformes sont propriétaires et payantes. Chemins Communs publie la sienne en données ouvertes, à partir de traces dont les contributeurs ont explicitement autorisé le partage, et la rend réutilisable comme calque ou export dans n'importe quel outil.

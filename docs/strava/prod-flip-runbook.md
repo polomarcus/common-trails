@@ -1,5 +1,12 @@
 # Prod flip runbook — activer le pivot conformité (upload = commun)
 
+> **Historique (exécuté en 2026-07).** Ce runbook décrit le flip de l'ère
+> « matched » (`rebuild-heatmap`, `heat_edges`, bump de tier Cloud SQL). Depuis
+> le pivot raw-trace, ces jobs et tables n'existent plus en prod et le job
+> `ingest-pending-archives` est dans `JOBS` de `scripts/deploy-prod.sh`. Ne pas
+> rejouer tel quel ; voir [`../architecture.md`](../architecture.md) et
+> [`../runbooks/heatmap-rebuild.md`](../runbooks/heatmap-rebuild.md).
+
 > Opération **supervisée** (Paul présent). Autorisée par Paul (2026-07-12 :
 > « ok pour le flip prod »). NON exécutée la nuit à dessein — voir « pourquoi
 > supervisé » plus bas. Objectif : passer la heatmap commune prod d'une source

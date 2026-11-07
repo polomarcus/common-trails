@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Routing Architecture
 
 *How Chemins Communs routes cyclists through community knowledge rather than generic road networks.*

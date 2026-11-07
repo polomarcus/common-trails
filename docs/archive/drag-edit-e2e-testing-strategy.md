@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Drag-edit E2E testing strategy
 
 **Status:** planning doc, 2026-05-31. Companion to [`docs/drag-edit-design.md`](drag-edit-design.md) (the UX contract). Triggered by Paul's question: "how would the perfect E2E test work? It's difficult because you have to know the heatmap on an area (like Clapiers)."
