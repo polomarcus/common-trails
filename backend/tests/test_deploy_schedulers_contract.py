@@ -180,7 +180,7 @@ def test_cd_web_healthcheck_hits_real_readiness_route():
 
 
 def test_heatmap_rebuild_backstop_is_weekly_not_daily(gcloud_calls):
-    """Cost (Paul 2026-11-07): the full PMTiles rebuild backstop runs once a week;
+    """Cost (Paul 2026-11-07): the full PMTiles rebuild backstop runs once a week (Saturday 11:00 Paris, watchable);
     uploads already trigger an event-driven rebuild."""
     updates = [
         c
@@ -189,4 +189,5 @@ def test_heatmap_rebuild_backstop_is_weekly_not_daily(gcloud_calls):
     ]
     assert updates, "rebuild scheduler schedule is not asserted by the deploy"
     schedule = _flag(updates[0], "schedule")
-    assert schedule == "30 4 * * 1", f"rebuild backstop must stay weekly: {schedule!r}"
+    assert schedule == "0 11 * * 6", f"rebuild backstop must stay weekly: {schedule!r}"
+    assert _flag(updates[0], "time-zone") == "Europe/Paris"

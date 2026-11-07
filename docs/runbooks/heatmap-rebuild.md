@@ -7,7 +7,7 @@ build complet prend de l'ordre de 30 à 40 min (job 8Gi).
 Contexte : le build est déclenché par des événements (fin de lot
 `/imports/files`, drain d'archive, tâche Cloud Tasks `artefact-rebuild`,
 suppressions) — voir [`../architecture.md`](../architecture.md). Le seul
-filet périodique est **hebdomadaire** (lundi 04:30 UTC). Un déclenchement
+filet périodique est **hebdomadaire** (samedi 11:00 heure de Paris). Un déclenchement
 manqué ou absorbé par l'anti-rafale peut donc laisser la carte en retard
 jusqu'à une semaine : relancer à la main (ci-dessous).
 

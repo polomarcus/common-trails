@@ -99,7 +99,7 @@ def warn_on_missing_job_config() -> list[str]:
     ⚠️ But the scheduled PMTiles-rebuild backstop is only WEEKLY: with the
     trigger env gone, a loose-file upload's display refresh simply never fires
     and the map stays stale until the next archive drain that imports (or the
-    Monday rebuild). This warning makes
+    Saturday rebuild). This warning makes
     the silent config-drift regression visible in the logs (a `--set-env-vars`
     wipe is the classic cause).
     """

@@ -73,7 +73,7 @@ flowchart LR
 **Déclencheurs du build** — événementiels : fin de lot
 `/imports/files` (anti-rafale `BUILD_PMTILES_DEBOUNCE_S`), drain d'archive,
 tâche Cloud Tasks `artefact-rebuild` (worker), suppressions d'activité / fusion
-de comptes. Filet de sécurité **hebdomadaire** seulement (lundi 04:30 UTC,
+de comptes. Filet de sécurité **hebdomadaire** seulement (samedi 11:00 heure de Paris,
 scheduler `common-trails-rebuild-pmtiles-daily-prod`, horaire asserté par
 `scripts/deploy-prod.sh` ; un build quotidien coûtait trop cher) : un
 déclenchement manqué peut laisser la carte en retard jusqu'à une semaine
