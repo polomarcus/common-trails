@@ -16,9 +16,10 @@ must stay under ODbL.
 
 ## Why this exists
 
-CHEMINS COMMUNS users opt in to share their rides; the shared signal is
-aggregated, K-anonymised (K=2 — no edge appears unless ≥ 2 distinct
-riders have crossed it), and published under ODbL. The result is a
+CHEMINS COMMUNS users opt in to share their rides; the consented traces are
+published with their endpoints masked (`TRACE_MASK_METERS`, 200 m) and a
+per-cell distinct-user floor (`HEATMAP_MIN_USERS`, **K = 1 during the beta** —
+solo traces are visible), under ODbL. See [`privacy-model.md`](privacy-model.md). The result is a
 heat layer of where cyclists actually ride — useful in road, gravel,
 MTB and off-road planning workflows.
 
@@ -69,7 +70,7 @@ curl https://chemins-communs.fr/export/heatmap
   "license": "ODbL-1.0",
   "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
   "attribution": "© CHEMINS COMMUNS contributors — ODbL 1.0",
-  "k_anonymity": 2,
+  "k_anonymity": 1,
   "generated_at": "2026-06-11T16:35:51Z",
   "formats": [
     {
@@ -96,7 +97,7 @@ curl https://chemins-communs.fr/export/heatmap
 ```
 
 **Everything is a pre-computed static artifact.** There is no on-demand tile
-build, no per-request bbox query, no async job — a rebuild (~daily) is the
+build, no per-request bbox query, no async job — a rebuild (event-driven, after new contributions) is the
 single source of truth, so a deleted trace propagates out on the next build.
 Every `url` points at a public Google Cloud Storage object (CDN-backed, no
 auth); those exact paths could change as we evolve the pipeline, so **fetch the
@@ -171,7 +172,7 @@ on top of your existing base map.
 
 - `trails` — the main heat lines (LineString) with attributes:
   - `heat_score` (0.0–1.0) — normalized popularity (LN-scaled `user_count`, boosted on primary/secondary roads); use this for colour
-  - `user_count` — distinct rider count (K ≥ 2 guaranteed)
+  - `user_count` — distinct rider count (≥ `HEATMAP_MIN_USERS`, currently 1)
   - `pass_count` — busiest sub-segment crossings (MAX across an OSM way's sub-edges, no artificial cap; observed up to ~300)
   - `sport` — `road` / `gravel` / `mtb` / `offroad`
   - `highway_type` — OSM tag (`primary`, `secondary`, `tertiary`, `residential`, `track`, `path`, `cycleway`, …)
@@ -215,13 +216,14 @@ Use cases:
   GeoJSONL source, or convert it locally with `tippecanoe` /
   `ogr2ogr -f MBTILES`.
 
-Same attribute schema as the PMTiles `trails` layer (see Recipe 1). K-anonymity
-(K ≥ 2) is already applied — the file contains no below-K edge.
+Same attribute schema as the PMTiles `trails` layer (see Recipe 1). The same
+distinct-user floor (`HEATMAP_MIN_USERS`, currently 1) and endpoint masking are
+already applied.
 
 ## Versioning — pin a specific snapshot
 
 The mutable `heatmap-display.pmtiles` URL always serves the latest
-snapshot, refreshed on every rebuild (~daily). For reproducible
+snapshot, refreshed on every rebuild (event-driven). For reproducible
 downstream pipelines, the discovery payload also exposes an **immutable**
 versioned path:
 
@@ -236,24 +238,26 @@ GET /export/heatmap            # discovery
 }
 ```
 
-The pinned URL is served with `Cache-Control: public, max-age=31536000, immutable` —
-safe to CDN-cache for a year. Use the latest mutable URL for the user-facing
-"current heatmap" toggle; use a pinned URL when you want byte-for-byte
-reproducibility (e.g. a fixed snapshot bundled with a release of your app).
+The pinned URL is served with `Cache-Control: public, max-age=31536000, immutable`,
+but **pinned snapshots are not retained**: each successful build prunes the
+older ones (so a deleted trace does not survive in an old snapshot). A pinned
+URL is stable only until the next build — if you need byte-for-byte
+reproducibility, **download the file and host your own copy**. Use the mutable
+URL (or follow the pointer `heatmap-display.json`) for the "current heatmap"
+toggle.
 
-## K-anonymity, privacy, ODbL
+## Privacy, ODbL
 
-- **K = 2** in production: no edge appears in the export unless at least
-  2 distinct riders have ridden it. This is a privacy floor, not a
-  popularity threshold — it ensures no individual ride can be reverse-engineered.
+- **Distinct-user floor `HEATMAP_MIN_USERS` = 1** during the beta (2 planned
+  before a public launch): individual traces are visible, minus their masked
+  endpoints. It is a per-cell floor, not route-level anonymisation — do not
+  present the data as anonymised.
 - **Strava's proprietary global heatmap is NOT a source.** Scraping or
   importing the public Strava heatmap is forbidden by Strava's TOS and
-  we don't do it. What CAN feed our heatmap: a CHEMINS COMMUNS user who
-  has connected their Strava account via the official OAuth flow has
-  their own rides synced and aggregated into our community signal,
-  subject to the same K ≥ 2 + opt-in privacy floor as GPX uploads.
-  Translated: the data is from real riders who opted in, not lifted
-  from someone else's heatmap.
+  we don't do it. Only files a user deliberately uploads with consent
+  (`source = 'manual_upload'`: loose GPX/FIT or their own Strava/Garmin
+  archive export) feed the community layer. Rides synced through the
+  Strava API stay personal-only and never reach the public map.
 - **ODbL "share-alike"**: if you build a derived dataset (e.g. filter the
   heatmap by intersection with your own track database, then publish
   the result), the derivative must also be ODbL. Using the heatmap as a
@@ -297,5 +301,5 @@ that share.** That's the whole point.
 
 *Last updated: 2026-08-07 (pre-computed-only export surface). For implementation details (PMTiles build
 pipeline, GCS bucket setup, ODbL boundary cases), see
-[`docs/heatmap-export-prd.md`](heatmap-export-prd.md) and
+[`docs/archive/heatmap-export-prd.md`](archive/heatmap-export-prd.md) (historical) and
 [`docs/heatmap-pipeline.md`](heatmap-pipeline.md).*

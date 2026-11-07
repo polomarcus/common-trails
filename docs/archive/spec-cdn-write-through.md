@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Spec: Write-Through CDN for Heatmap Data
 
 ## Problem

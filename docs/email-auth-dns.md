@@ -1,5 +1,12 @@
 # Email login — Resend domain verification (Paul's one-time setup)
 
+> **Status: done (2026-07-14).** `chemins-communs.fr` is verified in Resend and
+> prod sends from `EMAIL_FROM="Chemins Communs <no-reply@chemins-communs.fr>"`
+> (`scripts/deploy-prod.sh`, services + the drain and reminder jobs). The steps
+> below are kept as the reference for redoing the setup (new domain, key
+> rotation). The code default remains Resend's test sender
+> `onboarding@resend.dev` when `EMAIL_FROM` is unset.
+
 Phase 1 magic-link login is wired and deployed-ready, but **no email will
 deliver to real users** until the sending domain `chemins-communs.fr` is
 verified in Resend. Until then, `EMAIL_FROM` uses Resend's shared test sender
@@ -10,7 +17,7 @@ address** — perfect for your own smoke test, useless for a friend.
 
 - Secret `RESEND_API_KEY` is in GCP Secret Manager (version 1) and wired into
   `scripts/deploy-prod.sh` (`--set-secrets`).
-- `EMAIL_FROM` is set in `deploy-prod.sh`'s env block to the test sender.
+- `EMAIL_FROM` is set in `deploy-prod.sh`'s env block (now the verified domain sender).
 - `backend/app/services/email.py` sends via the Resend HTTP API; no-ops in
   `TEST_MODE` so tests/dev never send.
 
