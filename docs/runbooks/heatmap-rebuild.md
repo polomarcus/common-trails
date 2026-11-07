@@ -45,9 +45,11 @@ d'overrides d'env à la main : le prochain déploiement réasserte ces valeurs.
 Lancer un build pendant qu'un autre tourne (ou qu'un drain en déclenche un)
 est sûr. La publication est un **compare-and-set** sur `snapshot_started_at`
 (`_publish_pointer_cas`) : un build ne publie que si son snapshot est plus
-récent que celui du pointeur ; un build plus ancien qui finit en dernier ne
-touche ni au pointeur, ni à la copie mutable, ni aux snapshots. Coût : un build
-de plus, rien d'autre.
+récent que celui du pointeur ; un build plus ancien qui finit en dernier
+téléverse son propre snapshot épinglé mais ne touche ni au pointeur, ni à la
+copie mutable, et ne purge rien. Seuls la pyramide raster et le GeoJSONL
+(« dernier qui écrit gagne ») peuvent rester un build en retard jusqu'au
+suivant.
 
 ## 4. Vérifier
 
