@@ -34,6 +34,9 @@ export interface ArchiveInitPayload {
   filename?: string;
   /** Declared .zip size — set by `uploadArchive`; unlocks the resumable mode. */
   size?: number;
+  /** Resumable→PUT fallback: re-issue this still-'awaiting_upload' archive
+   *  (same row, key, consent) as a single PUT instead of creating a new one. */
+  reuse_archive_id?: string;
 }
 
 export interface ArchiveInitResult {
@@ -277,6 +280,15 @@ class SessionGoneError extends ArchiveUploadError {
   }
 }
 
+/** The session URL couldn't be reached and the server never confirmed a
+ *  single byte (typically CORS on the session URL) — `uploadArchive` then
+ *  falls back to the single signed PUT. */
+export class ResumableUnreachableError extends ArchiveUploadError {
+  constructor() {
+    super('resumable session unreachable before any byte was persisted', 'network');
+  }
+}
+
 export interface ResumableOpts {
   onProgress?: (fraction: number) => void;
   transport?: ChunkTransport;
@@ -285,6 +297,10 @@ export interface ResumableOpts {
   chunkBytes?: number;
   /** Ask the session for its offset before sending (resume after reload). */
   queryFirst?: boolean;
+  /** Throw `ResumableUnreachableError` (instead of retrying for minutes) when
+   *  a chunk fails at the transport level before the server ever confirmed a
+   *  byte AND a status probe also fails or reports 0. */
+  failFastIfUnreachable?: boolean;
 }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -312,7 +328,7 @@ export async function uploadResumable(
 ): Promise<void> {
   const {
     onProgress, transport = xhrChunkTransport, sleep = realSleep,
-    chunkBytes = RESUMABLE_CHUNK_BYTES, queryFirst = false,
+    chunkBytes = RESUMABLE_CHUNK_BYTES, queryFirst = false, failFastIfUnreachable = false,
   } = opts;
   const total = blob.size;
   let best = -1;
@@ -324,6 +340,7 @@ export async function uploadResumable(
   let offset = 0;
   let needStatus = queryFirst;
   let failures = 0;
+  let confirmed = 0; // highest offset the SERVER has acknowledged
   report(0);
   for (;;) {
     let resp: ChunkResponse;
@@ -348,6 +365,18 @@ export async function uploadResumable(
       // Transport failure — the chunk may be partly persisted: back off, then
       // ask the session where it stands.
       failures += 1;
+      if (failFastIfUnreachable && confirmed === 0) {
+        // Nothing ever acknowledged: one status probe decides whether the
+        // session is reachable at all (a CORS block looks exactly like this).
+        await sleep(backoffMs(1));
+        let probe: ChunkResponse | null = null;
+        try {
+          probe = await transport({ url: sessionUrl, headers: { 'Content-Range': `bytes */${total}` }, body: null });
+        } catch { /* still unreachable */ }
+        if (!probe || (probe.status === 308 && parseRangeOffset(probe.range) === 0)) {
+          throw new ResumableUnreachableError();
+        }
+      }
       if (failures > MAX_RESUMABLE_RETRIES) {
         throw err instanceof ArchiveUploadError ? err : new ArchiveUploadError('upload network error', 'network');
       }
@@ -358,6 +387,7 @@ export async function uploadResumable(
 
     const { status } = resp;
     if (status === 200 || status === 201) { report(total); return; }
+    if (status === 308) confirmed = Math.max(confirmed, parseRangeOffset(resp.range));
     if (status === 404 || status === 410) throw new SessionGoneError(status);
     if (status === 308) {
       const persisted = parseRangeOffset(resp.range);
@@ -497,10 +527,19 @@ export async function uploadArchive(args: UploadArchiveArgs): Promise<ArchiveCom
     if (init.upload_mode === 'resumable' && init.session_url) {
       if (fp) saveSession(fp, init);
       try {
-        await uploadResumable(init.session_url, blob, chunkOpts);
+        await uploadResumable(init.session_url, blob, { ...chunkOpts, failFastIfUnreachable: true });
       } catch (err) {
         if (err instanceof SessionGoneError) clearSession();
-        throw err;
+        if (!(err instanceof ResumableUnreachableError)) throw err;
+        // Safety net: the browser can't talk to the session URL and not one
+        // byte landed — fall back to the single signed PUT for the SAME
+        // archive (reuse_archive_id: no second, orphaned pending row).
+        console.warn('[archive-upload] resumable session unreachable before any byte was persisted; falling back to a single signed PUT', err);
+        clearSession();
+        const { size: _ignored, ...noSize } = payload;
+        init = await initArchiveUpload(ctx, { ...noSize, reuse_archive_id: init.archive_id });
+        if (init.upload_mode === 'resumable') throw err; // never loop
+        await put(init, blob, { apiUrl, token, onProgress });
       }
     } else {
       await put(init, blob, { apiUrl, token, onProgress });

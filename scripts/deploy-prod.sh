@@ -377,7 +377,7 @@ fi
 # ${PUBLIC_URL}: chunked PUTs to a GCS RESUMABLE session (Content-Range in,
 # Range out on each 308) or, as a fallback, one signed PUT. Without this CORS
 # the browser blocks them (or can't read Range → can't resume). It was set once
-# by hand (docs/strava/archive-signed-upload.md: PUT + Content-Type only); it is
+# by hand (live 2026-11-07: PUT+OPTIONS, header Content-Type; the JSON is a STRICT superset); it is
 # now asserted declaratively from the checked-in scripts/uploads-bucket-cors.json
 # on every deploy. `--cors-file` REPLACES the bucket's whole CORS list — the
 # JSON is the complete SSOT, edit it there. Idempotent.

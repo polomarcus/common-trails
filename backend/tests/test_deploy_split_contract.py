@@ -201,6 +201,17 @@ def test_uploads_bucket_cors_allows_resumable_browser_upload(deploy_sh: str):
     rule = next(r for r in cors if public_url in r["origin"])
     assert {"PUT", "POST", "GET"} <= set(rule["method"])
     assert {"Content-Type", "Content-Range", "Range", "X-Goog-Resumable"} <= set(rule["responseHeader"])
+    # `--cors-file` REPLACES the list: the JSON must stay a strict SUPERSET of
+    # the live config it replaced (read 2026-11-07 from the prod bucket), so
+    # the existing single signed PUT keeps working byte-for-byte.
+    live_before = {
+        "maxAgeSeconds": 3600, "method": ["PUT", "OPTIONS"],
+        "origin": ["https://chemins-communs.fr"], "responseHeader": ["Content-Type"],
+    }
+    assert set(live_before["origin"]) <= set(rule["origin"])
+    assert set(live_before["method"]) <= set(rule["method"])
+    assert set(live_before["responseHeader"]) <= set(rule["responseHeader"])
+    assert rule["maxAgeSeconds"] >= live_before["maxAgeSeconds"]
     assert re.search(
         r'gcloud storage buckets update "gs://\$\{UPLOADS_BUCKET_NAME\}".*--cors-file="\$CORS_FILE"',
         deploy_sh,

@@ -96,7 +96,7 @@ Or manually post-upload:
 ### GCS bucket CORS — REQUIRED for the browser PUT
 > **Since the resumable upload PR this is codified**: `scripts/deploy-prod.sh`
 > (step `[0/3]`) asserts `scripts/uploads-bucket-cors.json` on every deploy
-> (origin `https://chemins-communs.fr`, methods PUT/POST/GET, headers
+> (origin `https://chemins-communs.fr`, methods PUT/OPTIONS/POST/GET — strict superset of the live PUT+OPTIONS/Content-Type rule, headers
 > `Content-Type`, `Content-Range`, `Range`, `X-Goog-Resumable`). On failure
 > it deploys with `ARCHIVE_RESUMABLE_UPLOADS=false` (single signed PUT). The
 > manual recipe below is historical.

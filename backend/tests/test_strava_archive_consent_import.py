@@ -423,6 +423,59 @@ class TestInitResumableSession:
         assert resp.json()["upload_mode"] == "put"
         gcs_blob.create_resumable_upload_session.assert_not_called()
 
+    def test_put_fallback_reuses_the_awaiting_archive_no_orphan(
+        self, client, auth_headers, gcs_blob, monkeypatch,
+    ):
+        """Client fallback (resumable session unreachable, 0 byte persisted):
+        re-init WITHOUT size + reuse_archive_id → the SAME archive row / key /
+        consent as a signed PUT, and no second pending_archives / consent row."""
+        from app.db.models import ContributionConsent, PendingArchive
+        from app.services import archive_intake
+        uid = _user_id(client, auth_headers)
+        first = self._init_sized(client, auth_headers, self.SIZE).json()
+        assert first["upload_mode"] == "resumable"
+
+        monkeypatch.setattr(archive_intake, "generate_signed_put_url", lambda key: f"https://signed/{key}")
+        resp = client.post("/imports/strava-archive/init", headers=auth_headers, json={
+            "sport": "road", "consent": True,
+            "consent_version": "strava-archive-2026-07-v1",
+            "consent_text": "Je consens à contribuer mes traces (ODbL).",
+            "locale": "fr", "reuse_archive_id": first["archive_id"],
+        })
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["upload_mode"] == "put"
+        assert body["archive_id"] == first["archive_id"]
+        assert body["bucket_key"] == first["bucket_key"]
+        assert body["consent_id"] == first["consent_id"]
+        assert body["upload_url"] == f"https://signed/{first['bucket_key']}"
+        assert _count(PendingArchive, user_id=uid) == 1
+        assert _count(ContributionConsent, user_id=uid) == 1
+        gcs_blob.create_resumable_upload_session.assert_called_once()  # not re-opened
+
+    def test_reuse_of_a_non_awaiting_or_junk_archive_is_a_fresh_init(self, client, auth_headers):
+        from app.db.models import PendingArchive
+        from app.db.session import SessionLocal
+        uid = _user_id(client, auth_headers)
+        first = _init(client, auth_headers).json()
+        db = SessionLocal()
+        try:
+            row = db.get(PendingArchive, first["archive_id"])
+            row.status = "uploaded"
+            db.commit()
+        finally:
+            db.close()
+        for reuse in (first["archive_id"], "not-a-uuid"):
+            resp = client.post("/imports/strava-archive/init", headers=auth_headers, json={
+                "sport": "road", "consent": True,
+                "consent_version": "strava-archive-2026-07-v1",
+                "consent_text": "Je consens à contribuer mes traces (ODbL).",
+                "locale": "fr", "reuse_archive_id": reuse,
+            })
+            assert resp.status_code == 201, resp.text
+            assert resp.json()["archive_id"] != first["archive_id"]
+        assert _count(PendingArchive, user_id=uid) == 3
+
     def test_local_backend_with_size_still_returns_put_mode(self, client, auth_headers):
         resp = self._init_sized(client, auth_headers, 1234)
         assert resp.status_code == 201, resp.text

@@ -95,6 +95,9 @@ class ArchiveInitRequest(BaseModel):
     # before any upload. On the gcs backend it also unlocks the RESUMABLE mode:
     # the session binds this exact total. Absent (older client) → signed PUT.
     size: int | None = Field(default=None, ge=0)
+    # Resumable → single-PUT fallback: re-issue THIS still-'awaiting_upload'
+    # archive (same row, key and consent) instead of creating a second one.
+    reuse_archive_id: str | None = None
 
 
 class ArchiveInitResult(BaseModel):
@@ -560,6 +563,63 @@ def _validate_consent(consent: bool, consent_version: str, consent_text: str, sp
         raise HTTPException(status_code=422, detail="Missing consent version/text.")
 
 
+def _reuse_archive_as_put(user_id: str, archive_id: str) -> "ArchiveInitResult | None":
+    """Re-issue an EXISTING ``awaiting_upload`` archive as a single-PUT upload
+    (same archive_id / bucket_key / consent). ``None`` when the row isn't
+    reusable (unknown, not this user's, already uploaded)."""
+    import uuid
+    from datetime import UTC, datetime
+
+    from app.db.models import PendingArchive
+    from app.db.session import SessionLocal
+    from app.services import archive_intake
+
+    try:
+        uuid.UUID(archive_id)  # junk id → fresh init, never a DB DataError
+    except ValueError:
+        return None
+    db = SessionLocal()
+    try:
+        row = db.get(PendingArchive, archive_id)
+        if (
+            row is None
+            or row.user_id != user_id
+            or row.status != "awaiting_upload"
+            or not archive_intake.owns_key(user_id, row.bucket_key)
+        ):
+            return None
+        backend, bucket_key, consent_id = row.storage_backend, row.bucket_key, row.consent_id
+        row.updated_at = datetime.now(UTC)  # fresh lease vs the awaiting_upload reaper
+        db.add(row)
+        db.commit()
+    finally:
+        db.close()
+
+    if backend == "gcs":
+        try:
+            upload_url = archive_intake.generate_signed_put_url(bucket_key)
+        except Exception as exc:  # noqa: BLE001 — surface a clear 503, don't 500
+            log.error("signed URL generation failed", exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Upload URL unavailable (storage signer misconfigured).",
+            ) from exc
+    else:
+        upload_url = f"/imports/strava-archive/upload/{archive_id}"
+    return ArchiveInitResult(
+        archive_id=archive_id,
+        consent_id=consent_id or "",
+        bucket_key=bucket_key,
+        upload_url=upload_url,
+        upload_method="PUT",
+        content_type=archive_intake.ARCHIVE_CONTENT_TYPE,
+        max_bytes=archive_intake.MAX_ARCHIVE_BYTES,
+        storage_backend=backend,
+        upload_mode="put",
+        session_url=None,
+    )
+
+
 def _upload_origin() -> str:
     """Site origin bound into a GCS resumable session (``scheme://host[:port]``
     of FRONTEND_URL — chemins-communs.fr in prod). GCS only answers CORS on the
@@ -619,6 +679,18 @@ async def init_strava_archive(
         raise HTTPException(
             status_code=413, detail=archive_intake.too_large_message(body.size),
         )
+
+    # Client-side fallback from a resumable session that never persisted a
+    # byte (e.g. the browser can't reach the session URL): REUSE that archive
+    # row + its consent row and hand back a single signed PUT for the SAME key
+    # — no second pending_archives row left orphaned in 'awaiting_upload'
+    # (which would hold a MAX_OPEN_ARCHIVES_PER_USER slot until the 48 h
+    # reaper). Only an own, still-'awaiting_upload' row qualifies; anything
+    # else falls through to a normal fresh init.
+    if body.reuse_archive_id:
+        reused = _reuse_archive_as_put(current_user.user_id, body.reuse_archive_id)
+        if reused is not None:
+            return reused
 
     # Quota gate FIRST — fail fast before minting a signed URL / recording
     # consent. Open = still consuming a slot (not yet terminal done/failed).

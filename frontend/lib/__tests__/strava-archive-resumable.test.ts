@@ -379,6 +379,73 @@ describe('uploadArchive — resumable mode + resume after reload', () => {
     expect(fresh.complete).toBe(true);
   });
 
+  it('CORS-like failure on the FIRST chunk (nothing persisted) → falls back to the single PUT for the SAME archive', async () => {
+    const total = 2 * CHUNK;
+    const s = new FakeSession(total);
+    s.failAllFrom = 0; // the session URL is unreachable from the browser (CORS)
+    const putInit = { ...resumableInit('f1', 'x'), upload_mode: 'put' as const, session_url: null, upload_url: 'https://signed/f1' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(resumableInit('f1', 'https://session/f1'))) // init (resumable)
+      .mockResolvedValueOnce(jsonResponse(putInit))                                   // re-init (put)
+      .mockResolvedValueOnce(completed('f1'));                                        // complete
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const put = vi.fn().mockResolvedValue(undefined);
+
+    const res = await uploadArchive({
+      apiUrl: API, token: null, blob: zipFile(total), payload, put, transport: s.transport, sleep: noSleep, chunkBytes: CHUNK,
+    });
+
+    expect(res.status).toBe('uploaded');
+    // First chunk + ONE status probe, then straight to the fallback (no 8× backoff).
+    expect(s.calls.map((c) => c.contentRange)).toEqual([`bytes 0-${CHUNK - 1}/${total}`, `bytes */${total}`]);
+    const reinit = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(fetchMock.mock.calls[1][0]).toBe(`${API}/imports/strava-archive/init`);
+    expect(reinit.size).toBeUndefined();          // no size → server answers "put"
+    expect(reinit.reuse_archive_id).toBe('f1');   // same row: no orphaned pending archive
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(put.mock.calls[0][0]).toEqual(putInit);
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ archive_id: 'f1', key: 'archive-intake/user-1/f1.zip' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(RESUME_STORAGE_KEY)).toBeNull();
+  });
+
+  it('status probe reachable but reporting 0 after a first-chunk drop → also falls back', async () => {
+    const total = CHUNK;
+    const s = new FakeSession(total);
+    s.faults.set(0, { kind: 'net' }); // probe (call 1) answers 308 with no Range
+    const putInit = { ...resumableInit('z1', 'x'), upload_mode: 'put' as const, session_url: null, upload_url: 'https://signed/z1' };
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(jsonResponse(resumableInit('z1', 'https://session/z1')))
+      .mockResolvedValueOnce(jsonResponse(putInit))
+      .mockResolvedValueOnce(completed('z1')));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const put = vi.fn().mockResolvedValue(undefined);
+    await uploadArchive({ apiUrl: API, token: null, blob: zipFile(total), payload, put, transport: s.transport, sleep: noSleep, chunkBytes: CHUNK });
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
+  it('failure AFTER one persisted chunk → no fallback, resumes the session', async () => {
+    const total = 3 * CHUNK;
+    const s = new FakeSession(total);
+    s.faults.set(1, { kind: 'net' });
+    s.faults.set(2, { kind: 'net' }); // even the status query blips once
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(resumableInit('k1', 'https://session/k1')))
+      .mockResolvedValueOnce(completed('k1'));
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const put = vi.fn();
+    const res = await uploadArchive({
+      apiUrl: API, token: null, blob: zipFile(total), payload, put, transport: s.transport, sleep: noSleep, chunkBytes: CHUNK,
+    });
+    expect(res.archive_id).toBe('k1');
+    expect(put).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2); // init + complete, no re-init
+    expect(s.data).toEqual(patterned(total));
+  });
+
   it('broken localStorage never breaks the upload', async () => {
     vi.stubGlobal('localStorage', {
       getItem: () => { throw new Error('SecurityError'); },
