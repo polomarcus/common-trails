@@ -3,9 +3,11 @@
 Product decision (Paul, 2026-07-21): the raw-trace display source (see
 ``HEATMAP_DISPLAY_SOURCE`` in ``build_pmtiles``) renders precise individual
 GPS traces instead of K-anonymised, OSM-matched, cross-rider aggregates.
-Privacy in that mode is NOT K-anonymity — it is achieved by **trimming the
-first and last N metres of every trace** so a rider's home / work is never
-drawn on the public map.
+Privacy in that mode is NOT K-anonymity — it is achieved by **masking every
+point within N metres (radius) of the start and of the end of every trace** so a
+rider's home / work is never drawn on the public map (radial since the 2026-11
+data audit — the original along-track trim leaked home under stationary GPS
+jitter; see ``mask_endpoints``).
 
 This module is the pure, side-effect-free SSOT for that trim. It NEVER mutates
 the stored GPS geometry (Crouzet invariant #1) — callers pass a copy of the
@@ -14,12 +16,14 @@ parsed coordinates and get back a trimmed copy for DISPLAY only.
 Coordinate convention (matches the rest of ingest): ``[lon, lat]`` or
 ``[lon, lat, ele]``. Track-break sentinels (``None``, emitted by
 ``ingest._densify_coords`` on a GPS dropout) split the trace into independent
-runs; masking applies to the physical start of the FIRST run and the physical
-end of the LAST run only.
+runs; the end zones are taken from the first / last recorded fixes and the
+discs around them apply to every run.
 """
 from __future__ import annotations
 
+import math
 import os
+from itertools import pairwise
 
 from app.services.geo import haversine_m
 
@@ -28,9 +32,26 @@ Run = list
 
 DEFAULT_MASK_METERS = 200.0
 
+# End zones (see ``mask_endpoints``). The first recorded fix is only an
+# ESTIMATE of home: while the rider waits for a fix, consecutive fixes scatter
+# by several metres, and the very first fix can be stale / cell-based, hundreds
+# of metres or kilometres away (possibly as a long run of identical fixes).
+# The start zone is therefore built from DISTINCT positions (anchors: clusters
+# of fixes within ``DWELL_METERS``), not raw fix counts: the first
+# ``MIN_ANCHORS`` anchors are always included whatever their distance (a stale
+# cluster + home + the first metres away), then further anchors while the
+# zone spans <= ``ZONE_MAX_M`` along-track (raw distance from the endpoint) and
+# there are at most ``MAX_ANCHORS``. A disc of radius R sits on every zone fix.
+MIN_ANCHORS = 3
+MAX_ANCHORS = 10
+# 100 m (not more): the MIN_ANCHORS rule already covers stale clusters, so the
+# span cap only has to stop sparse / dense rides from losing far more than R.
+ZONE_MAX_M = 100.0
+DWELL_METERS = 30.0
+
 
 def mask_meters() -> float:
-    """Resolve the mask distance from ``TRACE_MASK_METERS`` (default 200 m)."""
+    """Resolve the mask radius from ``TRACE_MASK_METERS`` (default 200 m)."""
     raw = os.environ.get("TRACE_MASK_METERS", "").strip()
     if not raw:
         return DEFAULT_MASK_METERS
@@ -65,85 +86,213 @@ def _interp(a: Coord, b: Coord, frac: float) -> Coord:
     return [lon, lat]
 
 
-def _trim_run_front(run: Run, m: float) -> tuple[Run | None, float]:
-    """Drop the first ``m`` metres (along-track) of one run.
+# Metres per degree of latitude on the haversine sphere (R = 6 371 km), so the
+# local projection below agrees with ``geo.haversine_m`` to well under a
+# millimetre at mask scale (hundreds of metres).
+_M_PER_DEG = 6_371_000.0 * math.pi / 180.0
 
-    Returns ``(trimmed_run, 0.0)`` when the run survives, or
-    ``(None, leftover)`` when the whole run is shorter than ``m`` (the caller
-    then keeps consuming ``leftover`` metres from the next run).
+
+class _Disc:
+    """A privacy disc of radius ``r`` metres around ``center`` (``[lon, lat]``).
+
+    Uses a local equirectangular projection centred on the disc: exact enough
+    at mask scale (error ≪ 1 m for r ≤ a few km) and, crucially, the SAME
+    metric is used for the inside test and for the boundary interpolation, so a
+    cut point lands exactly on the circle.
     """
-    remaining = m
-    for i in range(len(run) - 1):
-        seg = haversine_m(run[i][0], run[i][1], run[i + 1][0], run[i + 1][1])
-        if seg <= 0:
+
+    __slots__ = ("lon0", "lat0", "kx", "r", "r2")
+
+    def __init__(self, center: Coord, r: float):
+        self.lon0 = center[0]
+        self.lat0 = center[1]
+        self.kx = _M_PER_DEG * math.cos(math.radians(center[1]))
+        self.r = r
+        self.r2 = r * r
+
+    def xy(self, p: Coord) -> tuple[float, float]:
+        return (p[0] - self.lon0) * self.kx, (p[1] - self.lat0) * _M_PER_DEG
+
+    def crossings(self, pa: tuple[float, float], pb: tuple[float, float]) -> list[float]:
+        """Parameters ``t`` in (0, 1) where segment pa→pb crosses the circle."""
+        dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+        a = dx * dx + dy * dy
+        if a <= 0.0:
+            return []
+        b = 2.0 * (pa[0] * dx + pa[1] * dy)
+        c = pa[0] * pa[0] + pa[1] * pa[1] - self.r2
+        disc = b * b - 4.0 * a * c
+        if disc <= 0.0:
+            return []  # misses (or merely grazes) the circle
+        sq = math.sqrt(disc)
+        return [t for t in ((-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)) if 0.0 < t < 1.0]
+
+
+class _DiscGroup:
+    """The discs anchored on one end of the trace (start OR end), plus one
+    bounding disc around all of them for a cheap "segment is far away" test."""
+
+    __slots__ = ("discs", "bound")
+
+    def __init__(self, discs: list[_Disc]):
+        self.discs = discs
+        c = discs[0]
+        reach = 0.0
+        for d in discs:
+            x, y = c.xy([d.lon0, d.lat0])
+            reach = max(reach, math.hypot(x, y) + d.r)
+        # +1 % +1 m: absorbs the local-projection error over a multi-km span.
+        self.bound = _Disc([c.lon0, c.lat0], reach * 1.01 + 1.0)
+
+
+def _segment_clear(disc: _Disc, a: Coord, b: Coord) -> bool:
+    """True when segment a→b provably stays outside ``disc`` (every point of
+    it is within seg/2 of an endpoint, so min endpoint distance − seg/2 is a
+    lower bound of its distance to the centre)."""
+    pa, pb = disc.xy(a), disc.xy(b)
+    seg = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+    return min(math.hypot(*pa), math.hypot(*pb)) > disc.r + seg / 2.0
+
+
+def _cut_run(run: Run, groups: list[_DiscGroup]) -> list[Run]:
+    """Return the pieces of ``run`` lying OUTSIDE every disc of every group.
+
+    Each piece that touches a disc starts/ends on its exact circle (the
+    boundary point is interpolated, elevation included). Never mutates
+    ``run``; untouched points are shared (as the old slice-based trim did),
+    boundary points are new lists.
+    """
+    pieces: list[Run] = []
+    cur: Run = []
+
+    def inside_any(p: Coord) -> bool:
+        for g in groups:
+            for d in g.discs:
+                x, y = d.xy(p)
+                if x * x + y * y < d.r2:
+                    return True
+        return False
+
+    if not inside_any(run[0]):
+        cur.append(run[0])
+    for i in range(1, len(run)):
+        a, b = run[i - 1], run[i]
+        # Fast path: clear of every group's bounding disc. Covers ~all segments
+        # of a ride once it has left home, whatever the number of anchors.
+        if all(_segment_clear(g.bound, a, b) for g in groups):
+            if not cur:
+                cur.append(a)
+            cur.append(b)
             continue
-        if remaining < seg:
-            frac = remaining / seg
-            boundary = _interp(run[i], run[i + 1], frac)
-            return [boundary, *run[i + 1:]], 0.0
-        remaining -= seg
-    return None, remaining
+        ts = {0.0, 1.0}
+        for g in groups:
+            for d in g.discs:
+                ts.update(d.crossings(d.xy(a), d.xy(b)))
+        for t0, t1 in pairwise(sorted(ts)):
+            if inside_any(_interp(a, b, (t0 + t1) / 2.0)):
+                if len(cur) >= 2:
+                    pieces.append(cur)
+                cur = []
+                continue
+            if not cur:
+                cur.append(a if t0 == 0.0 else _interp(a, b, t0))
+            cur.append(b if t1 == 1.0 else _interp(a, b, t1))
+    if len(cur) >= 2:
+        pieces.append(cur)
+    return pieces
 
 
-def _trim_run_back(run: Run, m: float) -> tuple[Run | None, float]:
-    reversed_run, leftover = _trim_run_front(list(reversed(run)), m)
-    if reversed_run is None:
-        return None, leftover
-    return list(reversed(reversed_run)), 0.0
+def _endpoint_anchors(indexed_points, r: float) -> tuple[list[_Disc], int]:
+    """Discs covering one end of the trace, and the index of the last fix
+    that belongs to that end zone.
 
-
-def _trim_front(runs: list[Run], m: float) -> list[Run]:
-    remaining = m
-    out = list(runs)
-    while out:
-        trimmed, leftover = _trim_run_front(out[0], remaining)
-        if trimmed is not None:
-            out[0] = trimmed
-            return out
-        # Whole run consumed by the mask (it was near home) → drop it and
-        # keep eating into the next run. This is the privacy-safe choice.
-        out.pop(0)
-        remaining = leftover
-    return []
-
-
-def _trim_back(runs: list[Run], m: float) -> list[Run]:
-    remaining = m
-    out = list(runs)
-    while out:
-        trimmed, leftover = _trim_run_back(out[-1], remaining)
-        if trimmed is not None:
-            out[-1] = trimmed
-            return out
-        out.pop()
-        remaining = leftover
-    return []
+    ``indexed_points`` yields ``(index, point)`` walking AWAY from the end.
+    Fixes are greedily clustered: a fix within ``DWELL_METERS`` of an existing
+    anchor joins it and widens its radius by its distance (so the hole is
+    >= ``r`` around the fix itself) — any number of fixes, so a long stale
+    cluster or a long wait at the door counts as ONE anchor. A fix farther
+    from every anchor starts a new anchor if fewer than ``MIN_ANCHORS`` exist,
+    or if fewer than ``MAX_ANCHORS`` exist and the along-track raw distance
+    walked so far is <= ``ZONE_MAX_M``; otherwise the zone ends there.
+    """
+    anchors: list[list] = []  # [center, pad]
+    last = -1
+    walked = 0.0
+    prev = None
+    for idx, pt in indexed_points:
+        if prev is not None:
+            walked += haversine_m(prev[0], prev[1], pt[0], pt[1])
+        prev = pt
+        best = None
+        best_d = math.inf
+        for anc in anchors:
+            dd = haversine_m(anc[0][0], anc[0][1], pt[0], pt[1])
+            if dd < best_d:
+                best, best_d = anc, dd
+        if best is not None and best_d <= DWELL_METERS:
+            best[1] = max(best[1], best_d)
+        elif len(anchors) < MIN_ANCHORS or (
+                len(anchors) < MAX_ANCHORS and walked <= ZONE_MAX_M):
+            anchors.append([pt, 0.0])
+        else:
+            break
+        last = idx
+    return [_Disc(c, r + pad) for c, pad in anchors], last
 
 
 def mask_endpoints(coords: list, mask_m: float | None = None) -> list[Run]:
-    """Return the display-safe RUNS of a trace with both true ends trimmed.
+    """Return the display-safe RUNS of a trace with both true ends masked.
 
-    * Trims ``mask_m`` metres (along-track, interpolating the exact boundary
-      point so the hole is precisely ``mask_m`` wide) from the physical start
-      of the first run and the physical end of the last run.
-    * A there-and-back ride (start == end == home) has both occurrences of
-      home trimmed because both the start and the end of the polyline are
-      trimmed.
-    * A trace whose total remaining length after trimming both ends is empty
-      (i.e. total length <= 2 * mask_m for a single-run trace) returns ``[]``
-      — fully masked, contribute nothing.
+    **Radial mask** (data audit C1, 2026-11). Pass RAW fixes (before
+    densification — see ``raw_trace_display.mask_then_densify``): the end
+    zones are defined on recorded fixes, and densify would otherwise bridge a
+    stale first fix to home with a dense line of fake points.
+
+    1. **End zones** (``_endpoint_anchors``). The start zone is built from
+       distinct positions (clusters of fixes within ``DWELL_METERS``): always
+       the first ``MIN_ANCHORS`` of them, then more while the zone spans
+       <= ``ZONE_MAX_M`` along-track (max ``MAX_ANCHORS``). Same for the end
+       zone, walking backwards. A stale / cell-based first fix hundreds of
+       metres or kilometres from home — even a long run of them — is one
+       anchor, so home (the next distinct position) is always in the zone.
+       Sparse recordings (smart recording, ~80 m spacing) are capped by the
+       along-track span instead of over-masking.
+    2. Everything from the physical start up to the last start-zone fix (and
+       from the first end-zone fix to the physical end) is dropped — this
+       removes the straight outlier→home bridge.
+    3. **Discs.** Every point within ``mask_m`` metres (great-circle) of ANY
+       end-zone fix is dropped, anywhere in the trace — so a loop that swings
+       back past the house mid-ride is masked there too. Zone fixes are
+       clustered (``DWELL_METERS``) and each cluster's disc is widened by its
+       spread, so the hole is >= ``mask_m`` around every zone fix. Cuts are
+       interpolated exactly on the circle (elevation included).
+
+    Why radial and not along-track (the previous behaviour): GPS jitter while
+    stationary at the door accumulates track length on the spot, so a 200 m
+    ALONG-TRACK trim could be consumed within a few metres of home.
+
+    * Track-break sentinels (``None``) split runs; inner run ends far from the
+      end zones are kept as-is.
+    * A there-and-back (start ≈ end) is covered by construction.
+    * A trace whose end zones overlap, or that never leaves the discs, returns
+      ``[]`` (fully masked).
 
     Pure: does not mutate ``coords``. ``mask_m=None`` → env ``TRACE_MASK_METERS``.
     """
     if mask_m is None:
         mask_m = mask_meters()
-    runs = _split_runs(coords)
-    if not runs:
-        return []
     if mask_m <= 0:
-        return runs
-    runs = _trim_front(runs, mask_m)
-    if not runs:
+        return _split_runs(coords)
+    fixes = [(i, p) for i, p in enumerate(coords) if p is not None]
+    if len(fixes) < 2:
         return []
-    runs = _trim_back(runs, mask_m)
-    return [r for r in runs if len(r) >= 2]
+    head_discs, head_last = _endpoint_anchors(iter(fixes), mask_m)
+    tail_discs, tail_first = _endpoint_anchors(reversed(fixes), mask_m)
+    if head_last >= tail_first:
+        return []
+    middle = _split_runs(coords[head_last:tail_first + 1])
+    groups = [_DiscGroup(head_discs), _DiscGroup(tail_discs)]
+    out: list[Run] = []
+    for run in middle:
+        out.extend(_cut_run(run, groups))
+    return out
