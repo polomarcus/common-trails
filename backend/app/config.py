@@ -8,6 +8,11 @@ TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 ROUTING_EXTERNAL = os.environ.get("ROUTING_EXTERNAL", "false").lower() == "true"
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3787")
 VALID_SPORTS = frozenset({"road", "gravel", "mtb", "offroad", "running"})
+# Sports a user may pick when CORRECTING an activity's sport after import
+# (PATCH /me/activities/...). ``offroad`` is excluded on purpose: it is a
+# filter/aggregation alias (see ``expand_sport``) that the import classifier
+# never produces — a correction must name a concrete practice.
+EDITABLE_SPORTS = frozenset(VALID_SPORTS - {"offroad"})
 
 # ── Transactional email (Resend) + passwordless magic-link login ─────────────
 # Resend HTTP API key. Empty/unset means "no email backend" — fine for local

@@ -11,13 +11,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import AfterValidator, BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user
 from app.db.models import Activity, ActivityPhoto
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
+from app.services.activity_sport import change_activities_sport
 from app.services.display_geometry import (  # noqa: F401 — re-exported (tests)
     DISPLAY_GAP_BREAK_M,
     _split_at_gaps,
@@ -202,6 +203,98 @@ async def me_activity_by_id(
         return _activity_to_feature(act)
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=500, detail="Activity geometry is malformed") from exc
+
+
+# ── Sport correction (single + bulk) ─────────────────────────────────────────
+# A wrong sport at import pollutes the wrong community layer; the owner can fix
+# it. See app.services.activity_sport for what a change touches (heat partition
+# re-write in matched mode, debounced PMTiles rebuild).
+
+# Bulk cap — one request re-classifies at most this many activities. The grain
+# is an explicit id list: activities carry no import-batch id (the archive
+# tables don't link back to them reliably), so the client sends the ids it shows.
+BULK_SPORT_MAX_IDS = 500
+
+
+def _validate_editable_sport(v: str) -> str:
+    from app.config import EDITABLE_SPORTS
+
+    if v not in EDITABLE_SPORTS:
+        raise ValueError(f"sport must be one of {sorted(EDITABLE_SPORTS)}")
+    return v
+
+
+# Validated against the config SSOT → an unknown sport is a 422.
+EditableSport = Annotated[str, AfterValidator(_validate_editable_sport)]
+
+
+class SportUpdate(BaseModel):
+    sport: EditableSport
+
+
+class BulkSportUpdate(BaseModel):
+    activity_ids: list[str] = Field(min_length=1, max_length=BULK_SPORT_MAX_IDS)
+    sport: EditableSport
+
+
+class BulkSportResult(BaseModel):
+    sport: str
+    matched: int  # owned activities found among the ids
+    updated: int  # of which the sport actually changed
+    updated_ids: list[str]
+
+
+def _valid_uuids(ids: list[str]) -> list[str]:
+    out = []
+    for i in ids:
+        try:
+            uuid.UUID(i)
+        except ValueError:
+            continue
+        out.append(i)
+    return out
+
+
+@router.patch("/me/activities/sport", response_model=BulkSportResult)
+def bulk_update_me_activities_sport(
+    body: BulkSportUpdate,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> BulkSportResult:
+    """Change the sport of several of the user's activities at once (≤500 ids).
+
+    Ids that don't exist or belong to another user are ignored (counted out of
+    ``matched``) — no existence leak, and one stale id doesn't fail the batch.
+    Declared BEFORE ``/me/activities/{activity_id}`` so ``sport`` is never
+    captured as an id.
+    """
+    ids = _valid_uuids(list(dict.fromkeys(body.activity_ids)))
+    found, changed = change_activities_sport(db, current_user.user_id, ids, body.sport)
+    return BulkSportResult(
+        sport=body.sport, matched=len(found), updated=len(changed), updated_ids=changed
+    )
+
+
+@router.patch("/me/activities/{activity_id}")
+def update_me_activity_sport(
+    activity_id: str,
+    body: SportUpdate,
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """Correct the sport of one of the user's activities.
+
+    404 when the activity doesn't exist OR belongs to another user — same
+    opacity as GET/DELETE. Idempotent: same sport → 200, nothing re-written.
+    """
+    if not _valid_uuids([activity_id]):
+        raise HTTPException(status_code=404, detail="Activity not found")
+    found, changed = change_activities_sport(
+        db, current_user.user_id, [activity_id], body.sport
+    )
+    if not found:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return {"id": activity_id, "sport": body.sport, "changed": bool(changed)}
 
 
 @router.delete("/me/activities/{activity_id}", status_code=204)

@@ -1,8 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { SPORT_COLORS, SPORT_ICONS, SPORT_LABELS } from '@/lib/constants';
+import { SPORT_COLORS, SPORT_ICONS } from '@/lib/constants';
+import { EDITABLE_SPORTS, updateActivitySport, type EditableSport } from '@/lib/activity-sport';
 import { useT } from '@/lib/i18n';
 import { formatDist, fmtElev, fmtDate } from '@/lib/format';
 import type { ActivityItem } from '@/lib/map-utils';
@@ -13,11 +14,56 @@ interface SelectedActivityCardProps {
   activity: ActivityItem;
   dateLocale: string;
   onClose: () => void;
+  /**
+   * Called with the NEW sport optimistically (before the PATCH resolves) and
+   * again with the OLD sport if it fails (rollback), so the page can keep its
+   * activity list + the "Ma heatmap" source in sync.
+   */
+  onSportChange?: (activityId: string, sport: string) => void;
 }
 
-function SelectedActivityCard({ activity, dateLocale, onClose }: SelectedActivityCardProps) {
+function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: SelectedActivityCardProps) {
   const t = useT();
-  const sportColor = SPORT_COLORS[activity.sport] ?? '#2d6a4f';
+  // Local copy for the optimistic update; re-synced when another activity is
+  // selected or the parent pushes a new sport.
+  const [sport, setSport] = useState(activity.sport);
+  const [saving, setSaving] = useState(false);
+  const [sportError, setSportError] = useState(false);
+  // Guards against a slow PATCH resolving after the user selected another trace.
+  const currentIdRef = useRef(activity.id);
+  useEffect(() => {
+    currentIdRef.current = activity.id;
+    setSport(activity.sport);
+    setSportError(false);
+  }, [activity.id, activity.sport]);
+
+  const sportColor = SPORT_COLORS[sport] ?? '#2d6a4f';
+  // A legacy/aliased stored sport (e.g. "offroad") stays selectable as the
+  // current value, but the user can only pick a concrete sport.
+  const sportOptions: string[] = (EDITABLE_SPORTS as readonly string[]).includes(sport)
+    ? [...EDITABLE_SPORTS]
+    : [sport, ...EDITABLE_SPORTS];
+
+  const handleSportChange = async (next: EditableSport) => {
+    const id = activity.id;
+    const prev = sport;
+    if (next === prev || saving) return;
+    setSport(next);
+    setSportError(false);
+    setSaving(true);
+    onSportChange?.(id, next);
+    try {
+      await updateActivitySport(id, next);
+    } catch {
+      onSportChange?.(id, prev);
+      if (currentIdRef.current === id) {
+        setSport(prev);
+        setSportError(true);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div
@@ -32,18 +78,36 @@ function SelectedActivityCard({ activity, dateLocale, onClose }: SelectedActivit
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <span style={{ fontSize: 24 }}>{SPORT_ICONS[activity.sport] ?? '🗺️'}</span>
+            <span style={{ fontSize: 24 }}>{SPORT_ICONS[sport] ?? '🗺️'}</span>
             <h3 style={{ fontSize: 16, fontWeight: 800, color: '#1a1a1a', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {activity.name}
             </h3>
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{
-              padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700,
-              background: sportColor, color: '#fff', textTransform: 'uppercase',
-            }}>
-              {SPORT_LABELS[activity.sport] ?? activity.sport}
-            </span>
+            <label
+              title={t('map.activity.sportHint')}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: '#666' }}
+            >
+              {t('map.activity.sport')}&nbsp;:
+              <select
+                data-testid="activity-sport-select"
+                aria-label={t('map.activity.sportChange')}
+                value={sport}
+                disabled={saving}
+                onChange={(e) => { void handleSportChange(e.target.value as EditableSport); }}
+                style={{
+                  padding: '2px 6px', borderRadius: 10, fontSize: 11, fontWeight: 700,
+                  background: sportColor, color: '#fff', border: 'none', cursor: saving ? 'wait' : 'pointer',
+                  opacity: saving ? 0.7 : 1,
+                }}
+              >
+                {sportOptions.map((s) => (
+                  <option key={s} value={s} disabled={!(EDITABLE_SPORTS as readonly string[]).includes(s)}>
+                    {t(`sport.${s}`)}
+                  </option>
+                ))}
+              </select>
+            </label>
             {activity.provider === 'strava' && activity.provider_activity_id ? (
               <a
                 href={`https://www.strava.com/activities/${activity.provider_activity_id}`}
@@ -62,6 +126,12 @@ function SelectedActivityCard({ activity, dateLocale, onClose }: SelectedActivit
           style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#aaa', fontSize: 18, padding: '0 0 0 8px', lineHeight: 1 }}
         >✕</button>
       </div>
+
+      {sportError && (
+        <div role="alert" data-testid="activity-sport-error" style={{ fontSize: 12, color: '#c0392b', marginBottom: 8 }}>
+          {t('map.activity.sportError')}
+        </div>
+      )}
 
       {/* Stats */}
       <div style={{ display: 'flex', gap: 20, fontSize: 13, color: '#333', marginBottom: 10 }}>

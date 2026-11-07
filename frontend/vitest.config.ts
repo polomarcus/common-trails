@@ -41,6 +41,7 @@ export default defineConfig({
       'lib/__tests__/heatmap-unavailable.test.tsx',
       'lib/__tests__/export-modal-focus.test.tsx',
       'lib/__tests__/notification-toasts-auth.test.tsx',
+      'lib/__tests__/selected-activity-sport.test.tsx',
     ],
     environment: 'node',
     globals: false,

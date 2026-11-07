@@ -1080,6 +1080,10 @@ const en: Translations = {
   'map.activity.date': 'Date',
   'map.activity.viewDetails': 'View details',
   'map.activity.similar': 'Similar',
+  'map.activity.sport': 'Sport',
+  'map.activity.sportChange': 'Change this activity\'s sport',
+  'map.activity.sportHint': 'Wrong sport at import? Fix it: the community heatmap will be updated.',
+  'map.activity.sportError': 'Couldn\'t change the sport — please try again.',
   // Activity photo strip
   'map.photos.stripLabel': 'Photos ({count})',
   'map.photos.stravaPhoto': 'Strava photo',
