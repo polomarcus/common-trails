@@ -66,10 +66,20 @@ their own archives, the public map is sparse — that is expected, not a bug.)
 
 Two independent mechanisms, both always applicable to the published map:
 
-1. **Endpoint masking (always on).** Extrémités masquées
-   (`TRACE_MASK_METERS`, **200 m**, `backend/app/services/trace_privacy.py`):
-   both ends of every published activity are masked. This is designed to hide
-   the two places most likely to be home/work — the trailhead and the finish.
+1. **Endpoint masking (always on, radial — `backend/app/services/trace_privacy.py`).** Every point lying within
+   `TRACE_MASK_METERS` (**default 200 m**) of an activity's physical start *or*
+   end is removed — anywhere in the trace, so a loop that swings back past the
+   house mid-ride is masked there too. "Start" and "end" are *zones*, not a
+   single point. Recorded fixes are grouped into distinct positions (fixes
+   within 30 m of each other, e.g. the rider waiting at the door, or a long
+   run of stale fixes). The zone always holds the first 3 distinct positions,
+   then more while it spans ≤ 100 m along the track. A 200 m disc is centred
+   on every zone fix, and everything before the start zone's last fix (after
+   the end zone's first fix) is dropped. This covers a stale first fix far
+   from home, even a long run of them. Masking runs on the raw fixes, before
+   densification. Cuts are interpolated exactly on the circle. An
+   out-and-back ride has *both* physical ends masked. (Until 2026-11 the trim was 200 m *along-track*, which stationary
+   GPS jitter at the door could consume within a few metres of home — fixed.)
 2. **Tunable distinct-user gate `HEATMAP_MIN_USERS`.** A fine display cell is
    only rendered once at least *K* **distinct users** have passed through it.
    - **K = 1 during the private beta** — everything shows, including solo

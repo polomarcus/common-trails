@@ -851,7 +851,7 @@ const en: Translations = {
   'methode.rawLatticeDetail': "Each masked point is binned into a cell of a density grid (~5 m across). The cell counts passes and distinct users — that count sets the intensity (the colour) of the trace. But the displayed line stays the real, precise GPS polyline: the grid is a counter, never a template.",
   'methode.communityGrows': "The more the community shares traces, the more gaps are filled.",
   'methode.privacyTitle': "Privacy: endpoint masking",
-  'methode.privacyDesc': "Your traces appear precise, but the start and end of every activity are automatically trimmed (about 200 m) so your home or workplace is never revealed.",
+  'methode.privacyDesc': "Your traces appear precise, but every point within about 200 m of each activity's start or finish is automatically removed (even if you ride past your door mid-ride), so your home or workplace is never revealed.",
   'methode.privacyMaskCallout': "This is endpoint masking, not K-anonymity: we cut the sensitive ends off each trace rather than merging traces together.",
   'methode.privacyFloorTitle': "The distinct-contributor threshold",
   'methode.privacyFloorDetail': "In addition, a per-cell distinct-user floor can hide sectors ridden by too few people. During the private beta it's set to 1 (everything shows, including a lone trace); it will be raised as the community grows.",

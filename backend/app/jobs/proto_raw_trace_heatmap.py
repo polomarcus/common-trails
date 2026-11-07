@@ -9,8 +9,9 @@ Two PNGs, both over the Hérault/Montpellier bbox used by the grid prototype
 (directly comparable to docs/img/grid-vs-osm-*.png):
 
   1. docs/img/raw-trace-heatmap.png       — full-bbox masked raw density (~5 m)
-  2. docs/img/raw-trace-endpoint-mask.png — zoom on the densest home cluster,
-                                            before-mask vs after-mask panels
+  2. docs/img/raw-trace-endpoint-mask.png — before/after mask around a
+                                            SYNTHETIC home (invented rides,
+                                            no DB, no real coordinates)
 
 Read-only: parses ``activities.geometry_geojson`` (Crouzet invariant #1 — the
 stored trace is never mutated). Touches no other table. numpy + PIL only (no
@@ -26,6 +27,7 @@ the density is representative enough to assess the look.
 
     python -m app.jobs.proto_raw_trace_heatmap
     TRACE_MASK_METERS=300 python -m app.jobs.proto_raw_trace_heatmap
+    python -m app.jobs.proto_raw_trace_heatmap --mask-only   # PNG 2 only, no DB
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from app.db.session import SessionLocal
+from app.services.raw_trace_display import mask_then_densify
 from app.services.trace_privacy import mask_endpoints, mask_meters
 
 # lon_min, lat_min, lon_max, lat_max — same window as the grid prototype.
@@ -81,14 +84,14 @@ def _load_activities(db) -> list[tuple[int, str]]:
 
 
 def _parse_coords(geojson_str: str) -> list:
-    from app.services.ingest import _densify_coords
+    """RAW fixes (mask BEFORE densify — see ``mask_then_densify``)."""
     try:
         coords = json.loads(geojson_str).get("coordinates", [])
     except (json.JSONDecodeError, AttributeError, TypeError):
         return []
     if not coords or len(coords) < 2:
         return []
-    return _densify_coords(coords, max_gap=3.0)
+    return coords
 
 
 def _accumulate(runs_per_activity, bbox, nx, ny) -> np.ndarray:
@@ -143,7 +146,7 @@ def render_full(db) -> dict:
         if not coords:
             continue
         total_pts += len(coords)
-        all_runs.append(mask_endpoints(coords, m))
+        all_runs.append(mask_then_densify(coords, m))
         parsed += 1
     mask_s = time.perf_counter() - t0
 
@@ -166,33 +169,82 @@ def render_full(db) -> dict:
     }
 
 
-def _find_home_cluster(db, acts) -> tuple[float, float]:
-    """Densest ~50 m cell of trace endpoints (start + end) inside the bbox."""
-    lon0, lat0, lon1, lat1 = BBOX
-    cell = 0.0005  # ~55 m
-    hist: dict[tuple[int, int], int] = {}
-    for _aid, geojson_str in acts:
-        try:
-            coords = json.loads(geojson_str).get("coordinates", [])
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            continue
-        coords = [c for c in coords if c is not None]
-        if len(coords) < 2:
-            continue
-        for pt in (coords[0], coords[-1]):
-            lon, lat = pt[0], pt[1]
-            if lon0 <= lon <= lon1 and lat0 <= lat <= lat1:
-                k = (int(lat / cell), int(lon / cell))
-                hist[k] = hist.get(k, 0) + 1
-    if not hist:
-        return (lon0 + lon1) / 2, (lat0 + lat1) / 2
-    (ilat, ilon), _ = max(hist.items(), key=lambda kv: kv[1])
-    return (ilon + 0.5) * cell, (ilat + 0.5) * cell
+
+# ── Endpoint-mask illustration: SYNTHETIC data only ─────────────────────────
+#
+# This PNG is committed to the PUBLIC repo, so it must never be rendered from
+# real traces: the previous version zoomed on the densest real endpoint
+# cluster (= a contributor's home), and its "after" panel still showed that
+# home under the old along-track mask (data audit C1/L1, 2026-11). It is now
+# drawn from invented rides around an invented home in the middle of the
+# Atlantic, through the real ``mask_endpoints``.
+
+_SYN_HOME = (-30.0, 45.0)  # open ocean — deliberately nobody's address
+_SYN_SEED = 20261107
 
 
-def render_endpoint_mask(db) -> dict:
-    acts = _load_activities(db)
-    clon, clat = _find_home_cluster(db, acts)
+def _syn_offset(east_m: float, north_m: float) -> list:
+    lon0, lat0 = _SYN_HOME
+    return [lon0 + east_m / (111_195.0 * math.cos(math.radians(lat0))),
+            lat0 + north_m / 111_195.0]
+
+
+def _syn_path(waypoints: list[tuple[float, float]], step: float = 3.0) -> list:
+    out: list = []
+    for (e0, n0), (e1, n1) in zip(waypoints, waypoints[1:], strict=False):
+        n = max(1, int(math.hypot(e1 - e0, n1 - n0) / step))
+        out.extend(_syn_offset(e0 + (e1 - e0) * i / n, n0 + (n1 - n0) * i / n)
+                   for i in range(n))
+    out.append(_syn_offset(*waypoints[-1]))
+    return out
+
+
+def _syn_jitter(rng, seconds: int, amp: float) -> list:
+    return [_syn_offset(rng.uniform(-amp, amp), rng.uniform(-amp, amp))
+            for _ in range(seconds)]
+
+
+def synthetic_home_rides(n: int = 40) -> list[list]:
+    """Invented rides from one home: 1–3 min of ±6 m GPS jitter at the door,
+    out along one of four streets, back along another (some pass the door
+    mid-ride), 1–3 min of jitter at the end. Plus through-traffic on a road
+    that never touches the house."""
+    import random
+    rng = random.Random(_SYN_SEED)
+    streets = [  # (east, north) polylines leaving the house
+        [(0, 0), (40, 60), (90, 200), (120, 450), (150, 900)],
+        [(0, 0), (-70, 20), (-260, 60), (-520, 40), (-900, 80)],
+        [(0, 0), (30, -80), (60, -250), (40, -500), (80, -900)],
+        [(0, 0), (90, -10), (280, -60), (540, -40), (900, -90)],
+    ]
+    def far(street):  # close the loop on a 3 km arc, outside the rendered box
+        e, n_ = street[-1]
+        return math.atan2(n_, e)
+
+    def arc(a0: float, a1: float) -> list[tuple[float, float]]:
+        steps = 24
+        da = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
+        return [(3000 * math.cos(a0 + da * k / steps), 3000 * math.sin(a0 + da * k / steps))
+                for k in range(steps + 1)]
+
+    rides = []
+    for i in range(n):
+        out_s, back_s = rng.sample(streets, 2)
+        wps = out_s + arc(far(out_s), far(back_s)) + list(reversed(back_s))
+        if i % 5 == 0:  # passes the door mid-ride, then leaves again
+            last = streets[(i // 5) % 4]
+            wps = out_s + list(reversed(out_s))[1:] + last[1:]
+        trace = (_syn_jitter(rng, rng.randint(60, 180), 6.0) + _syn_path(wps)
+                 + _syn_jitter(rng, rng.randint(60, 180), 6.0))
+        rides.append(trace)
+    for _ in range(n // 2):  # through-traffic, 320 m north of the house
+        y = 320 + rng.uniform(-4, 4)
+        rides.append(_syn_path([(-900, y), (-300, y + 30), (300, y - 20), (900, y)]))
+    return rides
+
+
+def render_endpoint_mask() -> dict:
+    clon, clat = _SYN_HOME
     half_m = 400.0
     dlat = half_m / 110_574
     dlon = half_m / (111_320 * math.cos(math.radians(clat)))
@@ -201,55 +253,57 @@ def render_endpoint_mask(db) -> dict:
     nx, ny = _grid_dims(zbox, pixel_m)
     m = mask_meters()
 
-    unmasked_runs = []
-    masked_runs = []
-    for _aid, geojson_str in acts:
-        coords = _parse_coords(geojson_str)
-        if not coords:
-            continue
-        # "before": treat the whole trace as one display run (drop break sentinels)
-        unmasked_runs.append([[c for c in coords if c is not None]])
-        masked_runs.append(mask_endpoints(coords, m))
-
+    rides = synthetic_home_rides()
+    unmasked_runs = [[r] for r in rides]
+    masked_runs = [mask_endpoints(r, m) for r in rides]
     acc_before = _accumulate(unmasked_runs, zbox, nx, ny)
     acc_after = _accumulate(masked_runs, zbox, nx, ny)
-    vmax = max(float(acc_before.max()), 1.0)
     left = _colorize(acc_before, 100.0)
     right = _colorize(acc_after, 100.0)
+
+    # Faint outline of the R circle on the "after" panel.
+    rd = ImageDraw.Draw(right)
+    r_px = m / pixel_m
+    cx, cy = nx / 2, ny / 2
+    rd.ellipse((cx - r_px, cy - r_px, cx + r_px, cy + r_px), outline=(70, 110, 130))
 
     gap = 16
     canvas = Image.new("RGB", (nx * 2 + gap, ny + 34), (0, 0, 0))
     canvas.paste(left, (0, 34))
     canvas.paste(right, (nx + gap, 34))
     d = ImageDraw.Draw(canvas)
-    d.text((6, 10), "AVANT masquage (trace brute → domicile visible)", fill=(255, 255, 255))
-    d.text((nx + gap + 6, 10), f"APRES masquage {int(m)} m (zone privee ouverte)", fill=(120, 230, 255))
+    d.text((6, 4), "AVANT masquage (donnees synthetiques)", fill=(255, 255, 255))
+    d.text((6, 18), "attente GPS au depart = pelote au domicile", fill=(200, 200, 200))
+    d.text((nx + gap + 6, 4), f"APRES masquage radial {int(m)} m", fill=(120, 230, 255))
+    d.text((nx + gap + 6, 18), "aucun point a moins de R du depart/arrivee",
+           fill=(120, 230, 255))
     os.makedirs(OUT_DIR, exist_ok=True)
     path = os.path.join(OUT_DIR, "raw-trace-endpoint-mask.png")
     canvas.save(path, optimize=True)
 
     return {
         "path": path, "px_per_panel": f"{nx}x{ny}", "pixel_m": pixel_m,
-        "home_center": (round(clon, 5), round(clat, 5)), "mask_m": m,
-        "endpoints_before_px": int((acc_before > 0).sum()),
-        "endpoints_after_px": int((acc_after > 0).sum()),
-        "max_overlap_before": int(vmax),
+        "mask_m": m, "rides": len(rides),
+        "occupied_px_before": int((acc_before > 0).sum()),
+        "occupied_px_after": int((acc_after > 0).sum()),
     }
 
 
 def main() -> None:
-    db = SessionLocal()
-    try:
-        print("=== RAW-TRACE HEATMAP (full bbox) ===")
-        r = render_full(db)
-        for k, v in r.items():
-            print(f"  {k}: {v}")
-        print("\n=== ENDPOINT MASKING (home-cluster zoom) ===")
-        e = render_endpoint_mask(db)
-        for k, v in e.items():
-            print(f"  {k}: {v}")
-    finally:
-        db.close()
+    import sys
+    if "--mask-only" not in sys.argv:
+        db = SessionLocal()
+        try:
+            print("=== RAW-TRACE HEATMAP (full bbox) ===")
+            r = render_full(db)
+            for k, v in r.items():
+                print(f"  {k}: {v}")
+        finally:
+            db.close()
+    print("\n=== ENDPOINT MASKING (synthetic home, no real data) ===")
+    e = render_endpoint_mask()
+    for k, v in e.items():
+        print(f"  {k}: {v}")
 
 
 if __name__ == "__main__":
