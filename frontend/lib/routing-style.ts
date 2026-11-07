@@ -95,6 +95,9 @@ export const DFCI_COLOR = '#cc0000';              // DFCI red
 export const DFCI_COLOR_WHITE = '#ffffff';         // DFCI white (casing)
 export const DFCI_LINE_WIDTH = 3;
 export const DFCI_DASH_ARRAY = [4, 3];
+// Below this zoom the dense DFCI network renders as solid red blobs that
+// drown the heatmap (beta feedback) — hide it until the tracks are legible.
+export const DFCI_MIN_ZOOM = 10;
 
 // ── Route confidence levels (per-edge community evidence) ──────────
 // 3-tier system: high (verified), medium (few riders), low (unverified)

@@ -13,8 +13,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { addMapSourcesAndLayers } from '@/lib/init-map-layers';
 import { MY_TRACES_COLOR, SPORT_COLORS } from '@/lib/constants';
 import { HEAT_RAMP_STOPS } from '@/lib/community-heatmap-layers';
+import { DFCI_MIN_ZOOM } from '@/lib/routing-style';
 
-interface LayerSpec { id: string; source?: string; paint?: Record<string, unknown> }
+interface LayerSpec { id: string; source?: string; minzoom?: number; paint?: Record<string, unknown> }
 
 function makeMap() {
   const layers: LayerSpec[] = [];
@@ -93,5 +94,16 @@ describe('/map — "Ma heatmap" layers vs the community heatmap', () => {
       expect(idx, `${id} must be added`).toBeGreaterThanOrEqual(0);
       expect(idx, `${id} must be above the community heatmap`).toBeGreaterThan(lastCommunity);
     }
+  });
+
+  // Beta feedback: at z6–z9 the dense DFCI network rendered as solid red blobs
+  // over whole regions, drowning the heatmap. Every DFCI layer starts at z10.
+  it('hides every DFCI layer below DFCI_MIN_ZOOM (no red blobs at wide zoom)', () => {
+    const m = makeMap();
+    addMapSourcesAndLayers(m);
+    const dfci = m.layers.filter((l) => l.source === 'dfci-trails');
+    expect(dfci.map((l) => l.id).sort()).toEqual(['dfci-trails-casing', 'dfci-trails-label', 'dfci-trails-line']);
+    expect(DFCI_MIN_ZOOM).toBeGreaterThanOrEqual(10);
+    for (const l of dfci) expect(l.minzoom, `${l.id} minzoom`).toBe(DFCI_MIN_ZOOM);
   });
 });
