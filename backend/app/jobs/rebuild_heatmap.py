@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text as sa_text
 
-from app.services.provenance import COMMUNITY_SOURCE
+from app.services.provenance import community_eligible_conditions
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -136,12 +136,10 @@ def main(since: datetime | None = None, bbox: tuple[float, float, float, float] 
         # heat_edges are entirely Strava-API-sourced) will EMPTY the community
         # map until manual_upload archives arrive — the intended compliance
         # outcome (docs/strava/community-contribution-ux.md §5).
-        where_parts = [
-            "contribute_heatmap = true",
-            "geometry_geojson IS NOT NULL",
-            "source = :community_source",
-        ]
-        params: dict = {"community_source": COMMUNITY_SOURCE}
+        # SSOT ``provenance.community_eligible_conditions`` (provenance +
+        # geometry + consent + dated) so this legacy path can't drift from the
+        # raw build / stats.
+        where_parts, params = community_eligible_conditions()
         if since:
             where_parts.append("created_at > :since")
             params["since"] = since

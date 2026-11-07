@@ -149,6 +149,9 @@ def process_heat_compute(activity_id: str, user_id: str) -> dict[str, Any]:
         from app.services.provenance import is_community_source
         if not is_community_source(activity.source):
             return {"activity_id": activity_id, "status": "noop", "edges_indexed": 0, "cells_indexed": 0}
+        # Undated (planned route) → personal-only (provenance SSOT).
+        if activity.activity_date is None:
+            return {"activity_id": activity_id, "status": "noop", "edges_indexed": 0, "cells_indexed": 0}
 
         sport = activity.sport or "road"
         geometry_geojson = activity.geometry_geojson

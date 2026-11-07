@@ -255,6 +255,107 @@ def parse_strava_activities_csv_checked(csv_bytes: bytes) -> tuple[dict[str, str
     return out, True
 
 
+# "Activity Date" column of activities.csv (``_norm_type`` form).
+_CSV_DATE_HEADERS = frozenset({
+    "activitydate", "datedelactivite", "datedactivite", "dateactivite",
+})
+
+# French month names / abbreviations as a localized Strava export prints them
+# ("2 mars 2024, 07:30:00"), accent-stripped + lowercased + no trailing dot.
+_FR_MONTHS = {
+    "janv": 1, "janvier": 1, "fevr": 2, "fevrier": 2, "mars": 3, "avr": 4,
+    "avril": 4, "mai": 5, "juin": 6, "juil": 7, "juillet": 7, "aout": 8,
+    "sept": 9, "septembre": 9, "oct": 10, "octobre": 10, "nov": 11,
+    "novembre": 11, "dec": 12, "decembre": 12,
+}
+
+
+def parse_strava_csv_date(value: str | None):
+    """Parse a Strava activities.csv ``Activity Date`` (UTC) → aware datetime.
+
+    Handles the English export format (``"Mar 2, 2024, 7:30:00 AM"``), the
+    French one (``"2 mars 2024, 07:30:00"``) and ISO-8601. Anything else, or an
+    implausible year, → ``None`` (the activity then simply stays undated —
+    never a guessed date).
+    """
+    import re
+    import unicodedata
+    from datetime import UTC, datetime
+
+    v = (value or "").strip()
+    if not v:
+        return None
+    dt = None
+    for fmt in ("%b %d, %Y, %I:%M:%S %p", "%b %d, %Y %I:%M:%S %p"):
+        try:
+            dt = datetime.strptime(v, fmt)
+            break
+        except ValueError:
+            continue
+    if dt is None:
+        m = re.fullmatch(
+            r"(\d{1,2})\s+([^\s\d,]+)\s+(\d{4}),?\s+(\d{1,2}):(\d{2}):(\d{2})", v
+        )
+        if m:
+            month_key = unicodedata.normalize("NFKD", m.group(2)).encode("ascii", "ignore")
+            month = _FR_MONTHS.get(month_key.decode().lower().rstrip("."))
+            if month:
+                try:
+                    dt = datetime(int(m.group(3)), month, int(m.group(1)),
+                                  int(m.group(4)), int(m.group(5)), int(m.group(6)))
+                except ValueError:
+                    dt = None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    if not (2000 <= dt.year <= datetime.now(UTC).year + 1):
+        return None
+    return dt
+
+
+def parse_strava_activities_csv_dates(csv_bytes: bytes) -> dict:
+    """``{Filename → aware datetime}`` from activities.csv's ``Activity Date``.
+
+    Used ONLY as a fallback for a listed activity whose file carries no
+    timestamp: a CSV-listed activity IS a real activity, so it must not be
+    left undated (= excluded from the public heatmap) by a parser gap.
+    Rows without a Filename or with an unparseable date are omitted.
+    Best-effort: any CSV error → whatever was read so far.
+    """
+    if not csv_bytes:
+        return {}
+    import csv as _csv
+    import io as _io
+
+    if _csv.field_size_limit() < _CSV_FIELD_LIMIT:
+        _csv.field_size_limit(_CSV_FIELD_LIMIT)
+    out: dict = {}
+    try:
+        reader = _csv.DictReader(_io.StringIO(csv_bytes.decode("utf-8-sig", errors="replace")))
+        fieldnames = reader.fieldnames or []
+        col_file, _t, _n = _resolve_csv_columns(fieldnames)
+        col_date = next(
+            (h for h in fieldnames if h is not None and _norm_type(h) in _CSV_DATE_HEADERS),
+            None,
+        )
+        if col_file is None or col_date is None:
+            return out
+        for row in reader:
+            filename = (row.get(col_file) or "").strip()
+            if not filename:
+                continue
+            dt = parse_strava_csv_date(row.get(col_date))
+            if dt is not None:
+                out[filename] = dt
+    except Exception:  # noqa: BLE001 — a date hint is strictly optional
+        return out
+    return out
+
+
 GPX_TRACK_TYPE_TO_SPORT: dict[str, str | None] = {
     # ── Garmin Connect cycling family ──────────────────────────────────
     "mountain_biking": "mtb",

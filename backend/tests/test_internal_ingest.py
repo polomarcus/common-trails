@@ -1,9 +1,13 @@
 """Tests for /internal/ingest/heat (Cloud Tasks handler) and the
 ``cloud_tasks.enqueue_heat_compute`` inline-fallback path used in dev.
 """
+import zlib
+from datetime import UTC, datetime, timedelta
+
 import gpxpy
 import gpxpy.gpx
 
+_T0 = datetime(2024, 1, 1, 7, 0, tzinfo=UTC)
 
 def _make_gpx_bytes(name: str = "Test", n_points: int = 10) -> bytes:
     gpx = gpxpy.gpx.GPX()
@@ -11,12 +15,15 @@ def _make_gpx_bytes(name: str = "Test", n_points: int = 10) -> bytes:
     gpx.tracks.append(track)
     segment = gpxpy.gpx.GPXTrackSegment()
     track.segments.append(segment)
+    # Timestamped: an undated trace never feeds the public heatmap (provenance SSOT).
+    _start = _T0 + timedelta(minutes=zlib.crc32(name.encode()) % 500_000)
     for i in range(n_points):
         segment.points.append(
             gpxpy.gpx.GPXTrackPoint(
                 latitude=43.60 + i * 0.001,
                 longitude=3.88 + i * 0.001,
                 elevation=80 + i,
+                time=_start + timedelta(seconds=10 * i),
             )
         )
     return gpx.to_xml().encode("utf-8")

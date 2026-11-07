@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Activity
 from app.services.activity_deletion import purge_activity_heat
-from app.services.provenance import is_community_source
+from app.services.provenance import is_community_eligible
 from app.services.raw_trace_display import raw_display_enabled
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,12 @@ logger = logging.getLogger(__name__)
 
 def _community_eligible(act: Activity) -> bool:
     """Python mirror of ``provenance.community_eligible_conditions``."""
-    return bool(act.geometry_geojson and act.contribute_heatmap and is_community_source(act.source))
+    return is_community_eligible(
+        source=act.source,
+        contribute_heatmap=act.contribute_heatmap,
+        has_geometry=bool(act.geometry_geojson),
+        activity_date=act.activity_date,
+    )
 
 
 def change_activities_sport(

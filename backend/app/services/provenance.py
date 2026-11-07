@@ -61,7 +61,12 @@ def community_eligible_conditions(
     * ``source = 'manual_upload'`` (``COMMUNITY_SOURCE``) — the ONLY eligible
       provenance (``strava_api`` + legacy ``NULL`` are personal-only, §5.4/§5.10);
     * ``geometry_geojson IS NOT NULL`` — it actually has a trace to draw/count;
-    * ``contribute_heatmap = true`` — the user consented to contribute it.
+    * ``contribute_heatmap = true`` — the user consented to contribute it;
+    * ``activity_date IS NOT NULL`` — it is DATED. An undated trace cannot be
+      shown to have been ridden (in practice: planned itineraries — Strava /
+      Komoot / … route GPX uploaded as files), so it stays in the owner's
+      private "Ma heatmap" and never feeds anything public. Non-destructive:
+      the row is untouched, so the rule is fully reversible.
 
     Returns the conditions as a LIST so callers can append their own scoping
     (bbox, date window) before ``" AND ".join(...)``. ``source_param`` names the
@@ -72,8 +77,26 @@ def community_eligible_conditions(
             "geometry_geojson IS NOT NULL",
             "contribute_heatmap = true",
             f"source = :{source_param}",
+            "activity_date IS NOT NULL",
         ],
         {source_param: COMMUNITY_SOURCE},
+    )
+
+
+def is_community_eligible(
+    *,
+    source: str | None,
+    contribute_heatmap: bool | None,
+    has_geometry: bool,
+    activity_date,
+) -> bool:
+    """Python mirror of :func:`community_eligible_conditions` (same four rules)
+    for code paths holding an ORM row / an ingest dict instead of SQL."""
+    return bool(
+        has_geometry
+        and contribute_heatmap
+        and is_community_source(source)
+        and activity_date is not None
     )
 
 

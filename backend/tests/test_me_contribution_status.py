@@ -5,10 +5,13 @@ after a consented GPX upload (a community-eligible manual_upload activity) they
 read as contributed with count≥1 and a last_contribution_at. Auth is required.
 """
 import uuid
+import zlib
+from datetime import UTC, datetime, timedelta
 
 import gpxpy
 import gpxpy.gpx
 
+_T0 = datetime(2024, 1, 1, 7, 0, tzinfo=UTC)
 
 def _gpx_bytes(name: str, lon0: float, lat0: float, n: int = 6) -> bytes:
     gpx = gpxpy.gpx.GPX()
@@ -16,9 +19,12 @@ def _gpx_bytes(name: str, lon0: float, lat0: float, n: int = 6) -> bytes:
     gpx.tracks.append(track)
     seg = gpxpy.gpx.GPXTrackSegment()
     track.segments.append(seg)
+    # Timestamped: an undated trace never feeds the public heatmap (provenance SSOT).
+    _start = _T0 + timedelta(minutes=zlib.crc32(f"{name}{lon0}{lat0}".encode()) % 500_000)
     for i in range(n):
         seg.points.append(gpxpy.gpx.GPXTrackPoint(
-            latitude=lat0 + i * 0.001, longitude=lon0 + i * 0.001, elevation=40 + i))
+            latitude=lat0 + i * 0.001, longitude=lon0 + i * 0.001, elevation=40 + i,
+            time=_start + timedelta(seconds=10 * i)))
     return gpx.to_xml().encode()
 
 

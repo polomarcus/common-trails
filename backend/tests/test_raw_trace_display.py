@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text as sa_text
@@ -44,6 +45,8 @@ _LON_BASE = -40.0
 _LON_STRAVA = -42.0   # a strava_api activity → must be EXCLUDED (provenance)
 _LON_NULL = -42.2     # legacy source=NULL activity → must be EXCLUDED
 _MANUAL = "manual_upload"  # provenance.COMMUNITY_SOURCE
+# Community-eligible rows must be DATED (undated = planned route → never public).
+_DATED = datetime(2024, 3, 1, 7, 30, tzinfo=UTC)
 
 
 def _read_lines(path: str) -> list[str]:
@@ -67,22 +70,22 @@ def seeded_activities():
     db.commit()
     acts = [
         # ~2 km manual_upload line → survives 200 m masking on both ends.
-        Activity(user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
                  geometry_geojson=_line_geojson(200, _LON_BASE), contribute_heatmap=True),
         # SAME user, SAME corridor, 2nd activity → 2 passes but 1 distinct user.
-        Activity(user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
                  geometry_geojson=_line_geojson(200, _LON_BASE), contribute_heatmap=True),
         # ~150 m line → fully masked at 200 m → contributes nothing.
-        Activity(user_id=_TEST_USER, provider="file", sport="road", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="road", source=_MANUAL,
                  geometry_geojson=_line_geojson(15, _LON_BASE + 0.05), contribute_heatmap=True),
         # not consented → excluded.
-        Activity(user_id=_TEST_USER, provider="file", sport="road", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="road", source=_MANUAL,
                  geometry_geojson=_line_geojson(200, _LON_BASE + 0.10), contribute_heatmap=False),
         # Strava-API provenance → MUST be excluded from the public ODbL map.
-        Activity(user_id=_TEST_USER, provider="strava", sport="gravel", source="strava_api",
+        Activity(activity_date=_DATED, user_id=_TEST_USER, provider="strava", sport="gravel", source="strava_api",
                  geometry_geojson=_line_geojson(200, _LON_STRAVA), contribute_heatmap=True),
         # legacy source=NULL → unknown provenance → MUST be excluded.
-        Activity(user_id=_TEST_USER, provider="file", sport="gravel", source=None,
+        Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel", source=None,
                  geometry_geojson=_line_geojson(200, _LON_NULL), contribute_heatmap=True),
     ]
     for a in acts:
@@ -176,12 +179,12 @@ def seeded_two_users():
     db.commit()
     acts = [
         # Shared corridor — both users ride the SAME ~2 km line → 2 users/cell.
-        Activity(user_id=_USER_A, provider="file", sport="gravel", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_USER_A, provider="file", sport="gravel", source=_MANUAL,
                  geometry_geojson=_line_geojson(200, _LON_SHARED), contribute_heatmap=True),
-        Activity(user_id=_USER_B, provider="file", sport="gravel", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_USER_B, provider="file", sport="gravel", source=_MANUAL,
                  geometry_geojson=_line_geojson(200, _LON_SHARED), contribute_heatmap=True),
         # Solo corridor — user A only → 1 user/cell.
-        Activity(user_id=_USER_A, provider="file", sport="gravel", source=_MANUAL,
+        Activity(activity_date=_DATED, user_id=_USER_A, provider="file", sport="gravel", source=_MANUAL,
                  geometry_geojson=_line_geojson(200, _LON_SOLO), contribute_heatmap=True),
     ]
     for a in acts:
@@ -438,7 +441,7 @@ def seeded_glitch_activity():
     body = [[_LON_BASE, LAT + i * STEP] for i in range(200)]
     glitch = [[_LON_BASE, 20.0] for _ in range(8)]
     coords = body[:100] + glitch + body[100:]
-    act = Activity(user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
+    act = Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
                    geometry_geojson=json.dumps({"type": "LineString", "coordinates": coords}),
                    contribute_heatmap=True)
     db.add(act)
@@ -501,7 +504,7 @@ def seeded_ocean_activity():
     db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": _TEST_USER})
     db.commit()
     coords = [[-29.8, 20.09 + i * 1e-4] for i in range(8)]
-    act = Activity(user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
+    act = Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
                    geometry_geojson=json.dumps({"type": "LineString", "coordinates": coords}),
                    contribute_heatmap=True)
     db.add(act)
@@ -665,7 +668,7 @@ def test_drawn_coordinates_are_precise_not_lattice_snapped(tmp_path, monkeypatch
     db = SessionLocal()
     db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": _TEST_USER})
     db.commit()
-    db.add(Activity(user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
+    db.add(Activity(activity_date=_DATED, user_id=_TEST_USER, provider="file", sport="gravel", source=_MANUAL,
                     geometry_geojson=json.dumps({"type": "LineString", "coordinates": coords}),
                     contribute_heatmap=True))
     db.commit()

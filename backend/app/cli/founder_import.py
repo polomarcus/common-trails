@@ -146,6 +146,8 @@ def import_founder_archive(
             # RAM at a time — the ~400 MB decompressed payload is never
             # materialised whole.
             first = True
+            # activities.csv dates — fallback for a listed file with no timestamp.
+            csv_dates = archive_intake.csv_activity_dates(zf)
             for name, raw, csv_sport in archive_intake.iter_zip_members(zf):
                 if pace_seconds > 0 and not first:
                     time.sleep(pace_seconds)
@@ -179,6 +181,7 @@ def import_founder_archive(
                         source=archive_intake.ARCHIVE_PROVENANCE,
                         skip_heat_computation=skip_heat_computation,
                         collect_touched_ways=touched_ways,
+                        fallback_date=csv_dates.get(name),
                     )
                     if outcome == "imported":
                         summary["imported"] += 1

@@ -251,6 +251,10 @@ def test_synthetic_strava_export_full_pipeline_and_idempotent_redrop(pipeline):
     assert f"<strong>{expected['skipped']}</strong> ignorées (hors-scope / doublons)" in e_html
     assert f"<strong>{expected['failed']}</strong> en erreur" in e_html
     assert "sans sport identifiable" not in e_html  # routes never land in "pick a sport"
+    # Every imported ride is dated (the untimed 1015.gpx via its activities.csv
+    # date) → no "sans date" line, every one goes public.
+    assert expected["imported_undated"] == 0
+    assert "sans date" not in e_html
     assert "Ma heatmap" in e_html
 
     # ── Rebuild ping fired (once, before the email — ordering pinned elsewhere) ──
@@ -289,5 +293,24 @@ def test_synthetic_garmin_export_full_pipeline(pipeline):
     assert f"<strong>{expected['imported']}</strong> importées" in html
     # The FIT with no usable sport gets its own actionable line.
     assert f"<strong>{expected['skipped_no_sport']}</strong> sans sport identifiable" in html
+    # The untimed itinerary: imported (Ma heatmap) but never public — said so.
+    assert (f"<strong>{expected['imported_undated']}</strong> trace sans date "
+            "(itinéraires planifiés ?) : visible dans Ma heatmap uniquement, "
+            "pas sur la carte publique") in html
+    me = pipeline["client"].get("/me/activities?limit=5000", headers=pipeline["headers"]).json()
+    assert me["total"] == expected["imported"]
+    from app.db.session import SessionLocal
+    from app.services.provenance import community_eligible_conditions
+
+    conds, params = community_eligible_conditions()
+    db = SessionLocal()
+    try:
+        public = db.execute(
+            sa_text(f"SELECT COUNT(*) FROM activities WHERE user_id = :u AND {' AND '.join(conds)}"),
+            {**params, "u": pipeline["user_id"]},
+        ).scalar()
+    finally:
+        db.close()
+    assert public == expected["imported"] - expected["imported_undated"]
     assert "<strong>1</strong> ignorée (hors-scope / doublons)" in html
     assert res["pings"] == 1

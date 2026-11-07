@@ -49,7 +49,7 @@ _GOOD_GPX = (
     "</name><type>road_biking</type><trkseg>"
     + "".join(
         f'<trkpt lat="{43.6 + i * 0.001}" lon="{3.87 + i * 0.001}">'
-        f"<ele>{100 + i}</ele></trkpt>"
+        f"<ele>{100 + i}</ele><time>2024-03-01T07:30:{10 + i:02d}Z</time></trkpt>"
         for i in range(8)
     )
     + "</trkseg></trk></gpx>"

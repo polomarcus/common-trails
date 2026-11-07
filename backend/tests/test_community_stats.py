@@ -78,22 +78,26 @@ def _insert_activity(
     source: str | None = "manual_upload",
     geometry_geojson: str | None = _GEOJSON,
     contribute_heatmap: bool = True,
+    dated: bool = True,
 ) -> None:
     """Insert one activity. Defaults produce a COMMUNITY-ELIGIBLE row
-    (manual_upload + geometry + contribute_heatmap); override the kwargs to
-    build the personal / non-consented / no-geometry exclusion cases."""
+    (manual_upload + geometry + contribute_heatmap + dated); override the
+    kwargs to build the personal / non-consented / no-geometry / undated
+    exclusion cases."""
     db.execute(
         sa_text(
             """
             INSERT INTO activities
               (id, user_id, provider, sport, distance_m, source,
-               geometry_geojson, contribute_heatmap)
-            VALUES (:id, :uid, 'test', 'road', :dist, :src, :geo, :contrib)
+               geometry_geojson, contribute_heatmap, activity_date)
+            VALUES (:id, :uid, 'test', 'road', :dist, :src, :geo, :contrib,
+                    CASE WHEN :dated THEN now() ELSE NULL END)
             """
         ),
         {
             "id": act_id, "uid": user_id, "dist": dist_m, "src": source,
             "geo": geometry_geojson, "contrib": contribute_heatmap,
+            "dated": dated,
         },
     )
 
@@ -152,7 +156,8 @@ def test_only_community_eligible_activities_are_counted():
     u_legacy = str(uuid.uuid4())    # source NULL → excluded
     u_nogeo = str(uuid.uuid4())     # no geometry → excluded
     u_noconsent = str(uuid.uuid4())  # contribute_heatmap=false → excluded
-    ids = [str(uuid.uuid4()) for _ in range(5)]
+    u_undated = str(uuid.uuid4())   # activity_date NULL (planned route) → excluded
+    ids = [str(uuid.uuid4()) for _ in range(6)]
     try:
         base = compute_community_stats(db, min_uc=1)
 
@@ -161,6 +166,7 @@ def test_only_community_eligible_activities_are_counted():
         _insert_activity(db, ids[2], u_legacy, 3000.0, source=None)
         _insert_activity(db, ids[3], u_nogeo, 4000.0, geometry_geojson=None)
         _insert_activity(db, ids[4], u_noconsent, 5000.0, contribute_heatmap=False)
+        _insert_activity(db, ids[5], u_undated, 6000.0, dated=False)
         db.commit()
 
         after = compute_community_stats(db, min_uc=1)
@@ -169,8 +175,8 @@ def test_only_community_eligible_activities_are_counted():
         assert after["contributors"] == base["contributors"] + 1
     finally:
         db.execute(
-            sa_text("DELETE FROM activities WHERE id IN (:a,:b,:c,:d,:e)"),
-            {"a": ids[0], "b": ids[1], "c": ids[2], "d": ids[3], "e": ids[4]},
+            sa_text("DELETE FROM activities WHERE id IN (:a,:b,:c,:d,:e,:f)"),
+            {"a": ids[0], "b": ids[1], "c": ids[2], "d": ids[3], "e": ids[4], "f": ids[5]},
         )
         db.commit()
         db.close()

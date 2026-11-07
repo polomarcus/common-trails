@@ -24,6 +24,7 @@ export interface ActivityItem {
   provider: string; // "strava" | "file"
   provider_activity_id: string | null; // Strava activity ID when provider=strava
   total_photo_count?: number; // count of associated ActivityPhoto rows (Strava import phase 4)
+  undated?: boolean; // no real date (activity_date above is then created_at) → never on the public heatmap
 }
 
 // ── Scalar haversine (used by functions that receive raw lon/lat numbers) ───

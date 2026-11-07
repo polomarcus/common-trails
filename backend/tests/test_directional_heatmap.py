@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text as sa_text
@@ -169,6 +170,8 @@ _LON_GRAVEL = -48.0
 _LON_ROAD = -48.3
 _USER = "dir-flow-user"
 _MANUAL = "manual_upload"
+# Community-eligible rows must be DATED (undated = planned route → never public).
+_DATED = datetime(2024, 3, 1, 7, 30, tzinfo=UTC)
 
 
 def _line_geojson(n: int, lon: float) -> str:
@@ -182,7 +185,7 @@ def seeded_directional():
     db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": _USER})
     db.commit()
     for sport, lon in (("gravel", _LON_GRAVEL), ("road", _LON_ROAD)):
-        db.add(Activity(user_id=_USER, provider="file", sport=sport, source=_MANUAL,
+        db.add(Activity(activity_date=_DATED, user_id=_USER, provider="file", sport=sport, source=_MANUAL,
                         geometry_geojson=_line_geojson(200, lon), contribute_heatmap=True))
     db.commit()
     db.close()
@@ -430,9 +433,9 @@ def test_export_orients_every_feature_to_the_dominant_direction(tmp_path, monkey
     db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": user})
     db.commit()
     for _ in range(7):
-        db.add(Activity(user_id=user, provider="file", sport="gravel", source=_MANUAL,
+        db.add(Activity(activity_date=_DATED, user_id=user, provider="file", sport="gravel", source=_MANUAL,
                         geometry_geojson=_lg(north), contribute_heatmap=True))
-    db.add(Activity(user_id=user, provider="file", sport="gravel", source=_MANUAL,
+    db.add(Activity(activity_date=_DATED, user_id=user, provider="file", sport="gravel", source=_MANUAL,
                     geometry_geojson=_lg(south), contribute_heatmap=True))
     db.commit()
     try:
@@ -489,12 +492,12 @@ def test_export_emits_real_forward_backward_on_gravel(tmp_path, monkeypatch):
     north = [[lon_g, LAT + i * STEP] for i in range(200)]
     south = north[::-1]
     for _ in range(5):
-        db.add(Activity(user_id=user, provider="file", sport="gravel", source=_MANUAL,
+        db.add(Activity(activity_date=_DATED, user_id=user, provider="file", sport="gravel", source=_MANUAL,
                         geometry_geojson=_lg(north), contribute_heatmap=True))
     for _ in range(3):
-        db.add(Activity(user_id=user, provider="file", sport="gravel", source=_MANUAL,
+        db.add(Activity(activity_date=_DATED, user_id=user, provider="file", sport="gravel", source=_MANUAL,
                         geometry_geojson=_lg(south), contribute_heatmap=True))
-    db.add(Activity(user_id=user, provider="file", sport="road", source=_MANUAL,
+    db.add(Activity(activity_date=_DATED, user_id=user, provider="file", sport="road", source=_MANUAL,
                     geometry_geojson=_lg([[lon_r, LAT + i * STEP] for i in range(200)]),
                     contribute_heatmap=True))
     db.commit()

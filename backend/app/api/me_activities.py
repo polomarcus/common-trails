@@ -71,6 +71,8 @@ def _activity_to_feature(act: dict, compact: bool = False) -> dict:
             "elevation_gain_m": act.get("elevation_gain_m"),
             "activity_date": act.get("activity_date"),
             "created_at": act.get("created_at"),
+            # True when the row has no real date → kept off the public heatmap.
+            "undated": bool(act.get("undated", False)),
             "moving_time": act.get("moving_time"),
             "provider": act.get("provider", "file"),
             "provider_activity_id": act.get("provider_activity_id"),

@@ -157,6 +157,7 @@ def render_archive_done_email(
     locale: str = "fr",
     contribute_heatmap: bool = True,
     skipped_no_sport: int = 0,
+    imported_undated: int = 0,
 ) -> tuple[str, str]:
     """Return ``(subject, html)`` for the "your archive finished draining" email.
 
@@ -184,10 +185,19 @@ def render_archive_done_email(
     routes (``routes/*.gpx``) are never yielded by the drain (no bucket); an
     ``activities/`` file the activities.csv doesn't list counts as an
     out-of-scope skip — never in "pick a sport and re-import them".
+
+    ``imported_undated`` (part of ``imported``): traces with no date at all —
+    in practice planned itineraries. They are in "Ma heatmap" but never on
+    the public map (``provenance.community_eligible_conditions``), and the
+    email says so on its own line rather than promising them to the
+    community heatmap.
     """
     map_url = "https://chemins-communs.fr/map"
     no_sport = max(0, min(skipped_no_sport, skipped))
     other_skipped = skipped - no_sport
+    undated = max(0, min(imported_undated, imported))
+    # Only promise the community heatmap when at least one DATED trace feeds it.
+    promise_public = contribute_heatmap and imported > undated
     # The community heatmap is also published as a raster XYZ tile pyramid on
     # public GCS, so it can be added as a custom OVERLAY ("calque") in gpx.studio
     # / VisuGPX via one URL. Promote it in the done email — closes the loop
@@ -199,7 +209,7 @@ def render_archive_done_email(
             intro = (
                 "Your archive has been processed. Your rides are visible right away in the "
                 "<strong>My heatmap</strong> layer on the map"
-                + ("; the community heatmap will include them, usually within the hour." if contribute_heatmap else ".")
+                + ("; the community heatmap will include them, usually within the hour." if promise_public else ".")
             )
         else:
             subject = "Your archive has been processed"
@@ -211,6 +221,11 @@ def render_archive_done_email(
         lines = [f"<strong>{imported}</strong> imported"]
         if other_skipped:
             lines.append(f"<strong>{other_skipped}</strong> skipped (out of scope / duplicates)")
+        if undated:
+            lines.append(
+                f"<strong>{undated}</strong> with no date (planned routes?) — "
+                "visible in My heatmap only, not on the public map"
+            )
         if no_sport:
             lines.append(
                 f"<strong>{no_sport}</strong> with no identifiable sport — "
@@ -231,7 +246,7 @@ def render_archive_done_email(
             intro = (
                 "Votre archive a été traitée. Vos sorties sont visibles dès maintenant "
                 "dans le calque <strong>Ma heatmap</strong> de la carte"
-                + (" ; la heatmap communautaire les intégrera, en général dans l'heure." if contribute_heatmap else ".")
+                + (" ; la heatmap communautaire les intégrera, en général dans l'heure." if promise_public else ".")
             )
         else:
             subject = "Votre archive a été traitée"
@@ -245,6 +260,13 @@ def render_archive_done_email(
             lines.append(
                 f"<strong>{other_skipped}</strong> ignorée{'s' if other_skipped > 1 else ''} "
                 "(hors-scope / doublons)"
+            )
+        if undated:
+            lines.append(
+                f"<strong>{undated}</strong> trace{'s' if undated > 1 else ''} sans date "
+                "(itinéraires planifiés ?) : visible"
+                f"{'s' if undated > 1 else ''} dans Ma heatmap uniquement, "
+                "pas sur la carte publique"
             )
         if no_sport:
             lines.append(
