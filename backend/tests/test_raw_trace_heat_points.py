@@ -7,7 +7,7 @@ density points) alongside the existing ``trails`` lines, fed to tippecanoe as a
 second named layer.
 
 Pins:
-  * ``point_stride_m`` env resolution (default 8 m, floors at the default).
+  * ``point_stride_m`` env resolution (default 20 m, floors at the default).
   * ``export_raw_geojson(..., points_path=...)`` emits Point features carrying
     ``w`` (density weight ∈ [0,1]) + ``sport`` — from the SAME surviving
     sub-runs the ``trails`` lines are drawn from, so the raster and the lines

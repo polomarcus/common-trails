@@ -106,13 +106,14 @@ _COORD_BITS = 28
 # points in the same corridor so ``heatmap-density`` accumulates into the field.
 # ``HEATMAP_RAW_POINT_STRIDE_M`` overrides.
 #
-# 8 m (was 20 m, fix/heatmap-beads 2026-11): the stride is the point spacing at
-# the MAX tile zoom (z15), where the heatmap radius is only ~9 px ≈ 14–16 m — a
-# 20 m stride (+ up to 3 m densify overshoot) left gaps WIDER than the kernel →
-# a lone trace drew as a string of beads. Lower zooms do NOT carry every point:
-# each point gets a per-feature tippecanoe ``minzoom`` (see ``heat_point_levels``)
-# so the spacing kept at zoom z tracks the kernel radius at z.
-DEFAULT_POINT_STRIDE_M = 8.0
+# Lower zooms do NOT carry every point: each point gets a per-feature
+# tippecanoe ``minzoom`` (see ``heat_point_levels``) so the spacing kept at zoom
+# z tracks the kernel radius at z. 20 m (+ ≤3 m densify overshoot) stays below
+# the radius through z14 (~26–30 m); at z15+ (radius ~14–16 m) a lone trace may
+# still ripple slightly — accepted: the heatmap fades there and the crisp line
+# carries the read. A finer stride would fix z15 but multiplies the points file,
+# which lives in /tmp = the job's RAM (prod 2026-11-07: 8.6 M points ≈ 1.1 GB).
+DEFAULT_POINT_STRIDE_M = 20.0
 
 # ── heat_points level-of-detail (fix/heatmap-beads, 2026-11) ─────────────────
 # BUG: tippecanoe's DEFAULT dot-dropping (``-r 2.5``) kept 1/2.5 of the points
@@ -134,6 +135,10 @@ DEFAULT_POINT_STRIDE_M = 8.0
 # The maplibre kernel is a Gaussian with σ = radius/3 (heatmap shader), so a gap
 # ≤ 0.75 × radius = 2.25 σ leaves a < ~4 % ripple along the ribbon.
 HEAT_POINT_MAX_GAP_RATIO = 0.75
+# The PMTiles build's min zoom (``build_pmtiles --min-zoom`` default): a point
+# whose minzoom is ≤ this is present in every tile anyway, so it is written
+# without the ``tippecanoe`` member.
+HEAT_POINTS_LAYER_MIN_ZOOM = 6
 # A stride walk over a run densified to ≤ 3 m (``mask_then_densify``)
 # overshoots the stride by < 3 m.
 _DENSIFY_SLACK_M = 3.0
@@ -1210,8 +1215,10 @@ def _emit_run_points(sub: list, sid: int, deg: float, pass_by_cell: dict,
     Each point also carries a tippecanoe ``minzoom`` (``heat_point_minzoom``)
     so the spacing kept at every zoom stays below the heatmap kernel radius —
     the fix for the "beads" a lone trace drew at z12–14 (see
-    ``HEAT_POINT_MAX_GAP_RATIO``). Index 0 (the run's first point) has no
-    minzoom member: it is kept at every zoom.
+    ``HEAT_POINT_MAX_GAP_RATIO``). Points kept down to the layer's min zoom
+    (``HEAT_POINTS_LAYER_MIN_ZOOM``) carry no minzoom member — every byte per
+    point counts (the file lives in /tmp = job RAM). Coordinates are rounded to
+    5 decimals (~1 m), far below the 20 m stride.
     """
     if not sub:
         return 0
@@ -1232,15 +1239,15 @@ def _emit_run_points(sub: list, sid: int, deg: float, pass_by_cell: dict,
             "type": "Feature",
             "geometry": {
                 "type": "Point",
-                "coordinates": [round(pt[0], 6), round(pt[1], 6)],
+                "coordinates": [round(pt[0], 5), round(pt[1], 5)],
             },
             "properties": {"w": w, "sport": sport},
         }
         minzoom = heat_point_minzoom(n, levels)
-        if minzoom > 0:
+        if minzoom > HEAT_POINTS_LAYER_MIN_ZOOM:
             feature["tippecanoe"] = {"minzoom": minzoom}
-        # Compact separators: the points file is ~2.5× bigger since the 8 m
-        # stride and lives in /tmp (tmpfs = job RAM) — ~15 bytes/point saved.
+        # Compact separators: the points file lives in /tmp (tmpfs = job RAM)
+        # — ~15 bytes/point saved.
         fpts.write(json.dumps(feature, separators=(",", ":")))
         fpts.write("\n")
         n += 1
