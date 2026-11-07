@@ -96,9 +96,10 @@ def warn_on_missing_job_config() -> list[str]:
     Does NOT raise and does NOT crash startup — the daily archive-drain
     scheduler still drains archives (and its post-drain ping rebuilds PMTiles
     when it imported something), so a missing var degrades rather than breaks.
-    ⚠️ But there is NO scheduled PMTiles-rebuild backstop: with the trigger env
-    gone, a loose-file upload's display refresh simply never fires and the map
-    stays stale until the next archive drain that imports. This warning makes
+    ⚠️ But the scheduled PMTiles-rebuild backstop is only WEEKLY: with the
+    trigger env gone, a loose-file upload's display refresh simply never fires
+    and the map stays stale until the next archive drain that imports (or the
+    Saturday rebuild). This warning makes
     the silent config-drift regression visible in the logs (a `--set-env-vars`
     wipe is the classic cause).
     """
@@ -108,8 +109,8 @@ def warn_on_missing_job_config() -> list[str]:
             "Event-driven job triggers DEGRADED — missing env var(s): %s. "
             "Archives will only drain via the daily scheduler, and PMTiles "
             "rebuild pings from the web will NOT fire (the display stays stale "
-            "until a drain imports something — there is no daily rebuild "
-            "backstop). Restore the vars (a `gcloud run ... --set-env-vars` "
+            "until a drain imports something — the rebuild backstop is only "
+            "weekly). Restore the vars (a `gcloud run ... --set-env-vars` "
             "wipe is the usual cause — use --update-env-vars).",
             ", ".join(missing),
         )

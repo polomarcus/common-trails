@@ -3,9 +3,9 @@
 # deploy-prod.sh — the SINGLE SOURCE OF TRUTH for a Common Trails prod deploy.
 #
 # WHY THIS EXISTS
-#   Prod is deployed by the deploy-gcp.yml workflow (MANUAL workflow_dispatch
-#   only since 2026-08-07 — no more auto-deploy on push), or by running THIS
-#   script locally. NOT terraform: its state
+#   Prod is deployed by the deploy-gcp.yml workflow (CD on EVERY push to main
+#   since 2026-08-10, + manual workflow_dispatch; runs as the deploy-github SA),
+#   or by running THIS script locally. NOT terraform: its state
 #   still references the DELETED old resources, so any `apply` recreates them
 #   (the ~€65/mo trap). Do NOT hand-type `gcloud run deploy` and do NOT
 #   `terraform apply`. Twice, a hand-typed
@@ -122,6 +122,21 @@ PUBLIC_URL="https://chemins-communs.fr"
 PROJECT_NUMBER="301616827398"
 RUN_URL="https://${WEB_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"           # WEB (public)
 WORKER_RUN_URL="https://${WORKER_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app" # WORKER (heavy /internal/*)
+# Community heatmap bucket + its first-party CDN origin. Shared by the services'
+# env-file AND the jobs' job_env_for, so the two can never disagree.
+HEATMAP_GCS_BUCKET="common-trails-heatmap-${ENV}"
+HEATMAP_PUBLIC_BASE_URL="https://tiles.chemins-communs.fr"
+
+# ── Cloud Scheduler (2026-11-07 ops audit P0-1/P0-2) ─────────────────────────
+# The daily/monthly backstops call the Cloud Run Admin API `…/jobs/<job>:run`
+# with an OAuth token minted for TASKS_INVOKER_SA. That needs `run.jobs.run` ON
+# THE JOB. The SA had it only on resync-strava (whose scheduler was deleted
+# 2026-08-04) → the 3 live schedulers got PERMISSION_DENIED (403) on EVERY run
+# since their creation: the drain/rebuild backstops never fired once.
+# Least privilege = roles/run.invoker bound on each scheduled JOB (not the
+# project): on a job resource it carries exactly run.jobs.run (its other perms,
+# routes/instances.invoke, only apply to services). See job_scheduler_invoker_for.
+HEALTH_CHECK_SCHEDULER="strava-health-check-daily-prod"
 
 # ── Required operator inputs (deployment state, NOT code) ─────────────────────
 # `${VAR?msg}` errors if UNSET but allows an explicit empty string. Requiring it
@@ -260,8 +275,8 @@ STRAVA_WEBHOOK_SUBSCRIPTION_ID: "${STRAVA_WEBHOOK_SUBSCRIPTION_ID}"
 # point at the SAME bucket on live — the event-driven /internal/artefacts/rebuild
 # uploads here and /export/heatmap serves here; splitting them would upload fresh
 # tiles to a bucket nothing serves (silently stale heatmap).
-HEATMAP_GCS_BUCKET: "common-trails-heatmap-${ENV}"
-HEATMAP_ARTEFACTS_BUCKET: "common-trails-heatmap-${ENV}"
+HEATMAP_GCS_BUCKET: "${HEATMAP_GCS_BUCKET}"
+HEATMAP_ARTEFACTS_BUCKET: "${HEATMAP_GCS_BUCKET}"
 # Public base URL under which the community heatmap artefacts are SERVED (single
 # source of truth, read by build_pmtiles._public_base_url + email._heatmap_public_base_url).
 # An external HTTPS LB + CDN fronts the common-trails-heatmap-${ENV} bucket at this
@@ -269,7 +284,7 @@ HEATMAP_ARTEFACTS_BUCKET: "common-trails-heatmap-${ENV}"
 # a clean share URL). On the SERVICES it makes email.py's "calque" URL tiles.*; the
 # freshness pointer's latest_url / raster tiles.json are set by the build-pmtiles JOB,
 # which carries the same var (job_env_for). Unset → default is the direct GCS object URL.
-HEATMAP_PUBLIC_BASE_URL: "https://tiles.chemins-communs.fr"
+HEATMAP_PUBLIC_BASE_URL: "${HEATMAP_PUBLIC_BASE_URL}"
 # Destination for user-uploaded Strava archives (signed-URL direct-to-GCS, #455).
 # The cold-start importer job streams the .zip from here. Bucket already exists.
 UPLOADS_BUCKET: "${PROJECT}-common-trails-uploads-${ENV}"
@@ -502,7 +517,11 @@ job_env_for() {
       # (render_archive_done_email). Without it, EMAIL_FROM defaults to Resend's
       # onboarding@resend.dev test sender (not our verified domain). The
       # RESEND_API_KEY SECRET is asserted separately in job_secrets_for.
-      echo "OVERPASS_ENABLED=false,UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},OSM_TILE_CACHE_MAX=800,OSM_GRID_CACHE_MAX=150,OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000,HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>" ;;
+      # + HEATMAP_PUBLIC_BASE_URL (2026-11-07 ops audit P2-1): the same email
+      # builds the "calque" tile URL from email._heatmap_public_base_url(); unset
+      # on the job, it fell back to storage.googleapis.com (blocked by ad-blockers
+      # / Firefox — the very reason tiles.* exists). Same value as the services.
+      echo "OVERPASS_ENABLED=false,UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},OSM_TILE_CACHE_MAX=800,OSM_GRID_CACHE_MAX=150,OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000,HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL}" ;;
     # Every other job that does OSM matching / ingestion must ALSO keep Overpass
     # off (same foreign-tile slowdown if it ran with OVERPASS_ENABLED absent→true).
     "common-trails-import-strava-${ENV}"|"common-trails-rebuild-heatmap-${ENV}"|"common-trails-resync-strava-${ENV}"|"common-trails-group-edges-osm-${ENV}")
@@ -520,8 +539,12 @@ job_env_for() {
     # (latest_url — the URL the client resolves the pmtiles THROUGH) AND the
     # raster tiles.json template. It MUST carry the tiles.* base so both become
     # the first-party CDN domain. The env-vars-file only reaches the SERVICES.
+    # + HEATMAP_GCS_BUCKET (2026-11-07 ops audit P2-1): live carries it (set
+    # out-of-band) but nothing asserted it. Without it the build SUCCEEDS yet
+    # skips the GCS upload + raster pyramid ("HEATMAP_GCS_BUCKET unset →
+    # skipping") — a silent no-op heatmap on any job recreate.
     "common-trails-build-pmtiles-${ENV}")
-      echo "HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,OVERPASS_ENABLED=false,HEATMAP_RASTER_PYRAMID=true,HEATMAP_PUBLIC_BASE_URL=https://tiles.chemins-communs.fr" ;;
+      echo "HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,OVERPASS_ENABLED=false,HEATMAP_RASTER_PYRAMID=true,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL},HEATMAP_GCS_BUCKET=${HEATMAP_GCS_BUCKET}" ;;
     *)
       echo "" ;;
   esac
@@ -586,6 +609,28 @@ job_secrets_for() {
   esac
 }
 
+# ── Per-job scheduler-invoker IAM assertion (2026-11-07 ops audit P0-1) ──────
+# Jobs fired by Cloud Scheduler via `POST …/jobs/<job>:run` (oauthToken as
+# TASKS_INVOKER_SA) need roles/run.invoker ON THE JOB for that SA — without it
+# every scheduled run is PERMISSION_DENIED and nothing alerts (a job that never
+# starts never logs). Echoes the member to bind for $1, or empty for a job no
+# scheduler fires. `add-iam-policy-binding` is idempotent (re-adding an existing
+# binding is a no-op), and it is ADDITIVE: it never removes other bindings
+# (e.g. the api/jobs SAs' run.developer used by the event-driven triggers).
+#   drain   ← common-trails-drain-archives-daily-prod     (0 3 * * *)
+#   build   ← common-trails-rebuild-pmtiles-daily-prod    (0 11 * * 6 Paris — weekly, see §5)
+#   reminder← common-trails-resync-reminder-monthly-prod  (0 9 1 * *)
+# (resync-strava already carries this binding from its deleted weekly
+#  scheduler; left untouched — this function only ADDS.)
+job_scheduler_invoker_for() {
+  case "$1" in
+    "common-trails-ingest-pending-archives-${ENV}"|"common-trails-build-pmtiles-${ENV}"|"common-trails-resync-reminder-${ENV}")
+      echo "serviceAccount:${TASKS_INVOKER_SA}" ;;
+    *)
+      echo "" ;;
+  esac
+}
+
 # ── 3. Sync EVERY job image to the same tag + assert its env ─────────────────
 echo "[3/3] Syncing Cloud Run Job images to ${IMAGE_TAG} + asserting job env ..."
 sync_failures=0
@@ -632,7 +677,62 @@ for job in "${JOBS[@]}"; do
       sync_failures=$((sync_failures + 1))
     fi
   fi
+  # Assert the scheduler SA can RUN this job (least privilege: run.invoker on
+  # the job only). Needs run.jobs.setIamPolicy on the deployer (deploy-github
+  # has it via project roles/run.admin).
+  job_invoker="$(job_scheduler_invoker_for "$job")"
+  if [[ -n "$job_invoker" ]]; then
+    if gcloud run jobs add-iam-policy-binding "$job" --project="$PROJECT" --region="$REGION" \
+          --member="$job_invoker" --role="roles/run.invoker" >/dev/null 2>&1; then
+      echo "     ↳ scheduler invoker asserted: ${job_invoker} → roles/run.invoker"
+    else
+      echo "   ✗ ${job}: scheduler invoker binding FAILED (${job_invoker})" >&2
+      sync_failures=$((sync_failures + 1))
+    fi
+  fi
 done
+
+# ── 4. Strava health-check scheduler: OIDC audience = the WEB .run.app URL ───
+# (2026-11-07 ops audit P0-2) The scheduler was created out-of-band with
+# uri+audience = the CUSTOM domain, while the web verifies the token's `aud`
+# against INTERNAL_STRAVA_HEALTH_HANDLER_URL = ${RUN_URL}/… (the .run.app host,
+# see the RUN_URL note) → 401 UNAUTHENTICATED every day: the exact 2026-06-04
+# class of bug. Assert uri + audience + signer FROM THE SAME VALUE as the env
+# var so they can never diverge again. Idempotent (update to identical values).
+# Skipped (not failed) if the scheduler doesn't exist, mirroring the jobs loop.
+HEALTH_CHECK_URL="${RUN_URL}/internal/strava/health-check"
+if gcloud scheduler jobs describe "$HEALTH_CHECK_SCHEDULER" --project="$PROJECT" --location="$REGION" >/dev/null 2>&1; then
+  if gcloud scheduler jobs update http "$HEALTH_CHECK_SCHEDULER" --project="$PROJECT" --location="$REGION" \
+        --uri="$HEALTH_CHECK_URL" \
+        --oidc-service-account-email="$TASKS_INVOKER_SA" \
+        --oidc-token-audience="$HEALTH_CHECK_URL" >/dev/null 2>&1; then
+    echo "   ✓ scheduler ${HEALTH_CHECK_SCHEDULER}: uri+OIDC audience asserted → ${HEALTH_CHECK_URL}"
+  else
+    echo "   ✗ scheduler ${HEALTH_CHECK_SCHEDULER}: uri/audience update FAILED" >&2
+    sync_failures=$((sync_failures + 1))
+  fi
+else
+  echo "   ! scheduler ${HEALTH_CHECK_SCHEDULER}: does not exist — SKIPPED"
+fi
+
+# ── 5. Heatmap rebuild backstop: WEEKLY, not daily (Paul 2026-11-07: cost) ───
+# Uploads already ping the build job event-driven (drain → BUILD_PMTILES_JOB_NAME),
+# so the scheduler is only a backstop. A full rebuild every day costs too much;
+# Saturday 11:00 Paris is enough (daytime, so a failed run is spotted quickly). The resource keeps its historical "-daily-" name
+# (renaming = delete + recreate). Idempotent; skipped if it doesn't exist.
+REBUILD_SCHEDULER="common-trails-rebuild-pmtiles-daily-prod"
+REBUILD_SCHEDULE="0 11 * * 6"
+if gcloud scheduler jobs describe "$REBUILD_SCHEDULER" --project="$PROJECT" --location="$REGION" >/dev/null 2>&1; then
+  if gcloud scheduler jobs update http "$REBUILD_SCHEDULER" --project="$PROJECT" --location="$REGION" \
+        --schedule="$REBUILD_SCHEDULE" --time-zone="Europe/Paris" >/dev/null 2>&1; then
+    echo "   ✓ scheduler ${REBUILD_SCHEDULER}: schedule asserted → ${REBUILD_SCHEDULE} (weekly)"
+  else
+    echo "   ✗ scheduler ${REBUILD_SCHEDULER}: schedule update FAILED" >&2
+    sync_failures=$((sync_failures + 1))
+  fi
+else
+  echo "   ! scheduler ${REBUILD_SCHEDULER}: does not exist — SKIPPED"
+fi
 
 echo "──────────────────────────────────────────────────────────────────────"
 if [[ "$sync_failures" -gt 0 ]]; then
@@ -647,5 +747,6 @@ echo "OIDC audience: NO queue-level or IAM change is needed. The task's OIDC"
 echo "  audience is set per-task by the WEB from INTERNAL_*_HANDLER_URL (now the"
 echo "  WORKER url), and the WORKER verifies against the SAME env var — they move"
 echo "  together. Both services are --allow-unauthenticated, so the tasks-invoker"
-echo "  SA needs no run.invoker binding (app-layer verify_oidc_token is the gate)."
+echo "  SA needs no run.invoker on the SERVICES (app-layer verify_oidc_token is the"
+echo "  gate). It DOES need run.invoker on the scheduled JOBS (asserted above)."
 echo "  Post-deploy end-to-end check: docs/prod-deploy.md §8 'Microservice split'."

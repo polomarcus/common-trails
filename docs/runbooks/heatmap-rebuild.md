@@ -4,11 +4,12 @@ Quand l'utiliser : la carte commune ne reflète pas des imports récents, après
 une suppression RGPD, ou après un changement de code du build. Durée : un
 build complet prend de l'ordre de 30 à 40 min (job 8Gi).
 
-Contexte : il n'y a **pas de scheduler périodique** du build. Il est déclenché
-uniquement par des événements (fin de lot `/imports/files`, drain d'archive,
-tâche Cloud Tasks `artefact-rebuild`, suppressions) — voir
-[`../architecture.md`](../architecture.md). Un déclenchement manqué ou
-absorbé par l'anti-rafale laisse la carte en retard jusqu'au suivant.
+Contexte : le build est déclenché par des événements (fin de lot
+`/imports/files`, drain d'archive, tâche Cloud Tasks `artefact-rebuild`,
+suppressions) — voir [`../architecture.md`](../architecture.md). Le seul
+filet périodique est **hebdomadaire** (samedi 11:00 heure de Paris). Un déclenchement
+manqué ou absorbé par l'anti-rafale peut donc laisser la carte en retard
+jusqu'à une semaine : relancer à la main (ci-dessous).
 
 ## 1. État actuel du pointeur
 

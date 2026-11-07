@@ -70,11 +70,13 @@ flowchart LR
    par les PMTiles : elle vient en direct de `GET /me/activities`
    (`backend/app/api/me_activities.py`), en cyan, immédiatement après l'import.
 
-**Déclencheurs du build** — uniquement événementiels : fin de lot
+**Déclencheurs du build** — événementiels : fin de lot
 `/imports/files` (anti-rafale `BUILD_PMTILES_DEBOUNCE_S`), drain d'archive,
 tâche Cloud Tasks `artefact-rebuild` (worker), suppressions d'activité / fusion
-de comptes. **Il n'y a pas de scheduler périodique** du build ; un
-déclenchement manqué laisse la carte en retard jusqu'au suivant
+de comptes. Filet de sécurité **hebdomadaire** seulement (samedi 11:00 heure de Paris,
+scheduler `common-trails-rebuild-pmtiles-daily-prod`, horaire asserté par
+`scripts/deploy-prod.sh` ; un build quotidien coûtait trop cher) : un
+déclenchement manqué peut laisser la carte en retard jusqu'à une semaine
 ([`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md)).
 
 ## Confidentialité
