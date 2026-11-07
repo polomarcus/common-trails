@@ -22,6 +22,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from starlette.routing import Match, Mount
 
 # The Next.js static export references content-HASHED chunks from the HTML
 # entry (index.html / map.html / …). If the browser heuristically caches the
@@ -139,4 +140,23 @@ def register_frontend(app: FastAPI, frontend_dir: Path) -> None:
     @app.api_route("/{path:path}", methods=list(_FRONTEND_METHODS), include_in_schema=False)
     async def serve_frontend(path: str, request: Request) -> Response:
         """Catch-all: exported file / clean URL / 404.html."""
+        if request.method == "HEAD" and _owned_by_api_get_route(request):
+            # HEAD on a GET-only API path (/healthz, /readyz…) reached us only
+            # because the catch-all accepts HEAD. Keep the pre-catch-all answer
+            # (405 + Allow: GET) instead of the frontend 404 page.
+            return JSONResponse(
+                {"detail": "Method Not Allowed"}, status_code=405, headers={"Allow": "GET"},
+            )
         return serve_frontend_path(frontend_dir, path, request.url.query)
+
+    def _owned_by_api_get_route(request: Request) -> bool:
+        """True when a route other than this catch-all serves GET on this path.
+        Generic BaseRoute.matches: FastAPI >= 0.14x wraps include_router() in
+        an `_IncludedRouter` (not an APIRoute) that delegates matching."""
+        scope = {**request.scope, "method": "GET"}
+        for route in request.app.router.routes:
+            if getattr(route, "endpoint", None) is serve_frontend or isinstance(route, Mount):
+                continue
+            if route.matches(scope)[0] == Match.FULL:
+                return True
+        return False

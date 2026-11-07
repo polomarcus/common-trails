@@ -161,6 +161,17 @@ def test_api_routes_unaffected(client):
     assert r.status_code == 302
 
 
+@pytest.mark.parametrize("path", ["/healthz", "/readyz", "/export/heatmap.pmtiles"])
+def test_head_on_get_only_api_route_keeps_405(client, path):
+    """The catch-all accepts HEAD, so HEAD on a GET-only API path reaches it.
+    It must keep the pre-catch-all answer (405 + Allow: GET), never the
+    frontend 404 page (uptime checkers / CD probes would read it as "gone")."""
+    r = client.head(path)
+    assert r.status_code == 405, f"HEAD {path} → {r.status_code}"
+    assert r.headers.get("allow") == "GET"
+    assert "text/html" not in r.headers.get("content-type", "")
+
+
 def test_api_404_stays_json_for_non_get(client):
     # POST is not served by the catch-all (GET/HEAD only) → never an HTML page.
     r = client.post("/this-does-not-exist")
