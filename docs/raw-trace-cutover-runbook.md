@@ -50,9 +50,11 @@ raw becomes the sole model / the substrate is dropped:
 2. **Privacy model — route-K vs cell-K + mid-route home passes.** `HEATMAP_MIN_USERS`
    gives **cell-K** (a fine cell needs ≥K distinct users) — NOT route-K: an
    individual's distinct *route line* is still drawn wherever its cells clear the
-   gate. And endpoint masking trims only the trace's start/end — a rider who
-   passes their own home *mid-route* (loop that returns past the house) is NOT
-   protected there. Decide explicitly whether cell-K + endpoint masking is an
+   gate. Endpoint masking is radial (since 2026-11): any point within
+   `TRACE_MASK_METERS` of the trace's start or end is dropped, including a
+   *mid-route* pass by the house. A home that is neither the start nor the end
+   of a ride (e.g. a stop at home with the recording running from elsewhere)
+   is still NOT protected. Decide explicitly whether cell-K + endpoint masking is an
    acceptable public posture, and pick the `HEATMAP_MIN_USERS` / `TRACE_MASK_METERS`
    values, BEFORE a public launch. Soak at `MIN_USERS=1` in the private beta only.
 

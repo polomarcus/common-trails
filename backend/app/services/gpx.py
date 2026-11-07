@@ -262,6 +262,16 @@ GPX_TRACK_TYPE_SKIP: set[str] = {
     "stationary_cycling",
     "trainer",
     "spinning",
+    # Separator-less / FIT-style spellings (data audit C2): "VirtualRide" as
+    # written by Strava/Zwift GPX exports lower-cases to "virtualride", and
+    # fitparse's sub_sport for Zwift/Rouvy is "virtual_activity".
+    "virtualride",
+    "virtualrun",
+    "virtual_activity",
+    "virtual activity",
+    "indoorcycling",
+    "indoor_walking",
+    "spin",
     # Snow sports — wrong heatmap entirely
     "snowshoeing",
     "alpine_skiing",

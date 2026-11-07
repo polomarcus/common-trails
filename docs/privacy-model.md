@@ -63,11 +63,15 @@ their own archives, the public map is sparse — that is expected, not a bug.)
 
 Two independent mechanisms, both always applicable to the published map:
 
-1. **Endpoint masking (always on).** The start *and* end of every published
-   activity are trimmed along-track by `TRACE_MASK_METERS` (**default 200 m**).
-   An out-and-back ride has *both* physical ends masked. This is designed to
-   hide the two places most likely to be home/work — the trailhead and the
-   finish.
+1. **Endpoint masking (always on, radial).** Every point lying within
+   `TRACE_MASK_METERS` (**default 200 m**) of an activity's physical start *or*
+   end is removed — anywhere in the trace, so a loop that swings back past the
+   house mid-ride is masked there too. The cut is interpolated exactly on the
+   circle, and each circle is widened by the spread of the GPS fixes recorded
+   while the rider waits at the door (≤ 30 m), so the hole is ≥ 200 m around
+   every one of those fixes. An out-and-back ride has *both* physical ends
+   masked. (Until 2026-11 the trim was 200 m *along-track*, which stationary
+   GPS jitter at the door could consume within a few metres of home — fixed.)
 2. **Tunable distinct-user gate `HEATMAP_MIN_USERS`.** A fine display cell is
    only rendered once at least *K* **distinct users** have passed through it.
    - **K = 1 during the private beta** — everything shows, including solo

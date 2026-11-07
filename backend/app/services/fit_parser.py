@@ -39,13 +39,55 @@ _FIT_EXTRA_SKIP: set[str] = {
     "rafting",
     "snowmobiling",
     "flying",
+    # ── Indoor / virtual (data audit C2, 2026-11) ───────────────────────────
+    # Exact fitparse `sub_sport` strings (fitparse 1.2.0 profile). Zwift writes
+    # sport=cycling + sub_sport=virtual_activity; turbo trainers / bike-park
+    # spin bikes write sub_sport=spin. Rouvy / Kinomap / FulGaz replay REAL
+    # roads with real coordinates, so no bbox can catch them — the sub_sport
+    # is the only signal. The GPX list only had "spinning" (not "spin") and no
+    # "virtual_activity", so these reached the community heatmap as `road`.
+    "virtual_activity",
+    "spin",
+    "indoor_cycling",
+    "indoor_running",
+    "indoor_walking",
+    "indoor_rowing",
+    "indoor_skiing",
+    "treadmill",
+    "e_bike_fitness",      # e-bike on a trainer
+    "elliptical",
+    "stair_climbing",
+    "cardio_training",
+    "strength_training",
+    "flexibility_training",
+    # Motorised sub-sports
+    "motocross",
+    "atv",
+}
+
+# FIT ``file_id.manufacturer`` values (fitparse profile strings) that only ever
+# produce SIMULATED rides — the recording app is the virtual platform itself.
+# Belt-and-braces for files whose sport/sub_sport is a plain "cycling".
+# Hardware trainer brands (tacx, elite, wahoo_fitness, saris, kinetic) are NOT
+# listed: they also make outdoor head units / apps.
+_FIT_VIRTUAL_MANUFACTURERS: set[str] = {
+    "zwift",
+    "trainer_road",
+    "the_sufferfest",
+    "virtualtraining",
+    "bkool",
 }
 
 
 def _fit_skip_reason(fit) -> str | None:
     """Return a human skip reason if the FIT session sport/sub_sport is
     out-of-scope for a cycling/running/walking heatmap, else None. Checked
-    against BOTH the GPX skip-list and the FIT-native extras."""
+    against BOTH the GPX skip-list and the FIT-native extras, plus the
+    ``file_id`` manufacturer (virtual-only platforms such as Zwift)."""
+    for file_id in fit.get_messages("file_id"):
+        maker = file_id.get_value("manufacturer")
+        if maker and str(maker).lower() in _FIT_VIRTUAL_MANUFACTURERS:
+            return f"FIT recorded by virtual platform '{str(maker).lower()}' — not a real outdoor ride"
     for session in fit.get_messages("session"):
         for field in ("sport", "sub_sport"):
             val = session.get_value(field)

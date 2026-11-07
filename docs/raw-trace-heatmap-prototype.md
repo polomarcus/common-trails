@@ -83,17 +83,21 @@ GPS artifacts. Corridor brightness emerges from overlap density (max overlap on
 one 5 m pixel: 106 activities) — the law-of-large-numbers effect, honest even at
 this single-user-dominated corpus.
 
-### 2. Endpoint masking — before / after (home-cluster zoom)
+### 2. Endpoint masking — before / after (synthetic home)
 
-Zoom on the densest trace-endpoint cell (the closest thing to "home" in the
-corpus), ~800 m box at ~1.5 m/px, unmasked vs masked (200 m).
+**Synthetic data only** (invented rides around an invented home, no real
+coordinates — regenerate with `python -m app.jobs.proto_raw_trace_heatmap
+--mask-only`). ~800 m box at ~1.5 m/px, unmasked vs radial mask (200 m).
+Each ride starts and ends with 1–3 min of ±6 m GPS jitter at the door.
 
 ![Endpoint masking before/after](img/raw-trace-endpoint-mask.png)
 
-The bright terminus knot in the left ("AVANT") panel — where traces converge and
-end at home — opens into a faint scatter in the right ("APRÈS") panel: the
-privacy zone. The through-road spine remains (it is a public road ridden
-mid-route), but the concentrated home terminus is gone.
+The bright knot in the left ("AVANT") panel is the GPS jitter piling up at the
+door. Under the original 200 m *along-track* trim that jitter alone used up the
+mask, so the knot stayed visible after masking (data audit C1, 2026-11). The
+radial mask (right, "APRÈS") drops every point within 200 m of the start/end —
+including rides that pass the door mid-route — so the disc is empty; the
+through-road 320 m north stays.
 
 ## Ingestion / build cost — trivial (no matching)
 
