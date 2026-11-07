@@ -3,9 +3,17 @@
 Audience: the operator (Paul) handling a "supprimez mon compte et toutes mes
 données" request received at the privacy-policy contact address.
 
-Scope: **full account deletion**. Single-activity deletion is self-service in
-the product (`DELETE /me/activities/{id}`, button in `/stats#mes-traces`) —
-users should be pointed there first if that's all they want.
+Scope: **full account deletion**. Single-activity deletion exists as an API
+endpoint (`DELETE /me/activities/{id}`, `backend/app/api/me_activities.py`) but
+there is **currently no button for it in the UI** (the old `/stats#mes-traces`
+list was removed), so an operator may have to run it on the user's behalf.
+
+**Raw-trace era note.** The community map is now built from `activities`
+directly (`HEATMAP_DISPLAY_SOURCE=raw`); deleting the user's `activities` rows
+(step 4) and rebuilding the PMTiles (step 7) is what removes their traces from
+the map. The legacy `heat_*` tables of steps 2, 3, 6 and 9 may no longer exist
+in prod — **skip any statement whose table is absent** (check with
+`\dt heat_*`); `activity_deletion.py` does the same (`_relation_exists`).
 
 Time budget: ~15 min. Everything below is copy-paste-able; replace the two
 placeholders:
@@ -36,7 +44,7 @@ python3 -c "import hashlib; print(int(hashlib.sha256('USER_ID_UUID_HERE'.encode(
 
 That integer is `:HASH` below.
 
-## 2. Remove the user's community heat-edge contributions
+## 2. Remove the user's community heat-edge contributions (legacy — skip if `heat_edges` is absent)
 
 Same recompute-from-source mechanics as the self-service endpoint
 (`app/services/activity_deletion.py`), but scoped by `user_id_hash` instead
@@ -86,7 +94,7 @@ SELECT array_agg(osm_way_id) FROM _touched_ways;   -- ← copy this output
 COMMIT;
 ```
 
-## 3. Remove the legacy heat-cell contributions
+## 3. Remove the legacy heat-cell contributions (skip if `heat_cells` is absent)
 
 `heat_cells` is a legacy layer (not part of the current PMTiles display
 pipeline) but it is still written at ingest and must be cleaned. There is no
@@ -167,15 +175,13 @@ gsutil -m rm -r "gs://<UPLOADS_BUCKET>/archive-intake/USER_ID/"
 If the prefix doesn't exist, `gsutil` errors with "matched no objects" —
 that's fine (user never uploaded an archive).
 
-## 6. Recompute heat_edges_agg for the touched ways
+## 6. (Legacy) heat_edges_agg recompute — skip in raw mode
 
-The display aggregate (`heat_edges_agg`, #441) is now stale for the ways
-captured in step 2a. Two options:
-
-**Option A — scoped recompute (preferred, runs on db-f1-micro).** With the
-way-id array from step 2, on any machine with prod DB access (e.g.
-`docker compose exec backend python` through cloud-sql-proxy, or a Cloud
-Run job container):
+Only relevant if the matched-era `heat_edges_agg` table still exists. The
+`rebuild-heat-agg` Cloud Run Job was removed at the raw-trace pivot; in raw
+mode the build-pmtiles job alone removes the user's traces from the map
+(step 7). If the table exists and you captured the way list in step 2, the
+scoped recompute is still available:
 
 ```python
 from app.db.session import SessionLocal
@@ -183,36 +189,31 @@ from app.jobs.rebuild_heat_agg import recompute_heat_agg_for_ways
 db = SessionLocal()
 deleted, upserted = recompute_heat_agg_for_ways(db, [<way ids from step 2>])
 db.commit(); db.close()
-print(deleted, upserted)
-```
-
-**Option B — full backfill (when the way list was lost).** Needs the
-pre-authorized temporary tier bump to db-custom-2-7680, then downgrade:
-
-```bash
-gcloud run jobs execute common-trails-rebuild-heat-agg-prod --region=europe-west1 --wait
 ```
 
 ## 7. Rebuild the published PMTiles
 
 The static `heatmap-display.pmtiles` on GCS still renders the pre-deletion
-state until rebuilt (runs fine on db-f1-micro, no tier bump):
+state until rebuilt (runs on db-f1-micro, no tier bump). The build also prunes
+the older pinned snapshots, so the deleted traces do not survive in an old
+snapshot on our bucket. Details: [`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 
 ```bash
 gcloud run jobs execute common-trails-build-pmtiles-prod --region=europe-west1 --wait
 ```
 
-## 8. K-anonymity side-effect (expected, tell the requester if asked)
+## 8. Distinct-user floor side-effect
 
-Removing one contributor can drop edges from `user_count = 2` to `1`, i.e.
-below the prod K-anonymity floor (`HEATMAP_K_ANONYMITY = 2`). Those road
-segments **disappear from the public heatmap** after step 7 even though other
-riders' data still exists in the DB — that is the K-anonymity gate working as
-designed, not data loss for the remaining contributors.
+Prod runs `HEATMAP_MIN_USERS = 1` (K = 1 during the beta), so removing one
+contributor only removes that contributor's traces. Once the floor is raised to
+2, removing one contributor can also hide cells that drop below 2 distinct
+users — that is the gate working as designed, not data loss for the remaining
+contributors.
 
 ## 9. Confirm to the requester
 
-Verification queries (all must return 0):
+Verification queries (all must return 0; drop the `heat_*` lines if those
+tables no longer exist):
 
 ```sql
 SELECT
@@ -223,6 +224,7 @@ SELECT
   (SELECT count(*) FROM heat_cell_contributors WHERE user_id_hash = :HASH) AS cell_contribs;
 ```
 
-Reply within the 1-month GDPR window; mention that anonymous, aggregated
-ODbL exports produced BEFORE the deletion may persist in third-party copies
-(standard ODbL caveat, covered by the privacy policy).
+Reply within the 1-month GDPR window; mention that ODbL exports produced
+BEFORE the deletion may persist in third-party copies. Those exports contain
+the user's **raw traces with masked endpoints** (not anonymous aggregates), so
+say so plainly (see [`privacy-model.md`](privacy-model.md) §5).

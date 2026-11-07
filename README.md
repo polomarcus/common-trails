@@ -66,8 +66,9 @@ GB-safe archive pipeline. Sport is classified automatically; out-of-scope activi
 ### 🔒 Privacy by construction
 Only activities you **explicitly upload and consent to share** feed the community layer
 (traces pulled via a platform API stay personal-only). Trace **endpoints are masked**
-(`TRACE_MASK_METERS`, ~200 m) to protect home/work, the map is login-gated, and a per-cell
-**distinct-user threshold** (`HEATMAP_MIN_USERS`) hides sparsely-ridden pixels.
+(`TRACE_MASK_METERS`, 200 m) to protect home/work, and a per-cell **distinct-user floor**
+(`HEATMAP_MIN_USERS`, K=1 during the beta) can hide sparsely-ridden pixels. The map itself is
+public; only the bulk ODbL export requires a login.
 
 ### 🧭 Export to your router
 Export the community heatmap or your own activities as **GPX / GeoJSON / KML**, or add the
@@ -100,8 +101,9 @@ Then open **http://localhost:3787** — a demo account is seeded automatically:
 
 Backend: **http://localhost:8787** · Postgres: **localhost:5487**
 
-> **Prerequisites**: Docker + Make. Node 20+ only to develop the frontend outside Docker.
-> Copy `cp .env.example .env` for the dev defaults (`TEST_MODE=true`, `HEATMAP_MIN_USERS=1`).
+> **Prerequisites**: Docker + Make. Node 22 only to develop the frontend outside Docker.
+> `.env` is optional: the dev defaults (`TEST_MODE=true`, `HEATMAP_K_ANONYMITY=1`, …) come from
+> `docker-compose.yml`. Full reference: [`docs/configuration.md`](docs/configuration.md).
 
 ---
 
@@ -113,7 +115,7 @@ graph LR
     API --> DB[("🐘 Cloud SQL<br/>Postgres 17 + PostGIS")]
     subgraph Jobs["Cloud Run Jobs"]
         Drain["ingest archive<br/>(streaming, GB-safe)"]
-        Build["build_pmtiles<br/>mask endpoints · bin density<br/>· K-gate → PMTiles + raster"]
+        Build["build_pmtiles<br/>mask endpoints · bin density<br/>· distinct-user floor → PMTiles + raster"]
     end
     API -. triggers .-> Drain
     Drain --> DB
@@ -127,8 +129,8 @@ graph LR
     style Drain fill:#1a4731,color:#fff
 ```
 
-Your uploaded activities stay **private**; only the derived, endpoint-masked, K-gated
-popularity layer is published. The heatmap is built by streaming over consented activities
+Your uploaded activities stay **private**; only the consented, endpoint-masked traces
+(filtered by the distinct-user floor) are published. The heatmap is built by streaming over consented activities
 with **bounded memory** (peak RAM scales with occupied geography, not ride count), so it runs
 on a small instance.
 
@@ -137,7 +139,7 @@ on a small instance.
 │  PRIVATE — never published                     │
 │  activities · OAuth tokens · your raw uploads  │
 └───────────────────────┬────────────────────────┘
-        endpoint-masking + consent + K-anonymity gate
+   consent + endpoint masking + distinct-user floor
                         ▼
 ┌──────────────────────────────────────────────┐
 │  COMMONS — Open Database Licence 1.0           │
@@ -145,10 +147,12 @@ on a small instance.
 └──────────────────────────────────────────────┘
 ```
 
-> **K-anonymity.** `HEATMAP_MIN_USERS=1` shows every consented trace (used during the invited
-> beta); set it to `2` to hide any pixel ridden by a single user before a wide public launch.
+> **Distinct-user floor.** `HEATMAP_MIN_USERS=1` shows every consented trace (used during the
+> invited beta); set it to `2` to hide any pixel ridden by a single user before a wide public
+> launch. This is a per-cell floor, not route-level anonymisation — see
+> [`docs/privacy-model.md`](docs/privacy-model.md).
 
-🔬 Deep dives live in [`docs/`](docs/) — ingestion pipeline, heatmap build, deploy doctrine.
+🔬 Deep dives live in [`docs/`](docs/README.md) — architecture, configuration, CI, runbooks.
 
 ---
 
@@ -164,13 +168,15 @@ on a small instance.
 
 ### Key configuration
 
-| Variable | Dev default | Purpose |
-|---|---|---|
-| `TEST_MODE` | `true` | Stubs all external calls |
-| `HEATMAP_DISPLAY_SOURCE` | `raw` | Raw-trace heatmap (vs. legacy matched) |
-| `HEATMAP_MIN_USERS` | `1` | Per-cell distinct-user floor (K-anonymity) |
-| `TRACE_MASK_METERS` | `200` | Endpoint masking radius |
-| `JWT_EXPIRE_MINUTES` | `10080` (7 d) | Session lifetime |
+| Variable | Dev (compose) | Prod | Purpose |
+|---|---|---|---|
+| `TEST_MODE` | `true` | `false` | Stubs all external calls |
+| `HEATMAP_DISPLAY_SOURCE` | unset → `matched` (code default) | `raw` | Raw-trace heatmap (vs. legacy matched) |
+| `HEATMAP_MIN_USERS` | unset → `1` | `1` | Per-cell distinct-user floor |
+| `TRACE_MASK_METERS` | unset → `200` | `200` | Endpoint masking (extrémités masquées) |
+| `JWT_EXPIRE_MINUTES` | `10080` (7 d) | unset → `129600` (90 d, code default) | Session lifetime |
+
+Full list: [`docs/configuration.md`](docs/configuration.md).
 
 ---
 
@@ -190,7 +196,8 @@ gh pr create --base main
 
 House rules: **never push to `main`**, open a PR and **squash-merge**, and ship a
 non-regression test with every bug fix (UI fixes get a Playwright spec or an explicit
-manual-smoke note). See [`docs/`](docs/) for the local-testing guide and deploy doctrine.
+manual-smoke note). Full workflow in [`CONTRIBUTING.md`](CONTRIBUTING.md); CI gates in
+[`docs/ci.md`](docs/ci.md).
 
 ---
 

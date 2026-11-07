@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Plan: map-matching at ingest — SUPERSEDED
 
 > **Status (2026-06):** This plan proposed an external **Valhalla** HMM map-matcher

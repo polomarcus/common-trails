@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Komoot-parity roadmap
 
 Plan to close the gap between our routing UX and Komoot/Garmin's

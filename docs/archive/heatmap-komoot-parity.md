@@ -1,3 +1,5 @@
+> Archivé (2026-11) — décrit l'ancien pipeline matched/routage, gelé ou supprimé. Voir [docs/README.md](../README.md).
+
 # Heatmap quality roadmap: gap to Komoot
 
 A focused list of what we have, what Komoot does better, and the concrete steps to close the gap. Written after the May 2026 continuous-heatmap audit (commits `375304a` → `ba9604c`). Prioritised by visible impact.
