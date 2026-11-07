@@ -427,12 +427,11 @@ def _spatial_sort_key(tile_key: int | None) -> tuple[int, int]:
     return (0, tile_key)
 
 
-def _parse_member(raw: bytes, filename: str) -> dict:
-    """Parse one stored member into a parsed-activity dict.
-
-    Decompresses ``.gz`` with the same streaming budget the ZIP parser
-    uses (a 10 MB gzip of repeated bytes can expand to ~10 GB otherwise).
-    """
+def decompress_member(raw: bytes, filename: str) -> tuple[bytes, str]:
+    """``(bytes, lower_name)`` exactly as the parser sees them: a ``.gz``
+    member is gunzipped under the streaming budget and its suffix dropped.
+    ``sha256`` of these bytes is the activity's ``file_hash`` (GPX and FIT
+    parsers hash their input), which the route-cleanup CLI relies on."""
     low = filename.lower()
     if low.endswith(".gz"):
         with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
@@ -440,6 +439,16 @@ def _parse_member(raw: bytes, filename: str) -> dict:
         if len(raw) > gpx_service.MAX_GPX_SIZE:
             raise ValueError(f"decompressed size > {gpx_service.MAX_GPX_SIZE} bytes")
         low = low[:-3]
+    return raw, low
+
+
+def _parse_member(raw: bytes, filename: str) -> dict:
+    """Parse one stored member into a parsed-activity dict.
+
+    Decompresses ``.gz`` with the same streaming budget the ZIP parser
+    uses (a 10 MB gzip of repeated bytes can expand to ~10 GB otherwise).
+    """
+    raw, low = decompress_member(raw, filename)
     if low.endswith(".fit"):
         from app.services.fit_parser import parse_fit
         return parse_fit(raw)

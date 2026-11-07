@@ -180,10 +180,10 @@ def render_archive_done_email(
     ``skipped`` is the total; ``skipped_no_sport`` (members whose sport could
     not be identified — no activities.csv row, no usable FIT/GPX sport, no
     sport picked) is part of it but gets its OWN actionable line instead of
-    being passed off as duplicates / out-of-scope. Strava-export members that
-    are NOT activities (``routes/*.gpx`` planned routes, files activities.csv
-    doesn't list) are never yielded by the drain, so they appear in NO bucket
-    — in particular never in "pick a sport and re-import them".
+    being passed off as duplicates / out-of-scope. Strava-export planned
+    routes (``routes/*.gpx``) are never yielded by the drain (no bucket); an
+    ``activities/`` file the activities.csv doesn't list counts as an
+    out-of-scope skip — never in "pick a sport and re-import them".
     """
     map_url = "https://chemins-communs.fr/map"
     no_sport = max(0, min(skipped_no_sport, skipped))

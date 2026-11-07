@@ -220,9 +220,18 @@ class _ZipPlan:
     nested_zips: list
     total_uncompressed: int
     sport_by_filename: dict
-    # ``(info, lookup_key)`` per ingestible member, in archive order;
-    # ``lookup_key is None`` → not an activity of a Strava export (dropped).
+    # ``(info, lookup_key, kind)`` per ingestible member, in archive order.
+    # kind: MEMBER_ACTIVITY (ingest), MEMBER_ROUTE (Strava planned route —
+    # dropped silently, it is not an activity) or MEMBER_UNLISTED (under the
+    # export's activities/ but absent from a COMPLETE activities.csv →
+    # yielded as an out-of-scope skip, counted in ``skipped``).
     selected: list
+    is_strava_export: bool = False
+
+
+MEMBER_ACTIVITY = "activity"
+MEMBER_ROUTE = "route"
+MEMBER_UNLISTED = "unlisted"
 
 
 def _is_strava_route(rel_path: str) -> bool:
@@ -237,13 +246,16 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
     and :func:`estimate_member_count` so the start-of-import estimate counts
     exactly the members the drain will ingest.
 
-    Strava export (an ``activities.csv`` is present): only members referenced
-    by its ``Filename`` column are activities. ``routes/*.gpx`` (planned
-    routes) are ALWAYS excluded; and when the CSV parsed into a non-empty
-    map, any member it doesn't list is excluded too. A CSV whose headers we
-    don't recognise yields an empty map → no CSV restriction (but routes are
-    still excluded). No CSV at all (Garmin, hand-made zip) → unchanged:
-    every ingestible member is selected.
+    Strava export (an ``activities.csv`` is present):
+      * ``<root>/routes/*`` (planned routes) are ALWAYS excluded;
+      * a member under ``<root>/activities/`` that the CSV does not list is
+        excluded too — but ONLY when the CSV parsed COMPLETELY (headers
+        recognised, every row read). A partial / unreadable CSV must not
+        drop the activities after the failure point → no listing
+        restriction then (old behaviour, minus routes);
+      * members elsewhere in the archive keep the old behaviour.
+    No CSV at all (Garmin, hand-made zip) → unchanged: every ingestible
+    member is selected.
     """
     infos = [i for i in zf.infolist() if not _is_junk_member(i.filename)]
     ingestible = [i for i in infos if gpx_service.is_ingestible_zip_member(i.filename)]
@@ -275,6 +287,7 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
     # ANY depth: a re-zipped export folder nests it under a root prefix. The
     # shallowest match wins and its directory becomes the archive root.
     sport_by_filename: dict[str, str | None] = {}
+    csv_complete = False
     root_prefix = ""
     csv_candidates = [
         info for info in infos
@@ -287,12 +300,15 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
         if "/" in csv_info.filename:
             root_prefix = csv_info.filename.rsplit("/", 1)[0] + "/"
         try:
-            raw_map = gpx_service.parse_strava_activities_csv(zf.read(csv_info.filename))
+            raw_map, csv_complete = gpx_service.parse_strava_activities_csv_checked(
+                zf.read(csv_info.filename)
+            )
             sport_by_filename = {
                 gpx_service._normalize_archive_path(k): v for k, v in raw_map.items()
             }
         except Exception:
-            sport_by_filename = {}
+            sport_by_filename, csv_complete = {}, False
+    enforce_listing = is_strava_export and csv_complete and bool(sport_by_filename)
 
     root_prefix_low = root_prefix.lower()
     selected: list = []
@@ -304,13 +320,17 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
         if root_prefix_low and name.lower().startswith(root_prefix_low):
             lookup_name = name[len(root_prefix_low):]
         lookup = gpx_service._normalize_archive_path(lookup_name)
-        if is_strava_export and (
-            _is_strava_route(lookup_name)
-            or (sport_by_filename and lookup not in sport_by_filename)
+        if is_strava_export and _is_strava_route(lookup_name):
+            kind = MEMBER_ROUTE
+        elif (
+            enforce_listing
+            and lookup.startswith("activities/")
+            and lookup not in sport_by_filename
         ):
-            selected.append((info, None))
-            continue
-        selected.append((info, lookup))
+            kind = MEMBER_UNLISTED
+        else:
+            kind = MEMBER_ACTIVITY
+        selected.append((info, lookup, kind))
     return _ZipPlan(
         infos=infos,
         ingestible=ingestible,
@@ -318,6 +338,7 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
         total_uncompressed=total_uncompressed,
         sport_by_filename=sport_by_filename,
         selected=selected,
+        is_strava_export=is_strava_export,
     )
 
 
@@ -334,7 +355,7 @@ def estimate_member_count(zf: zipfile.ZipFile) -> int:
     central directory only (exact for flat archives, approximate for nested
     Garmin zips). Raises the same :class:`ZipBombError` as the iterator."""
     plan = _plan_zip(zf)
-    count = sum(1 for _info, lookup in plan.selected if lookup is not None)
+    count = sum(1 for _info, _lookup, kind in plan.selected if kind == MEMBER_ACTIVITY)
     for zinfo in plan.nested_zips[:_MAX_NESTED_ZIPS]:
         if zinfo.file_size > _MAX_NESTED_ZIP_BYTES:
             continue
@@ -382,12 +403,12 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
     ``zf.read()`` either, and they pushed legitimate archives over both
     caps. Every actual read stays bounded by MAX_ZIP_MEMBER_UNCOMPRESSED.
 
-    Strava export (activities.csv present): only the activities it lists are
-    yielded. ``routes/*.gpx`` (planned routes — no ``<time>``, no CSV row)
-    and any other member the CSV doesn't reference are NOT activities and
-    are dropped silently (not yielded, not counted as skips) — they used to
-    be ingested as consented rides into the public heatmap. See
-    :func:`_plan_zip`. Archives without a CSV (Garmin…) are unchanged.
+    Strava export (activities.csv present): ``routes/*.gpx`` (planned
+    routes — no ``<time>``, no CSV row) are dropped silently; they used to
+    be ingested as consented rides into the public heatmap. A member of
+    ``activities/`` missing from a complete CSV is yielded as
+    ``(name, None, None)`` = out-of-scope skip. See :func:`_plan_zip`.
+    Archives without a CSV (Garmin…) are unchanged.
     """
     plan = _plan_zip(zf)
     ingestible = plan.ingestible
@@ -395,15 +416,21 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
     total_uncompressed = plan.total_uncompressed
     sport_by_filename = plan.sport_by_filename
 
-    not_activities = 0
-    for info, lookup in plan.selected:
+    routes = 0
+    for info, lookup, kind in plan.selected:
         name = info.filename
-        if lookup is None:
-            # Strava export member that is NOT an activity (``routes/*.gpx``
-            # planned routes, or any file the activities.csv doesn't list).
-            # Never read, never yielded: it is not a ride, so it must neither
-            # reach the heatmap nor be counted as a skipped activity.
-            not_activities += 1
+        if kind == MEMBER_ROUTE:
+            # Strava planned route: never read, never yielded — it is not a
+            # ride, so it must neither reach the heatmap nor be reported as
+            # a skipped activity.
+            routes += 1
+            continue
+        if kind == MEMBER_UNLISTED:
+            # Under the export's activities/ but absent from a complete
+            # activities.csv: yielded as an out-of-scope skip (``None``
+            # sport, bytes never read) so every consumer counts it in
+            # ``skipped`` — never in "pick a sport and re-import".
+            yield name, None, None
             continue
         if info.file_size > gpx_service.MAX_ZIP_MEMBER_UNCOMPRESSED:
             # One oversize member: skip it, keep the rest (same policy as
@@ -415,11 +442,8 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
         # gzip-bomb is materialised here.
         csv_sport = sport_by_filename.get(lookup, _NO_CSV)
         yield name, zf.read(name), csv_sport
-    if not_activities:
-        log.info(
-            "archive: %d Strava-export member(s) outside activities.csv "
-            "(routes/…) ignored", not_activities,
-        )
+    if routes:
+        log.info("archive: %d Strava-export route(s) (routes/) ignored", routes)
 
     # ── Recurse ONE level into nested .zip members (Garmin "Export All") ──
     # Depth-1 only (_depth guard): a nested zip's OWN nested zips are ignored,
