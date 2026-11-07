@@ -9,7 +9,7 @@ gap-split on raw coords → Douglas-Peucker 2 m → coords rounded to 5 decimals
 
 Written at ingest; pre-existing rows are filled by the one-shot, idempotent
 ``python -m app.cli.backfill_display_geojson``. A NULL cache is safe: the
-endpoint derives the same geometry on the fly (slower, never wrong).
+endpoint serves the pre-cache full-precision geometry (heavier, never wrong).
 
 TRACE INTEGRITY (Crouzet): geometry_geojson is untouched — this is a derived,
 display-only cache; deleting the row deletes the cache with it (GDPR).

@@ -113,8 +113,9 @@ async def me_activities(
 
     **Compact geometry** (payload fix): each feature carries the DISPLAY
     geometry (gap-split → Douglas-Peucker 2 m → 5-decimal coords), read from
-    the precomputed ``display_geojson`` cache or derived on the fly when it is
-    NULL — ~23× smaller gzipped on a dense 1 Hz ride. Full precision stays on
+    the precomputed ``display_geojson`` cache (rows not backfilled yet get the
+    pre-cache full-precision gap-split geometry) — ~19× smaller gzipped on a
+    dense 1 Hz ride. Full precision stays on
     ``/me/activities/{id}``.
     """
     user_id = current_user.user_id

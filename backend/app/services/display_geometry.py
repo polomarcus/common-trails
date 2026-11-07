@@ -46,6 +46,11 @@ DISPLAY_GAP_BREAK_M = 2500.0
 # width at any zoom the personal layer is useful at, yet drops ~88 % of the
 # fixes of a 1 Hz recording.
 DISPLAY_SIMPLIFY_TOLERANCE_M = 2.0
+# Elevation counts in the distance too (the selected-activity card draws its
+# profile from these coords): a vertical miss of this many metres weighs like
+# a horizontal miss of DISPLAY_SIMPLIFY_TOLERANCE_M. Without it a straight
+# road over a crest collapses to 2 points and the profile goes linear.
+DISPLAY_SIMPLIFY_ELE_TOLERANCE_M = 5.0
 
 # 5 decimals of a degree ≈ 1.1 m of latitude.
 DISPLAY_COORD_DECIMALS = 5
@@ -104,6 +109,10 @@ def _simplify_dp(coords: list, tolerance_m: float = DISPLAY_SIMPLIFY_TOLERANCE_M
     ky = _EARTH_R_M * math.pi / 180.0
     xs = [c[0] * kx for c in coords]
     ys = [c[1] * ky for c in coords]
+    # Elevation scaled so DISPLAY_SIMPLIFY_ELE_TOLERANCE_M ≡ tolerance_m; only
+    # when every point carries one (mixed 2D/3D input → plain 2D).
+    kz = tolerance_m / DISPLAY_SIMPLIFY_ELE_TOLERANCE_M
+    zs = [float(c[2]) * kz for c in coords] if all(len(c) > 2 and c[2] is not None for c in coords) else None
     tol2 = tolerance_m * tolerance_m
 
     keep = [False] * n
@@ -128,8 +137,12 @@ def _simplify_dp(coords: list, tolerance_m: float = DISPLAY_SIMPLIFY_TOLERANCE_M
                     t = 1.0
                 ex, ey = px - t * dx, py - t * dy
             else:
+                t = 0.0
                 ex, ey = px, py
             d2 = ex * ex + ey * ey
+            if zs is not None:
+                ez = zs[i] - (zs[a] + t * (zs[b] - zs[a]))
+                d2 += ez * ez
             if d2 > best_d2:
                 best_d2 = d2
                 best_i = i
@@ -186,7 +199,7 @@ def compact_display_geojson(geometry_geojson: str | None) -> str | None:
     """``geometry_geojson`` TEXT → compact display GeoJSON TEXT (the value
     stored in ``activities.display_geojson``). ``None`` for a missing or
     unparseable geometry — best-effort: callers (ingest, backfill) must never
-    fail on it; the read path recomputes on the fly when the cache is NULL."""
+    fail on it; the read path serves the full-precision gap-split geometry when the cache is NULL."""
     if not geometry_geojson:
         return None
     try:

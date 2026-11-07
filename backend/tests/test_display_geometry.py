@@ -293,3 +293,16 @@ def test_strava_stream_upgrade_refreshes_display_geojson(client, auth_headers):
     geometry_geojson, display_geojson = _row(aid)
     assert geometry_geojson == upgraded
     assert display_geojson == compact_display_geojson(upgraded)
+
+
+def test_simplify_keeps_elevation_crest_on_straight_road():
+    """Review finding: a straight road over a crest must not collapse to its
+    2 endpoints (the selected-activity card draws its profile from these)."""
+    n = 401
+    coords = [[2.0 + i * 0.00001, 45.0, 100.0 + 50.0 * (1 - abs(i - 200) / 200)] for i in range(n)]
+    out = compact_display_geometry({"type": "LineString", "coordinates": coords})["coordinates"]
+    assert len(out) > 2
+    assert abs(max(c[2] for c in out) - 150.0) <= 5.0
+    # Flat straight road still collapses.
+    flat = [[2.0 + i * 0.00001, 45.0, 100.0] for i in range(n)]
+    assert len(compact_display_geometry({"type": "LineString", "coordinates": flat})["coordinates"]) == 2

@@ -3,8 +3,8 @@
 Populates the compact personal-map geometry (gap-split → Douglas-Peucker 2 m →
 5-decimal coords, app.services.display_geometry) for every activity whose cache
 is missing. New ingests write it inline (ingest._display_geojson); this catches
-the pre-0067 corpus. Until a row is backfilled, GET /me/activities derives the
-same geometry on the fly — the backfill only makes it cheaper, never different.
+the pre-0067 corpus. Until a row is backfilled, GET /me/activities serves the
+pre-cache full-precision (gap-split) geometry — correct, just heavier.
 
 Run (local dev):        docker compose exec backend python -m app.cli.backfill_display_geojson
 Run (prod, via proxy):  DATABASE_URL=... python -m app.cli.backfill_display_geojson --pace 0.5
@@ -61,15 +61,26 @@ def backfill(
     t0 = time.time()
     try:
         rows = reader.execute(
-            sa_text(f"SELECT id, geometry_geojson FROM activities WHERE {where} ORDER BY id {limit_sql}"), params
-        ).yield_per(_YIELD_PER)
-        for aid, geojson_str in rows:
+            sa_text(
+                f"SELECT id, geometry_geojson, md5(geometry_geojson) FROM activities WHERE {where} ORDER BY id {limit_sql}"
+            ).execution_options(stream_results=True, yield_per=_YIELD_PER),
+            params,
+        )
+        for aid, geojson_str, src_md5 in rows:
             compact = compact_display_geojson(geojson_str)
             if compact is None:
                 skipped += 1
                 continue
+            # Guards against a concurrent writer (Strava stream upgrade, GPX
+            # re-upload) that replaced the geometry + cache after our snapshot:
+            # never overwrite a fresher cache with one derived from the old
+            # geometry (later runs would skip the row → stale forever).
             writer.execute(
-                sa_text("UPDATE activities SET display_geojson = :g WHERE id = :id"), {"g": compact, "id": aid}
+                sa_text(
+                    "UPDATE activities SET display_geojson = :g WHERE id = :id AND md5(geometry_geojson) = :h"
+                    + ("" if recompute else " AND display_geojson IS NULL")
+                ),
+                {"g": compact, "id": aid, "h": src_md5},
             )
             done += 1
             pending += 1
