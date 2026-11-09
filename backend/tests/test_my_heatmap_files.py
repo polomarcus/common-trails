@@ -693,3 +693,36 @@ def test_summary_is_gzip_and_geometry_free(mhf_env, users):
     data = json.loads(gzip.decompress(raw))
     assert data["activities"][0]["name"] == "Maison → boulot"
     assert set(data["activities"][0]) >= {"id", "sport", "bbox", "center", "start", "undated"}
+
+
+@pytest.mark.parametrize("flag,expect_ok", [("false", True), ("true", False)])
+def test_deploy_unverified_bucket_aborts_only_when_flag_on(tmp_path, flag, expect_ok):
+    """A gcloud that cannot prove public-access-prevention (missing deployer
+    rights, misconfigured bucket) must ABORT the deploy when the feature is ON
+    — and only warn when it is OFF (nothing writes to the bucket), so a merge
+    with the flag off can never block the normal CD."""
+    import os
+    import stat
+    import subprocess
+
+    script = None
+    for parent in Path(__file__).resolve().parents:
+        p = parent / "scripts" / "deploy-prod.sh"
+        if p.is_file():
+            script = p
+            break
+    if script is None:
+        pytest.skip("scripts/deploy-prod.sh not mounted")
+    stub = tmp_path / "gcloud"
+    stub.write_text("#!/usr/bin/env bash\nexit 0\n")  # describe → '' (not enforced)
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
+        "DEPLOY_YES": "1",
+        "STRAVA_WEBHOOK_SUBSCRIPTION_ID": "349136",
+        "MY_HEATMAP_FILES_ENABLED": flag,
+    }
+    proc = subprocess.run(["bash", str(script), "test-tag"], env=env, capture_output=True, text=True, timeout=60)
+    assert (proc.returncode == 0) is expect_ok, proc.stderr[-800:]
+    assert "public_access_prevention" in proc.stderr

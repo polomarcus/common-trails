@@ -437,33 +437,45 @@ fi
 #     delete) objectAdmin on THIS bucket only — no signed URLs, so no
 #     signBlob / CORS needed;
 #   • FAIL the deploy if prevention is not enforced or a public principal is
-#     bound: shipping the code against a public bucket would publish homes.
+#     bound WHILE THE FLAG IS ON: shipping the feature against a public bucket
+#     would publish homes. Flag OFF (the default) → a failed assertion only
+#     warns (the deployer key may lack bucket rights; nothing writes there).
 # No CDN, no lifecycle rule (the app deletes superseded versions itself).
 echo "[0b/3] Asserting private bucket gs://${MY_HEATMAP_BUCKET_NAME} ..."
-if ! gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" >/dev/null 2>&1; then
-  gcloud storage buckets create "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
-    --location="$REGION" --uniform-bucket-level-access --public-access-prevention \
-    || { echo "   ✗ could not create gs://${MY_HEATMAP_BUCKET_NAME}" >&2; exit 1; }
-  echo "   ✓ created (private)"
-fi
-gcloud storage buckets update "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
-  --uniform-bucket-level-access --public-access-prevention >/dev/null \
-  || { echo "   ✗ could not enforce public-access-prevention on gs://${MY_HEATMAP_BUCKET_NAME}" >&2; exit 1; }
-mh_pap="$(gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
-  --format='value(public_access_prevention)' 2>/dev/null)"
-if [[ "$mh_pap" != "enforced" ]]; then
-  echo "   ✗ gs://${MY_HEATMAP_BUCKET_NAME}: public_access_prevention='${mh_pap}' (expected enforced) — ABORT" >&2
-  exit 1
-fi
-gcloud storage buckets add-iam-policy-binding "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
-  --member="serviceAccount:${API_SA}" --role="roles/storage.objectAdmin" >/dev/null \
-  || { echo "   ✗ objectAdmin binding for ${API_SA} FAILED" >&2; exit 1; }
-if gcloud storage buckets get-iam-policy "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" --format=json 2>/dev/null \
-    | grep -Eq '"(allUsers|allAuthenticatedUsers)"'; then
-  echo "   ✗ gs://${MY_HEATMAP_BUCKET_NAME} has a PUBLIC IAM member — ABORT" >&2
-  exit 1
-fi
-echo "   ✓ private bucket asserted (UBLA, public_access_prevention=enforced, objectAdmin → ${API_SA})"
+mh_fail() {  # flag ON → abort (never ship against an unverified bucket); OFF → warn, nothing writes there
+  if [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]]; then
+    echo "   ✗ $1 — ABORT (MY_HEATMAP_FILES_ENABLED=true)" >&2
+    exit 1
+  fi
+  echo "   ! $1 — continuing: MY_HEATMAP_FILES_ENABLED is off, the bucket is unused" >&2
+  return 1
+}
+assert_my_heatmap_bucket() {
+  if ! gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" >/dev/null 2>&1; then
+    gcloud storage buckets create "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+      --location="$REGION" --uniform-bucket-level-access --public-access-prevention \
+      || { mh_fail "could not create gs://${MY_HEATMAP_BUCKET_NAME}"; return; }
+    echo "   ✓ created (private)"
+  fi
+  gcloud storage buckets update "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+    --uniform-bucket-level-access --public-access-prevention >/dev/null \
+    || { mh_fail "could not enforce public-access-prevention on gs://${MY_HEATMAP_BUCKET_NAME}"; return; }
+  local pap
+  pap="$(gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+    --format='value(public_access_prevention)' 2>/dev/null)"
+  if [[ "$pap" != "enforced" ]]; then
+    mh_fail "gs://${MY_HEATMAP_BUCKET_NAME}: public_access_prevention='${pap}' (expected enforced)"; return
+  fi
+  gcloud storage buckets add-iam-policy-binding "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+    --member="serviceAccount:${API_SA}" --role="roles/storage.objectAdmin" >/dev/null \
+    || { mh_fail "objectAdmin binding for ${API_SA} FAILED"; return; }
+  if gcloud storage buckets get-iam-policy "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" --format=json 2>/dev/null \
+      | grep -Eq '"(allUsers|allAuthenticatedUsers)"'; then
+    mh_fail "gs://${MY_HEATMAP_BUCKET_NAME} has a PUBLIC IAM member"; return
+  fi
+  echo "   ✓ private bucket asserted (UBLA, public_access_prevention=enforced, objectAdmin → ${API_SA})"
+}
+assert_my_heatmap_bucket || true
 
 # ── Deploy one Cloud Run service ─────────────────────────────────────────────
 # Shared knobs across both services (cost-tuned on db-f1-micro): min=0

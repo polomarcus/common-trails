@@ -246,7 +246,83 @@ s'il gêne, le paginer ou le charger après les tuiles est une suite possible.
 Retour arrière : couper le flag → manifest `disabled` → le front repasse sur
 `/me/activities` sans redéploiement du front.
 
-## 10. Hors périmètre / suites
+## 10. Partage de « Ma heatmap » (décidé, PR suivante)
+
+Décision de Paul : partage **activé par l'utilisateur**. Un bouton « Partager ma
+heatmap » crée un lien à **jeton aléatoire impossible à deviner** ; désactivé par
+défaut, révocable. Conçu ici, **implémenté dans une PR séparée** (celle-ci est
+déjà large et reste derrière un flag coupé ; le partage s'appuie dessus sans le
+modifier).
+
+### 10.1 Deux artefacts, jamais le même objet
+
+| | privé (cette PR) | partagé |
+|---|---|---|
+| géométrie | `display_geojson` **non masquée** | **masquée** comme la carte publique : `trace_privacy.mask_endpoints` (rayon `TRACE_MASK_METERS`, même code que l'export raw de la heatmap communautaire) appliqué avant tippecanoe |
+| objets | `users/{id}/{v}.pmtiles` | `shares/{id}/{v}.pmtiles` (même bucket privé, préfixe distinct) |
+| propriétés des tuiles | `id`, `sport` | `sport` seulement (pas d'id d'activité, pas de nom) |
+| lecture | proxy authentifié, pas de CORS | `/s/{jeton}/…`, **CORS `*`**, sans cookie |
+
+Le build partagé est un second passage du même `build_for_user` (même lecture,
+même `rev0`, même CAS — colonne `share_version`), donc **même invalidation**
+(triggers, hook de session, fusion, manifest) ; il n'est fait que pour les
+utilisateurs qui ont un partage actif. Révocation, fusion et suppression RGPD
+suppriment aussi `shares/{id}/`.
+
+### 10.2 Jeton
+
+- `secrets.token_urlsafe(24)` → **192 bits**, jamais l'id utilisateur ni la version.
+- Table `my_heatmap_shares(user_id PK, token_sha256, created_at)` : seul le
+  **hash** est stocké (une fuite de la base ne donne pas les liens). Le jeton en
+  clair n'est montré qu'à la création.
+- « Désactiver le partage » = `DELETE` de la ligne → toute URL du jeton répond
+  **404 immédiatement** (lookup à chaque requête, pas de cache côté serveur) ;
+  « Regénérer » = nouveau jeton, l'ancien meurt.
+- Comparaison par hash indexé (temps constant sur l'égalité de hash), rate limit
+  sur `/s/*` (slowapi existant) contre l'énumération.
+
+### 10.3 Ce qu'expose le lien (compatibilité gpx.studio, OsmAnd, Locus, MapLibre)
+
+gpx.studio n'accepte que des tuiles **raster XYZ** ou un **style JSON
+vectoriel** (pas de protocole `pmtiles://`). Le lien expose donc :
+
+- `GET /s/{jeton}/heatmap.pmtiles` — Range, pour les clients MapLibre/pmtiles ;
+- `GET /s/{jeton}/{z}/{x}/{y}.pbf` — tuile MVT lue par Range dans le PMTiles
+  masqué (une lecture de répertoire mise en cache par version + une Range) ;
+- `GET /s/{jeton}/style.json` — style MapLibre dont la source vectorielle pointe
+  sur l'URL `{z}/{x}/{y}.pbf` ci-dessus (gpx.studio « vector style JSON ») ;
+- `GET /s/{jeton}/{z}/{x}/{y}.png` — **raster XYZ** (gpx.studio overlay, OsmAnd,
+  Locus), cyan sur transparent.
+
+**Raster : rendu à la demande plutôt que pyramide par utilisateur.**
+
+| | pyramide pré-rendue par partage | rendu à la demande depuis le PMTiles masqué |
+|---|---|---|
+| coût build | une pyramide z6–z14 par utilisateur partageant (la pyramide communautaire z6–z14 : ~10 k tuiles, ~70 s) à chaque rebuild | aucun |
+| stockage | quelques Mo × partages × 2 versions | aucun |
+| coût requête | lecture GCS | 1 Range + rastérisation MVT→PNG (Pillow, quelques dizaines de ms CPU) sur le web 512 Mi |
+| zooms | figés au build (les rasters publics par sport : z6–z12) | z4–z16 (sur-zoom de z14) |
+| révocation | supprimer N objets | immédiate |
+
+Le trafic d'un lien partagé est faible et bursty (un utilisateur qui ajoute un
+calque) : rendu à la demande, `Cache-Control: public, max-age=300` (un client
+garde au pire 5 min une tuile déjà vue après révocation ; aucun CDN devant l'API
+aujourd'hui). Si un lien devient populaire, passer à la pyramide est local à ce
+endpoint.
+
+### 10.4 Tests prévus
+
+- jeton : ≥ 128 bits d'entropie (longueur/alphabet), unicité sur N créations,
+  jamais dérivable de l'id utilisateur ;
+- révocation → 404 immédiat sur les 4 URL ; regénération → l'ancien jeton 404 ;
+- l'artefact partagé est masqué : aucun point à moins de `TRACE_MASK_METERS` des
+  extrémités d'une trace (comme les tests de `trace_privacy`) ;
+- l'objet privé n'est **jamais** atteignable par `/s/…` (le chemin n'est construit
+  que depuis `shares/`), et `/me/heatmap/…` ne répond pas au jeton ;
+- CORS `*` sur `/s/*` uniquement, aucun en-tête CORS sur `/me/heatmap/*` ;
+- suppression de compte / RGPD / fusion → `shares/{id}/` vidé et ligne supprimée.
+
+## 11. Hors périmètre / suites
 
 - `/me/cells` (couverture z14) reste chargé à part.
 - Le cache `display_geojson` reste la source du build ; un changement
