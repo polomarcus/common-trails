@@ -7,7 +7,7 @@ the pre-0067 corpus. Until a row is backfilled, GET /me/activities serves the
 pre-cache full-precision (gap-split) geometry — correct, just heavier.
 
 Run (local dev):        docker compose exec backend python -m app.cli.backfill_display_geojson
-Run (prod, via proxy):  DATABASE_URL=... python -m app.cli.backfill_display_geojson --pace 0.5
+Run (prod):             see docs/runbooks/display-geometry-cache.md (Cloud Run job --args override)
 Options: --limit N (cap this run), --pace S (sleep between commit batches),
          --user-id U (one user only),
          --recompute (also rewrite rows already cached — after an algorithm change).

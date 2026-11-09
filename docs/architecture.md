@@ -69,6 +69,10 @@ flowchart LR
    `frontend/lib/community-heatmap-layers.ts`. **« Ma heatmap »** ne passe pas
    par les PMTiles : elle vient en direct de `GET /me/activities`
    (`backend/app/api/me_activities.py`), en cyan, immédiatement après l'import.
+   Elle sert une version allégée de chaque trace (`activities.display_geojson`,
+   calculée à l'import ; anciennes lignes via backfill) — sinon un gros compte
+   télécharge des centaines de Mo : voir
+   [`runbooks/display-geometry-cache.md`](runbooks/display-geometry-cache.md).
 
 **Déclencheurs du build** — événementiels : fin de lot
 `/imports/files` (anti-rafale `BUILD_PMTILES_DEBOUNCE_S`), drain d'archive,
