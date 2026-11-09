@@ -418,12 +418,12 @@ def _activate_triggers(db) -> None:
     The one-time flip takes ``LOCK TABLE activities IN SHARE MODE`` first: it
     waits for every transaction still writing activities (whose triggers ran
     while disabled) to finish, so no write can commit un-bumped AFTER a file
-    snapshot. ``lock_timeout`` bounds the wait (writers queue behind it); on
-    timeout the build fails cleanly and is retried later. Runs in the caller's
+    snapshot. ``lock_timeout`` (5 s) bounds the wait — writers queue behind
+    it; on timeout the build returns ``failed`` and is retried later. Runs in the caller's
     transaction, which must commit before ``data_rev`` is read."""
     if db.execute(sa_text("SELECT enabled FROM my_heatmap_config WHERE id = 1")).scalar():
         return
-    db.execute(sa_text("SET LOCAL lock_timeout = '30s'"))
+    db.execute(sa_text("SET LOCAL lock_timeout = '5s'"))
     db.execute(sa_text("LOCK TABLE activities IN SHARE MODE"))
     db.execute(sa_text("UPDATE my_heatmap_config SET enabled = true WHERE id = 1 AND NOT enabled"))
 
@@ -455,6 +455,10 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
         _ensure_row(db, user_id)
         db.commit()
         state = read_state(db, user_id)
+    except Exception as exc:  # noqa: BLE001 — e.g. lock_timeout on the one-time activation
+        db.rollback()
+        log.warning("my-heatmap build could not start user=%s: %s", user_id, exc)
+        return {"status": "failed", "error": str(exc)[:300]}
     finally:
         db.close()
     assert state is not None
