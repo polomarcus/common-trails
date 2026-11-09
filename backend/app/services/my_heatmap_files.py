@@ -410,6 +410,14 @@ def _run_tippecanoe(ndjson_path: str, out_path: str) -> None:
         raise RuntimeError(f"tippecanoe failed: {res.stderr[-500:]}")
 
 
+def _activate_triggers(db) -> None:
+    """Switch the staleness triggers on (alembic 0068 ships them as no-ops so
+    the flag-off prod behaves exactly as before). Idempotent; done by the first
+    build, i.e. only once the feature is actually used. Writes that committed
+    while the triggers were off predate every file, so no file can miss them."""
+    db.execute(sa_text("UPDATE my_heatmap_config SET enabled = true WHERE id = 1 AND NOT enabled"))
+
+
 def _ensure_row(db, user_id: str) -> None:
     db.execute(
         sa_text(
@@ -431,6 +439,9 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
 
     db = SessionLocal()
     try:
+        # Triggers must be live BEFORE rev0 is read, or a write landing now
+        # would not mark this file stale.
+        _activate_triggers(db)
         _ensure_row(db, user_id)
         db.commit()
         state = read_state(db, user_id)
@@ -734,7 +745,12 @@ def _delete_objects(user_id: str) -> int:
     store = get_store()
     if store is None:
         return 0
-    keys = store.list_keys(f"{USER_PREFIX}/{user_id}/")
+    try:
+        keys = store.list_keys(f"{USER_PREFIX}/{user_id}/")
+    except Exception as exc:  # bucket never created (flag never turned on)
+        if type(exc).__name__ == "NotFound":
+            return 0
+        raise
     for key in keys:
         store.delete(key)
     return len(keys)

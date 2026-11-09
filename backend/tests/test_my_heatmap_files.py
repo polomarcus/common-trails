@@ -38,6 +38,64 @@ _DATE = datetime(2025, 5, 4, 8, 0, tzinfo=UTC)
 # ── fixtures / helpers ───────────────────────────────────────────────────────
 
 
+def _set_triggers(on: bool) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(sa_text("UPDATE my_heatmap_config SET enabled = :e WHERE id = 1"), {"e": on})
+        db.commit()
+    finally:
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def _triggers_on():
+    """The staleness triggers are no-ops until the feature is activated in
+    the DB (first build) — these tests exercise them active."""
+    _set_triggers(True)
+    yield
+    _set_triggers(False)  # the rest of the suite runs like flag-off prod
+
+
+def test_triggers_are_noop_until_activated(users):
+    """Flag-off prod: migration 0068 must not write or lock anything on a
+    write to activities until the first build activates the triggers."""
+    _set_triggers(False)
+    try:
+        db = SessionLocal()
+        try:
+            uid = _mk_user(db)
+            users.append(uid)
+            _mk_activity(db, uid)
+            db.commit()
+            assert db.execute(
+                sa_text("SELECT count(*) FROM my_heatmap_files WHERE user_id = :u"), {"u": uid}
+            ).scalar() == 0
+            # The first build turns them on (before reading data_rev).
+            mhf._activate_triggers(db)
+            db.commit()
+            _mk_activity(db, uid)
+            db.commit()
+            assert _rev(uid) >= 1
+        finally:
+            db.close()
+    finally:
+        _set_triggers(True)
+
+
+def test_gdpr_delete_without_bucket_does_not_crash(monkeypatch, users):
+    class _Missing(Exception):
+        pass
+
+    _Missing.__name__ = "NotFound"
+
+    class _Store:
+        def list_keys(self, prefix):
+            raise _Missing("bucket does not exist")
+
+    monkeypatch.setattr(mhf, "get_store", lambda: _Store())
+    assert mhf.delete_for_user(str(uuid.uuid4())) == 0
+
+
 @pytest.fixture
 def mhf_env(monkeypatch, tmp_path):
     """Flag on, local store, scheduler recorded instead of enqueued."""

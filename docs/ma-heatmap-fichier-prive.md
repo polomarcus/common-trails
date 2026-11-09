@@ -175,6 +175,16 @@ quand le cache `display_geojson` est NULL — comparer deux gros textes TOAST à
 chaque UPDATE doublerait les I/O de géométrie sur db-f1-micro, et tout écrivain
 de géométrie réécrit aussi le cache).
 
+**Inertes tant que la fonctionnalité n'est pas utilisée** : les triggers lisent
+d'abord `my_heatmap_config.enabled` et ne font rien (aucune écriture, aucun
+verrou) tant qu'il est faux — flag coupé, chaque écriture sur `activities` se
+comporte exactement comme avant la migration. Le premier build l'active, avant
+de lire `data_rev`. Une fois actifs, l'upsert verrouille la ligne
+`my_heatmap_files` de l'utilisateur jusqu'au commit (deux ingestions
+concurrentes du même utilisateur se sérialisent) ; les lignes sont verrouillées
+dans l'ordre des `user_id`, donc pas d'interblocage entre deux instructions
+multi-utilisateurs.
+
 C'est le point clé : **ORM, SQL brut, update en masse, cascade** — tous les
 chemins d'écriture passent par là, y compris ceux qu'on oubliera d'ajouter
 demain. Un fichier ne peut pas être servi `ready` avec des données périmées.

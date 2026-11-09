@@ -40,9 +40,18 @@ _DISPLAYED_COLUMNS = (
     "total_photo_count",
 )
 
+# Gate: the triggers are a NO-OP (no write, no lock) until the feature is
+# activated in the DB (my_heatmap_config.enabled — flipped by the first build,
+# app.services.my_heatmap_files._activate_triggers). With the flag off in prod,
+# every write to activities behaves exactly as before this migration.
+# ORDER BY u: rows are locked in a deterministic order, so two concurrent
+# multi-user statements cannot deadlock against each other on this table.
 _BUMP_SQL = """
+    IF NOT COALESCE((SELECT enabled FROM my_heatmap_config WHERE id = 1), false) THEN
+      RETURN NULL;
+    END IF;
     INSERT INTO my_heatmap_files (user_id, data_rev, dirty_at)
-    SELECT u, 1, now() FROM ({users}) AS t(u) WHERE u IS NOT NULL
+    SELECT u, 1, now() FROM ({users}) AS t(u) WHERE u IS NOT NULL ORDER BY u
     ON CONFLICT (user_id) DO UPDATE
        SET data_rev = my_heatmap_files.data_rev + 1, dirty_at = now()
 """
@@ -64,6 +73,14 @@ def upgrade() -> None:
         sa.Column("last_enqueued_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_error", sa.Text(), nullable=True),
     )
+
+    op.create_table(
+        "my_heatmap_config",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.CheckConstraint("id = 1", name="my_heatmap_config_single_row"),
+    )
+    op.execute("INSERT INTO my_heatmap_config (id, enabled) VALUES (1, false)")
 
     # geometry_geojson only matters while the display cache is NULL (the file
     # then derives from it); comparing two large TOASTed texts on EVERY update
@@ -124,3 +141,4 @@ def downgrade() -> None:
         """
     )
     op.drop_table("my_heatmap_files")
+    op.drop_table("my_heatmap_config")
