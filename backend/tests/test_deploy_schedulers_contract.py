@@ -61,7 +61,11 @@ def gcloud_calls(tmp_path_factory) -> list[list[str]]:
     log = tmp / "gcloud.log"
     stub = tmp / "gcloud"
     stub.write_text(
-        f'#!/usr/bin/env bash\n{{ echo "{_SEP}"; for a in "$@"; do printf "%s\\n" "$a"; done; }} >> "{log}"\nexit 0\n',
+        f'#!/usr/bin/env bash\n{{ echo "{_SEP}"; for a in "$@"; do printf "%s\\n" "$a"; done; }} >> "{log}"\n'
+        # The private "Ma heatmap" bucket assertion reads this field back and
+        # aborts the deploy unless GCS reports it enforced.
+        'case "$*" in *public_access_prevention*) echo enforced ;; esac\n'
+        "exit 0\n",
         encoding="utf-8",
     )
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
@@ -114,6 +118,13 @@ def test_no_project_level_or_broader_grant(gcloud_calls):
     assert not any(c[:2] == ["projects", "add-iam-policy-binding"] for c in gcloud_calls)
     for c in gcloud_calls:
         if "add-iam-policy-binding" in c:
+            if c[:3] == ["storage", "buckets", "add-iam-policy-binding"]:
+                # The ONE bucket-scoped grant: the runtime SA on the PRIVATE
+                # "Ma heatmap" bucket (docs/ma-heatmap-fichier-prive.md §3).
+                assert c[3] == "gs://common-trails-my-heatmap-prod"
+                assert _flag(c, "role") == "roles/storage.objectAdmin"
+                assert _flag(c, "member") == "serviceAccount:common-trails-api@common-trails.iam.gserviceaccount.com"
+                continue
             assert _flag(c, "role") == "roles/run.invoker"
 
 

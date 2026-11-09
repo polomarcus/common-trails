@@ -28,6 +28,10 @@ import { useUserMenu } from '@/hooks/useUserMenu';
 import { useMapLayerSync } from '@/hooks/useMapLayerSync';
 import { NORMAL, HIGH_CONTRAST } from '@/lib/routing-style';
 import { withActivitySport } from '@/lib/activity-sport';
+import {
+  fetchMyHeatmapManifest, loadMyHeatmapFile, summaryToActivityItems, setUserActivitiesSource,
+} from '@/lib/my-heatmap-file';
+import { MY_TRACES_COLOR } from '@/lib/constants';
 import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions, lineParts } from '@/lib/map-utils';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
@@ -168,6 +172,9 @@ export default function MapPage() {
   // "Ma heatmap" row. Only ever set inside loadActivities (post-mount, token
   // present), so the static/first render stays identical (#418).
   const [activitiesLoading, setActivitiesLoading] = useState<boolean>(false);
+  // True when "Ma heatmap" comes from the per-user PMTiles file (every
+  // activity, no 5000 cap) rather than GET /me/activities.
+  const [activitiesFromFile, setActivitiesFromFile] = useState<boolean>(false);
   const activitiesRef = useRef<ActivityItem[]>([]);
   // Last FeatureCollection pushed to the "Ma heatmap" source — kept so a sport
   // correction can patch one feature and re-set the source without a refetch.
@@ -285,6 +292,42 @@ export default function MapPage() {
     }
   }, []);
 
+  // ── Selected activity from the PMTiles path: its list entry carries no
+  // coordinates (the file only ships tiles) → fetch them once on selection.
+  useEffect(() => {
+    if (!selectedActivity || selectedActivity.coords.length > 0) return;
+    const id = selectedActivity.id;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(`${API_URL}/me/activities/${encodeURIComponent(id)}`, { credentials: 'include' });
+        if (!resp.ok) return;
+        const feature = await resp.json();
+        const parts = lineParts(feature.geometry);
+        if (cancelled || parts.length === 0) return;
+        const coords = parts.flat();
+        const patch = { coords, parts: parts.length > 1 ? parts : undefined };
+        setSelectedActivity((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
+        setActivities((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+      } catch { /* the card still shows the metadata */ }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedActivity?.id, selectedActivity?.coords.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Visited z14 cells overlay (optional). */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const loadUserCells = useCallback(async (m: any) => {
+    try {
+      const cellResp = await fetch(`${API_URL}/me/cells`, {
+        credentials: 'include',
+      });
+      if (cellResp.ok) {
+        const cellGeojson = await cellResp.json();
+        m.getSource('user-cells')?.setData(cellGeojson);
+      }
+    } catch { /* cell layer is optional */ }
+  }, []);
+
   // ── Load user activities from API ─────────────────────────────────────────
   const loadActivities = useCallback(async (map: unknown) => {
     const token = getToken();
@@ -292,6 +335,40 @@ export default function MapPage() {
     const m = map as any;
     setActivitiesLoading(true);
     try {
+      // ① Per-user private PMTiles file, when the backend has a FRESH one
+      //    (docs/ma-heatmap-fichier-prive.md): only the visible tiles are
+      //    fetched, every activity is included (no 5000 cap). Anything else
+      //    (flag off, missing/stale file, error) → ② the legacy JSON below.
+      const manifest = await fetchMyHeatmapManifest(API_URL);
+      const file = manifest ? await loadMyHeatmapFile(API_URL, manifest) : null;
+      if (file) {
+        setActivitiesError(false);
+        setActivitiesFromFile(true);
+        setActivitiesReturned(file.summary.total);
+        const items = summaryToActivityItems(file.summary, t('map.activityDefaultName'));
+        setActivities(items);
+        userActivitiesGeojsonRef.current = null;
+        setUserActivitiesSource(m, MY_TRACES_COLOR, file.tilesSourceUrl);
+        const actParam = new URLSearchParams(window.location.search).get('activity');
+        if (actParam) {
+          const target = items.find((a) => a.id === actParam);
+          if (target) {
+            setSelectedActivity(target);
+            const [minLon, minLat, maxLon, maxLat] = target.bbox;
+            m.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 60, maxZoom: 15 });
+          }
+        }
+        const hasPositionParam = new URLSearchParams(window.location.search).get('lat') !== null;
+        const newest = file.summary.activities[file.summary.activities.length - 1];
+        if (!actParam && !hasPositionParam && newest) {
+          m.jumpTo({ center: newest.start, zoom: 13 });
+        }
+        loadUserCells(m);
+        return;
+      }
+      setActivitiesFromFile(false);
+      setUserActivitiesSource(m, MY_TRACES_COLOR, null);
+
       const resp = await fetch(`${API_URL}/me/activities?limit=${MAP_ACTIVITIES_LIMIT}`, {
         credentials: 'include',
       });
@@ -352,16 +429,7 @@ export default function MapPage() {
       userActivitiesGeojsonRef.current = geojson;
       m.getSource('user-activities')?.setData(geojson);
 
-      // Load user cell coverage
-      try {
-        const cellResp = await fetch(`${API_URL}/me/cells`, {
-          credentials: 'include',
-        });
-        if (cellResp.ok) {
-          const cellGeojson = await cellResp.json();
-          m.getSource('user-cells')?.setData(cellGeojson);
-        }
-      } catch { /* cell layer is optional */ }
+      loadUserCells(m);
 
       // Jump to the most recent activity (only if no specific activity/position requested)
       const hasPositionParam = new URLSearchParams(window.location.search).get('lat') !== null;
@@ -670,7 +738,7 @@ export default function MapPage() {
         <MapLegend layers={layers} waymarked={waymarked} />
 
         {/* Signed-in rider with 0 activities → import CTA; 5000 → cap note */}
-        <MapActivitiesNotice count={activitiesReturned} />
+        <MapActivitiesNotice count={activitiesReturned} uncapped={activitiesFromFile} />
 
         {/* Tiles host down → say so instead of a silent bare basemap */}
         <HeatmapUnavailableNotice unavailable={heatmapUnavailable} />

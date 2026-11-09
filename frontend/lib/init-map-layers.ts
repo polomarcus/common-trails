@@ -27,10 +27,7 @@ import {
 } from '@/lib/routing-style';
 import { communityPmtilesUrl, resolveCommunityPmtilesUrl } from '@/lib/cdn-cache';
 import { MY_TRACES_COLOR } from '@/lib/constants';
-import {
-  USER_TRACE_GLOW_WIDTH, USER_TRACE_GLOW_BLUR, USER_TRACE_GLOW_OPACITY,
-  USER_TRACE_LINE_WIDTH, USER_TRACE_LINE_OPACITY,
-} from '@/lib/user-traces-layers';
+import { userTraceLayerSpecs } from '@/lib/user-traces-layers';
 
 // ── Event wiring interfaces (view-only) ──────────────────────────────
 export interface MapEventRefs {
@@ -271,39 +268,10 @@ function addUserLayers(m: any): void {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
   });
-  // Glow layer (rendered below main line)
-  m.addLayer({
-    id: 'user-activities-glow',
-    type: 'line',
-    source: 'user-activities',
-    layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': MY_TRACES_COLOR,
-      'line-width': USER_TRACE_GLOW_WIDTH,
-      'line-opacity': USER_TRACE_GLOW_OPACITY,
-      'line-blur': USER_TRACE_GLOW_BLUR,
-    },
-  });
-  // Main line on top
-  m.addLayer({
-    id: 'user-activities-line',
-    type: 'line',
-    source: 'user-activities',
-    layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': MY_TRACES_COLOR,
-      'line-width': USER_TRACE_LINE_WIDTH,
-      'line-opacity': USER_TRACE_LINE_OPACITY,
-    },
-  });
-  // Wide transparent hit area — makes traces easy to click/hover
-  m.addLayer({
-    id: 'user-activities-hit',
-    type: 'line',
-    source: 'user-activities',
-    layout: { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': 'transparent', 'line-width': 20, 'line-opacity': 0 },
-  });
+  // Glow (below), main line, then a wide transparent hit area that makes traces
+  // easy to click/hover — specs shared with the per-user PMTiles swap
+  // (lib/my-heatmap-file.ts) so both source flavours draw identically.
+  for (const spec of userTraceLayerSpecs(MY_TRACES_COLOR)) m.addLayer(spec);
 
   // ③c User cell coverage — visited zoom-14 grid cells
   m.addSource('user-cells', {
@@ -468,14 +436,19 @@ export function wireMapEventHandlers(
     if (!feat) return;
     const pt = m.project(e.lngLat);
     cancelPopupHide();
+    // The list entry is the source of truth (and the only one on the per-user
+    // PMTiles path, whose tiles carry just id + sport); feature properties
+    // are the fallback.
+    const p = feat.properties ?? {};
+    const act = p.id ? refs.activitiesRef.current.find((a) => a.id === p.id) : undefined;
     setters.setTracePopup({
       x: pt.x, y: pt.y,
-      name: feat.properties?.name || 'Activite',
-      sport: feat.properties?.sport || '',
-      distance_m: feat.properties?.distance_m || 0,
-      elevation_gain_m: feat.properties?.elevation_gain_m || 0,
-      activity_date: feat.properties?.activity_date || feat.properties?.created_at || null,
-      actId: feat.properties?.id || '',
+      name: act?.name || p.name || 'Activite',
+      sport: act?.sport || p.sport || '',
+      distance_m: act?.distance_m || p.distance_m || 0,
+      elevation_gain_m: act?.elevation_gain_m || p.elevation_gain_m || 0,
+      activity_date: act?.activity_date || p.activity_date || p.created_at || null,
+      actId: p.id || '',
     });
   };
   const movePopup = (e: any) => {

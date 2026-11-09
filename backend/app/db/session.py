@@ -57,3 +57,9 @@ def check_db_connection() -> bool:
         return True
     except Exception:
         return False
+
+
+# Register the "Ma heatmap" file ORM hook (after_flush/after_commit on every
+# Session) wherever a session can be created — API, worker AND Cloud Run Jobs
+# (which never import app.main). Imported last: it only needs sqlalchemy here.
+import app.services.my_heatmap_files  # noqa: E402,F401

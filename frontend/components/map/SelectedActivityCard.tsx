@@ -187,7 +187,9 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <Link
           href={(() => {
-            const mid = activity.coords[Math.floor(activity.coords.length / 2)];
+            // `coords` is empty until fetched on the per-user PMTiles path
+            // (the list ships no geometry) → the list's precomputed centre.
+            const mid = activity.coords[Math.floor(activity.coords.length / 2)] ?? activity.center;
             // /discover is disabled — land on the map centred on the activity area.
             return `/map?lat=${mid[1].toFixed(5)}&lon=${mid[0].toFixed(5)}&zoom=12`;
           })()}

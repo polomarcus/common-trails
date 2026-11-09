@@ -175,6 +175,21 @@ gsutil -m rm -r "gs://<UPLOADS_BUCKET>/archive-intake/USER_ID/"
 If the prefix doesn't exist, `gsutil` errors with "matched no objects" —
 that's fine (user never uploaded an archive).
 
+**Private "Ma heatmap" file** (per-user PMTiles of the user's UNMASKED traces,
+private bucket `common-trails-my-heatmap-prod` —
+[`ma-heatmap-fichier-prive.md`](ma-heatmap-fichier-prive.md)). Deleting the
+`activities` rows only marks it stale; the objects must be deleted explicitly
+(works whether the feature flag is on or off):
+
+```bash
+DATABASE_URL=... MY_HEATMAP_BUCKET=common-trails-my-heatmap-prod \
+  python -m app.cli.my_heatmap_files delete --user-id USER_ID
+```
+
+Backstop for a forgotten step: `python -m app.cli.my_heatmap_files sweep-orphans
+--dry-run` lists file sets whose user no longer exists (drop `--dry-run` to
+delete them).
+
 ## 6. (Legacy) heat_edges_agg recompute — skip in raw mode
 
 Only relevant if the matched-era `heat_edges_agg` table still exists. The

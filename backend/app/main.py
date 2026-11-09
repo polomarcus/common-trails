@@ -776,6 +776,8 @@ from app.api.internal_ingest import router as internal_ingest_router
 from app.api.internal_strava_health import router as internal_strava_health_router
 from app.api.internal_strava_webhook import router as internal_strava_webhook_router
 from app.api.me_activities import router as me_activities_router
+from app.api.me_heatmap import internal_router as internal_my_heatmap_router
+from app.api.me_heatmap import router as me_heatmap_router
 from app.api.me_photos import router as me_photos_router
 from app.api.me_stats import router as me_stats_router
 from app.api.notifications import router as notifications_router
@@ -867,6 +869,7 @@ app.include_router(geocode_router)
 app.include_router(gpx_upload_router)
 app.include_router(me_stats_router)
 app.include_router(me_activities_router)
+app.include_router(me_heatmap_router)
 app.include_router(me_photos_router)
 app.include_router(notifications_router)
 app.include_router(tags_export_router)
@@ -877,6 +880,7 @@ app.include_router(trips_router)
 app.include_router(admin_router)
 app.include_router(internal_ingest_router)
 app.include_router(internal_artefacts_router)
+app.include_router(internal_my_heatmap_router)
 app.include_router(export_router)
 app.include_router(internal_strava_webhook_router)
 app.include_router(internal_strava_health_router)
