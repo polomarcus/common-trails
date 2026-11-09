@@ -440,7 +440,9 @@ fi
 #     bound: shipping the feature against a public bucket would publish homes.
 # Runs ONLY when MY_HEATMAP_FILES_ENABLED=true. Flag OFF (the default) → the
 # step is skipped entirely: no bucket or IAM call, prod infra untouched.
-# No CDN, no lifecycle rule (the app deletes superseded versions itself).
+# No CDN, no lifecycle rule (the app deletes superseded versions itself), and
+# GCS soft delete OFF: a GDPR-deleted (or superseded) file of home-start traces
+# must not stay recoverable for the default 7 days.
 echo "[0b/3] Asserting private bucket gs://${MY_HEATMAP_BUCKET_NAME} ..."
 mh_fail() {  # only reached with the flag ON → abort (never ship against an unverified bucket)
   if [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]]; then
@@ -453,12 +455,12 @@ mh_fail() {  # only reached with the flag ON → abort (never ship against an un
 assert_my_heatmap_bucket() {
   if ! gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" >/dev/null 2>&1; then
     gcloud storage buckets create "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
-      --location="$REGION" --uniform-bucket-level-access --public-access-prevention \
+      --location="$REGION" --uniform-bucket-level-access --public-access-prevention --soft-delete-duration=0 \
       || { mh_fail "could not create gs://${MY_HEATMAP_BUCKET_NAME}"; return; }
     echo "   ✓ created (private)"
   fi
   gcloud storage buckets update "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
-    --uniform-bucket-level-access --public-access-prevention >/dev/null \
+    --uniform-bucket-level-access --public-access-prevention --clear-soft-delete >/dev/null \
     || { mh_fail "could not enforce public-access-prevention on gs://${MY_HEATMAP_BUCKET_NAME}"; return; }
   local pap
   pap="$(gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
@@ -559,7 +561,7 @@ deploy_service "$WORKER_SERVICE" "2Gi" "WORKER (heavy /internal/*)" 0  # min=0: 
 # Per-user "Ma heatmap" rebuild wiring for the INGESTING jobs (same values as
 # the env-file; the allow-list uses ';' — ',' is --update-env-vars' separator).
 # Empty while the flag is OFF: the jobs' env stays exactly as before.
-MY_HEATMAP_JOB_ENV=",MY_HEATMAP_FILES_ENABLED=${MY_HEATMAP_FILES_ENABLED},MY_HEATMAP_FILES_USERS=${MY_HEATMAP_FILES_USERS//,/;},MY_HEATMAP_BUCKET=${MY_HEATMAP_BUCKET_NAME},CLOUD_TASKS_ARTEFACT_QUEUE=common-trails-artefact-rebuild-${ENV},CLOUD_TASKS_LOCATION=${REGION},CLOUD_TASKS_INVOKER_SA=${TASKS_INVOKER_SA},INTERNAL_MY_HEATMAP_HANDLER_URL=${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
+MY_HEATMAP_JOB_ENV=",GCP_PROJECT=${PROJECT},MY_HEATMAP_FILES_ENABLED=${MY_HEATMAP_FILES_ENABLED},MY_HEATMAP_FILES_USERS=${MY_HEATMAP_FILES_USERS//,/;},MY_HEATMAP_BUCKET=${MY_HEATMAP_BUCKET_NAME},CLOUD_TASKS_ARTEFACT_QUEUE=common-trails-artefact-rebuild-${ENV},CLOUD_TASKS_LOCATION=${REGION},CLOUD_TASKS_INVOKER_SA=${TASKS_INVOKER_SA},INTERNAL_MY_HEATMAP_HANDLER_URL=${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
 [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]] || MY_HEATMAP_JOB_ENV=""
 job_env_for() {
   case "$1" in

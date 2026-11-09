@@ -81,9 +81,18 @@ def my_heatmap_tiles(
     store = mhf.get_store()
     if store is None:
         raise HTTPException(status_code=404, detail="Not found")
-    data = store.read(mhf.pmtiles_key(current_user.user_id, version), start, end)
+    if state.pmtiles_bytes and version == state.version and start >= state.pmtiles_bytes:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
+    try:
+        data = store.read(mhf.pmtiles_key(current_user.user_id, version), start, end)
+    except Exception as exc:  # GCS 416 past EOF on a previous version, transient errors
+        if "416" in str(exc) or "Range" in type(exc).__name__:
+            raise HTTPException(status_code=416, detail="Range not satisfiable") from exc
+        raise
     if data is None:
         raise HTTPException(status_code=404, detail="Not found")
+    if not data:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
     total = str(state.pmtiles_bytes) if version == state.version and state.pmtiles_bytes else "*"
     return Response(
         content=data,

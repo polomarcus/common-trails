@@ -741,3 +741,98 @@ def test_deploy_flag_on_aborts_on_unverified_bucket(tmp_path):
     assert proc.returncode != 0
     assert "public_access_prevention" in proc.stderr and "ABORT" in proc.stderr
     assert "storage buckets update gs://common-trails-my-heatmap-prod" in calls
+
+
+# ── review round 1 regressions ───────────────────────────────────────────────
+
+
+def test_force_rebuild_republishes_a_fresh_file(mhf_env, users):
+    """`backfill --force` (tile-format change) must replace a FRESH file."""
+    db = SessionLocal()
+    try:
+        uid = _mk_user(db)
+        users.append(uid)
+        _mk_activity(db, uid)
+        db.commit()
+    finally:
+        db.close()
+    v1 = mhf.build_for_user(uid)["version"]
+    res = mhf.build_for_user(uid, force=True)
+    assert res["status"] == "published" and res["version"] != v1
+
+
+def test_savepoint_rollback_keeps_outer_schedule(mhf_env, users):
+    """Ingest wraps each activity in begin_nested(): one failing savepoint must
+    not drop the rebuild the outer transaction already asked for."""
+    db = SessionLocal()
+    try:
+        uid = _mk_user(db)
+        users.append(uid)
+        _mk_activity(db, uid)
+        db.flush()
+        sp = db.begin_nested()
+        _mk_activity(db, uid)
+        sp.rollback()
+        db.commit()
+    finally:
+        db.close()
+    assert _scheduled(mhf_env, uid)
+
+
+def test_build_racing_a_row_reset_never_publishes_ahead_of_data(mhf_env, users):
+    """Row deleted + recreated (support delete) while a build of rev N is in
+    flight: publishing built_rev=N > data_rev would make the file stale forever."""
+    db = SessionLocal()
+    try:
+        uid = _mk_user(db)
+        users.append(uid)
+        for _ in range(3):
+            _mk_activity(db, uid)
+            db.commit()  # one INSERT statement each → data_rev 3
+        rev = _rev(uid)
+        assert rev >= 3
+        db.execute(sa_text("DELETE FROM my_heatmap_files WHERE user_id = :u"), {"u": uid})
+        db.execute(sa_text("INSERT INTO my_heatmap_files (user_id) VALUES (:u)"), {"u": uid})
+        db.commit()
+    finally:
+        db.close()
+    published, _ = mhf._publish_cas(uid, rev, "r9-0000000000000000", 0, 0, 0)
+    assert not published
+    assert mhf.build_for_user(uid)["status"] == "published"
+    db = SessionLocal()
+    try:
+        assert mhf.read_state(db, uid).fresh
+    finally:
+        db.close()
+
+
+def test_trigger_geometry_only_change_counts_only_without_cache(users):
+    db = SessionLocal()
+    try:
+        uid = _mk_user(db)
+        users.append(uid)
+        cached = _mk_activity(db, uid, display_geojson=_line(*_start()))
+        uncached = _mk_activity(db, uid)
+        db.commit()
+        r0 = _rev(uid)
+        db.execute(sa_text("UPDATE activities SET geometry_geojson = :g WHERE id = :a"),
+                   {"g": _line(*_start(), n=9), "a": cached})
+        db.commit()
+        assert _rev(uid) == r0, "geometry-only change with a display cache → not displayed"
+        db.execute(sa_text("UPDATE activities SET geometry_geojson = :g WHERE id = :a"),
+                   {"g": _line(*_start(), n=9), "a": uncached})
+        db.commit()
+        assert _rev(uid) == r0 + 1, "no cache → the file derives from geometry_geojson"
+    finally:
+        db.close()
+
+
+def test_range_past_eof_is_416(mhf_env, client, auth_headers, users):
+    from tests.test_me_activities_delete import _upload
+
+    uid = _user_id_of(client, auth_headers)
+    users.append(uid)
+    _upload(client, auth_headers, "mhf-eof", *_start(), contribute=False)
+    mhf.build_for_user(uid)
+    m = client.get("/me/heatmap/manifest", headers=auth_headers).json()
+    assert _range(client, auth_headers, m["tiles_url"], 10**9, 10**9 + 10).status_code == 416

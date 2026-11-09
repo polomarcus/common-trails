@@ -30,7 +30,6 @@ _DISPLAYED_COLUMNS = (
     "sport",
     "name",
     "display_geojson",
-    "geometry_geojson",
     "distance_m",
     "elevation_gain_m",
     "moving_time",
@@ -66,7 +65,13 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text(), nullable=True),
     )
 
-    changed = " OR ".join(f"o.{c} IS DISTINCT FROM n.{c}" for c in _DISPLAYED_COLUMNS)
+    # geometry_geojson only matters while the display cache is NULL (the file
+    # then derives from it); comparing two large TOASTed texts on EVERY update
+    # would double the geometry I/O — every geometry writer also rewrites
+    # display_geojson, which is compared above.
+    changed = " OR ".join(f"o.{c} IS DISTINCT FROM n.{c}" for c in _DISPLAYED_COLUMNS) + (
+        " OR (n.display_geojson IS NULL AND o.geometry_geojson IS DISTINCT FROM n.geometry_geojson)"
+    )
     op.execute(
         f"""
         CREATE OR REPLACE FUNCTION my_heatmap_bump_ins() RETURNS trigger

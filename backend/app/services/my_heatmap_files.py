@@ -62,12 +62,15 @@ VERSION_RE = re.compile(r"^r\d{1,18}-[0-9a-f]{16}$")
 TILE_LAYER = "activities"
 # Columns whose change alters the file — MUST match the trigger list in
 # alembic 0068 (pinned by test_my_heatmap_files::test_hook_columns_match_trigger).
+# geometry_geojson is checked separately, only when the display cache is NULL
+# (the file then derives its geometry from it) — every writer that changes the
+# geometry also rewrites display_geojson, and comparing two large TOASTed
+# texts on every UPDATE would double the geometry I/O on db-f1-micro.
 DISPLAYED_COLUMNS = (
     "user_id",
     "sport",
     "name",
     "display_geojson",
-    "geometry_geojson",
     "distance_m",
     "elevation_gain_m",
     "moving_time",
@@ -457,7 +460,7 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
         store.upload(summary_key(user_id, version), summary, "application/json", "gzip")
         uploaded.append(summary_key(user_id, version))
 
-        published, previous = _publish_cas(user_id, rev0, version, count, pm_bytes, sum_bytes)
+        published, previous = _publish_cas(user_id, rev0, version, count, pm_bytes, sum_bytes, force)
         if not published:
             for k in uploaded:
                 store.delete(k)
@@ -488,7 +491,8 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
 
 
 def _publish_cas(
-    user_id: str, rev0: int, version: str, count: int, pm_bytes: int, sum_bytes: int
+    user_id: str, rev0: int, version: str, count: int, pm_bytes: int, sum_bytes: int,
+    force: bool = False,
 ) -> tuple[bool, str | None]:
     """Point the user's row at ``version`` iff no build of a newer snapshot
     published meanwhile. Returns (published, previous_version)."""
@@ -508,11 +512,17 @@ def _publish_cas(
                        summary_bytes = :sb,
                        built_at = now(),
                        last_error = NULL
-                 WHERE user_id = :u AND built_rev < :rev
+                 WHERE user_id = :u
+                   AND (built_rev < :rev OR (:force AND built_rev = :rev))
+                   -- a row deleted + recreated meanwhile (support delete,
+                   -- merge) restarts data_rev at 1: never publish a snapshot
+                   -- "newer" than the data, it would never be fresh again.
+                   AND data_rev >= :rev
              RETURNING previous_version
                 """
             ),
-            {"v": version, "rev": rev0, "n": count, "pb": pm_bytes, "sb": sum_bytes, "u": user_id},
+            {"v": version, "rev": rev0, "n": count, "pb": pm_bytes, "sb": sum_bytes, "u": user_id,
+             "force": force},
         ).first()
         db.commit()
         return (row is not None, row[0] if row is not None else None)
@@ -678,7 +688,8 @@ def _changed_users(session: Session) -> Iterable[str]:
         if not isinstance(obj, Activity):
             continue
         state = sa_inspect(obj)
-        for col in DISPLAYED_COLUMNS:
+        cols = DISPLAYED_COLUMNS + (("geometry_geojson",) if obj.display_geojson is None else ())
+        for col in cols:
             hist = state.attrs[col].history
             if hist.has_changes():
                 if obj.user_id:
@@ -743,6 +754,12 @@ def _after_commit(session: Session) -> None:
 
 
 @event.listens_for(Session, "after_soft_rollback")
-def _after_rollback(session: Session, _previous_transaction) -> None:
+def _after_rollback(session: Session, previous_transaction) -> None:
+    # A SAVEPOINT rolling back (ingest wraps each activity in begin_nested)
+    # must not drop what the OUTER transaction already collected. Users seen
+    # only inside the rolled-back savepoint stay listed: at worst a no-op
+    # rebuild (the build skips fresh files).
+    if getattr(previous_transaction, "nested", False):
+        return
     session.info.pop(_INFO_KEY, None)
     session.info.pop(_DELETE_KEY, None)

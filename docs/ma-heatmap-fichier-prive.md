@@ -78,6 +78,12 @@ chargées qu'à sa sélection (`GET /me/activities/{id}`, déjà existant).
   `MY_HEATMAP_BUCKET` est égal à `HEATMAP_GCS_BUCKET` / `HEATMAP_ARTEFACTS_BUCKET`,
   n'envoie jamais `predefined_acl`, et pose `Cache-Control: private, no-store`
   sur les objets.
+- **Soft delete GCS désactivé** sur ce bucket (`--soft-delete-duration=0` /
+  `--clear-soft-delete`) : un fichier supprimé (RGPD, version remplacée) ne
+  reste pas récupérable 7 jours.
+- La version précédente reste lisible **par son seul propriétaire** jusqu'au
+  rebuild suivant (onglets ouverts) — elle peut contenir une sortie qu'il vient
+  de supprimer ; jamais par un tiers.
 - Arborescence : `users/{user_id}/{version}.pmtiles` et
   `users/{user_id}/{version}.summary.json` — objets **immuables**.
 
@@ -162,9 +168,12 @@ Trois triggers `FOR EACH STATEMENT` avec tables de transition sur `activities`
 (`INSERT`, `UPDATE`, `DELETE`) incrémentent `data_rev` de chaque `user_id`
 touché — ancien **et** nouveau propriétaire pour un `UPDATE` de `user_id`
 (fusion de comptes). L'`UPDATE` ne compte que si une colonne affichée change
-(`user_id, sport, name, display_geojson, geometry_geojson, distance_m,
+(`user_id, sport, name, display_geojson, distance_m,
 elevation_gain_m, moving_time, activity_date, created_at, provider,
-provider_activity_id, total_photo_count`).
+provider_activity_id, total_photo_count`, plus `geometry_geojson` seulement
+quand le cache `display_geojson` est NULL — comparer deux gros textes TOAST à
+chaque UPDATE doublerait les I/O de géométrie sur db-f1-micro, et tout écrivain
+de géométrie réécrit aussi le cache).
 
 C'est le point clé : **ORM, SQL brut, update en masse, cascade** — tous les
 chemins d'écriture passent par là, y compris ceux qu'on oubliera d'ajouter
