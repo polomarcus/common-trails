@@ -15,14 +15,17 @@ Chaque activité garde donc, à côté de sa trace d'origine (`geometry_geojson`
 3. coordonnées à 5 décimales.
 
 Code : `backend/app/services/display_geometry.py`. Ordre de grandeur mesuré :
-1 317 sorties = 20,8 Mo brut / 6,3 Mo gzip, contre ~30× plus sans le cache.
+1 317 sorties = 20,8 Mo brut / 6,3 Mo gzip. En prod (backfill du 2026-11-09),
+les gros comptes sont passés de 290 → 39 Mo, 361 → 33 Mo et 369 → 20 Mo
+(JSON brut servi), soit ×7 à ×18 selon la densité des traces.
 
 ## Qui le remplit, et quand
 
 | Cas | Ce qui se passe |
 |---|---|
-| **Nouvel import** (fichier, archive Strava/Garmin, Strava API, fusion de doublons) | calculé à l'écriture, `ingest._display_geojson` — rien à faire |
-| **Géométrie remplacée** (Strava qui met à jour une activité, promotion d'un jumeau) | recalculé au même endroit |
+| **Nouvel import** (fichier, archive Strava/Garmin, Strava API) | calculé à l'écriture, `ingest._display_geojson` — rien à faire |
+| **Géométrie remplacée** (flux Strava plus précis, promotion d'un doublon fichier ↔ Strava) | recalculé au même endroit |
+| **Fusion de comptes** | rien : les lignes changent de propriétaire, pas de géométrie |
 | **Changement de sport** | rien : le cache ne dépend que de la géométrie |
 | **Activités importées avant le 2026-11-07** (avant #40) | **NULL** → backfill une fois (ci-dessous) |
 | **Changement de l'algorithme** (seuils, précision) | backfill avec `--recompute` |
@@ -64,6 +67,7 @@ gcloud run jobs execute common-trails-ingest-pending-archives-prod \
 - **Sans risque pour les traces** : seul `display_geojson` est écrit, avec un
   garde md5 sur `geometry_geojson` (une trace modifiée entre la lecture et
   l'écriture n'est pas écrasée).
+- Le job a un timeout de 6 h et 1 retry ; le backfill complet de 8 335 lignes a pris 9 min. S'il est coupé, le relancer reprend où il s'est arrêté.
 - `--pace 0.5` laisse respirer la base db-f1-micro entre deux lots de 100.
 - Options : `--user-id <uuid>` (un seul compte), `--limit N`, `--recompute`.
 - Pas de rebuild PMTiles à faire : la carte publique n'utilise pas ce cache.
