@@ -793,7 +793,10 @@ app = FastAPI(
 
 app.state.limiter = limiter
 
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# compresslevel=6 (zlib's default) instead of Starlette's 9: on the heaviest
+# JSON response (/me/activities, tens of MB) level 9 cost ~4x the CPU of level
+# 6 for a near-identical size on a 1-vCPU instance.
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
 
 def _extract_origin(url: str) -> str:
     """Extract scheme+host+port from a URL (CORS origin has no path)."""
