@@ -179,7 +179,9 @@ de géométrie réécrit aussi le cache).
 d'abord `my_heatmap_config.enabled` et ne font rien (aucune écriture, aucun
 verrou) tant qu'il est faux — flag coupé, chaque écriture sur `activities` se
 comporte exactement comme avant la migration. Le premier build l'active, avant
-de lire `data_rev`. Une fois actifs, l'upsert verrouille la ligne
+de lire `data_rev`, sous `LOCK TABLE activities IN SHARE MODE` (attend les
+transactions d'écriture en cours, `lock_timeout` 30 s, une seule fois) : aucune
+écriture « non comptée » ne peut être commitée après le snapshot d'un fichier. Une fois actifs, l'upsert verrouille la ligne
 `my_heatmap_files` de l'utilisateur jusqu'au commit (deux ingestions
 concurrentes du même utilisateur se sérialisent) ; les lignes sont verrouillées
 dans l'ordre des `user_id`, donc pas d'interblocage entre deux instructions

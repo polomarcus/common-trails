@@ -894,3 +894,30 @@ def test_range_past_eof_is_416(mhf_env, client, auth_headers, users):
     mhf.build_for_user(uid)
     m = client.get("/me/heatmap/manifest", headers=auth_headers).json()
     assert _range(client, auth_headers, m["tiles_url"], 10**9, 10**9 + 10).status_code == 416
+
+
+def test_activation_waits_for_inflight_writer(mhf_env, users):
+    """A write whose trigger ran while disabled but that commits AFTER the
+    flip must not be missing from a `ready` file: the flip waits for it."""
+    import threading
+
+    _set_triggers(False)
+    db = SessionLocal()
+    uid = _mk_user(db)
+    users.append(uid)
+    db.commit()
+    _mk_activity(db, uid)  # in flight: trigger ran while disabled, not committed
+    result: dict = {}
+    t = threading.Thread(target=lambda: result.update(mhf.build_for_user(uid)))
+    t.start()
+    t.join(timeout=2)
+    assert t.is_alive(), "activation must wait for the in-flight writer"
+    db.commit()
+    db.close()
+    t.join(timeout=60)
+    assert result["status"] == "published" and result["activity_count"] == 1
+    db = SessionLocal()
+    try:
+        assert mhf.read_state(db, uid).fresh
+    finally:
+        db.close()

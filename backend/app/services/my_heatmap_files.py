@@ -413,8 +413,18 @@ def _run_tippecanoe(ndjson_path: str, out_path: str) -> None:
 def _activate_triggers(db) -> None:
     """Switch the staleness triggers on (alembic 0068 ships them as no-ops so
     the flag-off prod behaves exactly as before). Idempotent; done by the first
-    build, i.e. only once the feature is actually used. Writes that committed
-    while the triggers were off predate every file, so no file can miss them."""
+    build, i.e. only once the feature is actually used.
+
+    The one-time flip takes ``LOCK TABLE activities IN SHARE MODE`` first: it
+    waits for every transaction still writing activities (whose triggers ran
+    while disabled) to finish, so no write can commit un-bumped AFTER a file
+    snapshot. ``lock_timeout`` bounds the wait (writers queue behind it); on
+    timeout the build fails cleanly and is retried later. Runs in the caller's
+    transaction, which must commit before ``data_rev`` is read."""
+    if db.execute(sa_text("SELECT enabled FROM my_heatmap_config WHERE id = 1")).scalar():
+        return
+    db.execute(sa_text("SET LOCAL lock_timeout = '30s'"))
+    db.execute(sa_text("LOCK TABLE activities IN SHARE MODE"))
     db.execute(sa_text("UPDATE my_heatmap_config SET enabled = true WHERE id = 1 AND NOT enabled"))
 
 
