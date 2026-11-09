@@ -67,8 +67,9 @@ chargées qu'à sa sélection (`GET /me/activities/{id}`, déjà existant).
   public `common-trails-heatmap-${ENV}` derrière `tiles.chemins-communs.fr` :
   ces traces ne sont **pas masquées** (pas de `TRACE_MASK_METERS`) et partent
   du domicile des utilisateurs.
-- Garde-fous, assertés à chaque déploiement par `scripts/deploy-prod.sh`
-  (étape « 0b ») : création si absent, `uniform-bucket-level-access`,
+- Garde-fous, assertés par `scripts/deploy-prod.sh` (étape « 0b ») **à chaque
+  déploiement où `MY_HEATMAP_FILES_ENABLED=true`** — flag coupé, l'étape est
+  sautée (aucun appel bucket/IAM, l'infra prod est inchangée) : création si absent, `uniform-bucket-level-access`,
   **`public-access-prevention = enforced`** (GCS refuse alors tout ACL ou
   binding `allUsers` / `allAuthenticatedUsers`), et un seul binding :
   `roles/storage.objectAdmin` pour le SA runtime `common-trails-api@`.
@@ -237,7 +238,10 @@ s'il gêne, le paginer ou le charger après les tuiles est une suite possible.
 
 ## 9. Déploiement
 
-1. Merge (flag coupé) : migration 0068 + triggers, bucket asserté, code dormant.
+1. Merge (flag coupé) : migration 0068 + triggers, code dormant, **aucun appel
+   bucket/IAM** au déploiement.
+2. bis. Premier déploiement avec `MY_HEATMAP_FILES_ENABLED=true` (et
+   `MY_HEATMAP_FILES_USERS`) : le CD crée et asserte le bucket privé.
 2. Backfill : `python -m app.cli.my_heatmap_files backfill --pace 1` (comme
    `backfill_display_geojson`), sur le worker ou via proxy SQL.
 3. `MY_HEATMAP_FILES_USERS=<uuid de Paul>` → test réel sur un compte.

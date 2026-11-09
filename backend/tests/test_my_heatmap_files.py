@@ -695,12 +695,7 @@ def test_summary_is_gzip_and_geometry_free(mhf_env, users):
     assert set(data["activities"][0]) >= {"id", "sport", "bbox", "center", "start", "undated"}
 
 
-@pytest.mark.parametrize("flag,expect_ok", [("false", True), ("true", False)])
-def test_deploy_unverified_bucket_aborts_only_when_flag_on(tmp_path, flag, expect_ok):
-    """A gcloud that cannot prove public-access-prevention (missing deployer
-    rights, misconfigured bucket) must ABORT the deploy when the feature is ON
-    — and only warn when it is OFF (nothing writes to the bucket), so a merge
-    with the flag off can never block the normal CD."""
+def _run_deploy_with_stub(tmp_path, flag: str):
     import os
     import stat
     import subprocess
@@ -713,8 +708,10 @@ def test_deploy_unverified_bucket_aborts_only_when_flag_on(tmp_path, flag, expec
             break
     if script is None:
         pytest.skip("scripts/deploy-prod.sh not mounted")
+    log = tmp_path / "calls.log"
     stub = tmp_path / "gcloud"
-    stub.write_text("#!/usr/bin/env bash\nexit 0\n")  # describe → '' (not enforced)
+    # Records every call; describe → '' (public_access_prevention NOT enforced).
+    stub.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{log}"\nexit 0\n')
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
     env = {
         **os.environ,
@@ -724,5 +721,23 @@ def test_deploy_unverified_bucket_aborts_only_when_flag_on(tmp_path, flag, expec
         "MY_HEATMAP_FILES_ENABLED": flag,
     }
     proc = subprocess.run(["bash", str(script), "test-tag"], env=env, capture_output=True, text=True, timeout=60)
-    assert (proc.returncode == 0) is expect_ok, proc.stderr[-800:]
-    assert "public_access_prevention" in proc.stderr
+    calls = log.read_text() if log.exists() else ""
+    return proc, calls
+
+
+def test_deploy_flag_off_makes_no_bucket_or_iam_call(tmp_path):
+    """Flag OFF (prod default): the deploy touches exactly the infra it did
+    before this feature — no call on the private bucket at all."""
+    proc, calls = _run_deploy_with_stub(tmp_path, "false")
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert "my-heatmap" not in calls.replace("/internal/my-heatmap/rebuild", "")
+    assert "storage buckets create" not in calls
+    assert "storage buckets add-iam-policy-binding" not in calls
+
+
+def test_deploy_flag_on_aborts_on_unverified_bucket(tmp_path):
+    """Flag ON + a bucket that cannot be proven private → the deploy ABORTS."""
+    proc, calls = _run_deploy_with_stub(tmp_path, "true")
+    assert proc.returncode != 0
+    assert "public_access_prevention" in proc.stderr and "ABORT" in proc.stderr
+    assert "storage buckets update gs://common-trails-my-heatmap-prod" in calls
