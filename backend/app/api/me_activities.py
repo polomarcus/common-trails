@@ -6,6 +6,7 @@ Used by the frontend map to display and edit the user's personal routes.
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Iterator
@@ -136,6 +137,9 @@ STREAM_CHUNK_BYTES = 256 * 1024
 # (new property, different geometry derivation, …): it is part of the ETag,
 # so a deploy that changes the format invalidates every client's cached copy.
 ME_ACTIVITIES_FORMAT_VERSION = "1"
+# Belt and braces for a forgotten bump: Cloud Run sets K_REVISION per deploy,
+# so every deploy also invalidates cached copies (one refetch per client).
+_DEPLOY_REVISION = os.environ.get("K_REVISION", "")
 
 ME_ACTIVITIES_CACHE_CONTROL = "private, no-cache"
 
@@ -147,7 +151,7 @@ def _me_activities_etag(
     row validator (``user_map_activities_validator``). Weak because the same
     entity is served gzip-encoded or identity (GZipMiddleware)."""
     raw = "|".join(
-        [ME_ACTIVITIES_FORMAT_VERSION, user_id, sport or "*", str(limit), str(count), digest]
+        [ME_ACTIVITIES_FORMAT_VERSION, _DEPLOY_REVISION, user_id, sport or "*", str(limit), str(count), digest]
     )
     return 'W/"' + hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest() + '"'
 

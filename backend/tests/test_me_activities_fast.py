@@ -301,6 +301,14 @@ class TestEtag:
         monkeypatch.setattr(ma, "ME_ACTIVITIES_FORMAT_VERSION", "999")
         assert a != ma._me_activities_etag("u1", None, 5000, 3, "d")
 
+    def test_etag_unit_changes_with_deploy_revision(self, monkeypatch):
+        # A forgotten FORMAT_VERSION bump must not serve stale bodies forever:
+        # each Cloud Run revision (K_REVISION) yields a different ETag.
+        monkeypatch.setattr(ma, "_DEPLOY_REVISION", "web-00041-abc")
+        a = ma._me_activities_etag("u1", None, 5000, 3, "d")
+        monkeypatch.setattr(ma, "_DEPLOY_REVISION", "web-00042-def")
+        assert a != ma._me_activities_etag("u1", None, 5000, 3, "d")
+
     def test_logs_one_info_line(self, client, auth_headers, caplog):
         import logging
 
