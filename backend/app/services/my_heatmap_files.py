@@ -24,6 +24,17 @@ scripts/deploy-prod.sh), never one of the public heatmap buckets
 authenticated same-origin proxy in ``app.api.me_heatmap`` (path derived from
 the authenticated user, never from the URL).
 
+SHARING (§10): a user may share an unguessable token link
+(``app.services.my_heatmap_share``). For such users the same build pass also
+writes a SECOND, distinct artefact ``shares/{user_id}/{version}.pmtiles``:
+endpoint-masked on the RAW fixes exactly like the public raw-trace map
+(``trace_privacy.mask_endpoints``, ``TRACE_MASK_METERS``), ``sport`` only (no
+activity id, no name), dated non-Strava-API traces only (a second streamed
+read, only for users who share).
+It is published by the same compare-and-set (``share_version``), so it has the
+same invalidation. The private ``users/`` objects are never reachable from the
+public ``/s/`` routes (they only ever build ``shares/`` keys).
+
 Feature flag: ``MY_HEATMAP_FILES_ENABLED`` (default false) and optional
 ``MY_HEATMAP_FILES_USERS`` allow-list (comma-separated user ids) for a staged
 rollout. Flag off → everything here is a no-op and the manifest says
@@ -56,6 +67,7 @@ from sqlalchemy.orm import Session
 log = logging.getLogger(__name__)
 
 USER_PREFIX = "users"
+SHARE_PREFIX = "shares"
 # r{data_rev}-{16 hex}: the random part makes a version URL unguessable (a
 # browser-cached /me/heatmap/<version> URL can't be hit by another account).
 VERSION_RE = re.compile(r"^r\d{1,18}-[0-9a-f]{16}$")
@@ -79,6 +91,8 @@ DISPLAYED_COLUMNS = (
     "provider",
     "provider_activity_id",
     "total_photo_count",
+    # The shared artefact filters on provenance (duplicate promotion rewrites it).
+    "source",
 )
 
 
@@ -239,6 +253,11 @@ def summary_key(user_id: str, version: str) -> str:
     return f"{USER_PREFIX}/{user_id}/{version}.summary.json"
 
 
+def share_pmtiles_key(user_id: str, version: str) -> str:
+    """The SHARED (masked) artefact — the only key the public /s/ routes build."""
+    return f"{SHARE_PREFIX}/{user_id}/{version}.pmtiles"
+
+
 # ── State (the DB-side pointer) ──────────────────────────────────────────────
 
 
@@ -251,6 +270,9 @@ class FileState:
     activity_count: int | None
     pmtiles_bytes: int | None
     built_at: str | None
+    share_version: str | None = None
+    share_pmtiles_bytes: int | None = None
+    share_activity_count: int | None = None
 
     @property
     def fresh(self) -> bool:
@@ -261,7 +283,8 @@ def read_state(db, user_id: str) -> FileState | None:
     row = db.execute(
         sa_text(
             "SELECT data_rev, built_rev, version, previous_version, activity_count, "
-            "pmtiles_bytes, built_at FROM my_heatmap_files WHERE user_id = :u"
+            "pmtiles_bytes, built_at, share_version, share_pmtiles_bytes, share_activity_count "
+            "FROM my_heatmap_files WHERE user_id = :u"
         ),
         {"u": user_id},
     ).first()
@@ -275,6 +298,16 @@ def read_state(db, user_id: str) -> FileState | None:
         activity_count=row[4],
         pmtiles_bytes=row[5],
         built_at=row[6].isoformat() if row[6] else None,
+        share_version=row[7],
+        share_pmtiles_bytes=row[8],
+        share_activity_count=row[9],
+    )
+
+
+def has_share(db, user_id: str) -> bool:
+    return (
+        db.execute(sa_text("SELECT 1 FROM my_heatmap_shares WHERE user_id = :u"), {"u": user_id}).first()
+        is not None
     )
 
 
@@ -289,6 +322,10 @@ def manifest(db, user_id: str) -> dict:
     if not state.fresh:
         schedule_rebuild(user_id, reason="manifest-stale")
         return {"status": "stale", "version": state.version}
+    if state.share_version is None and has_share(db, user_id):
+        # Sharing turned on after the last build: the private file is fine,
+        # the shared artefact still has to be built (same snapshot).
+        schedule_rebuild(user_id, reason="manifest-share-missing")
     v = state.version
     return {
         "status": "ready",
@@ -383,6 +420,102 @@ def _write_inputs(user_id: str, ndjson_path: str, summary_path: str) -> int:
     return len(summary)
 
 
+# Which traces the SHARED artefact may contain (it is shown to third parties):
+# - provenance ``manual_upload`` only — Strava-API data (and legacy NULL rows,
+#   which came from the Strava API) may only power the owner's OWN view
+#   (Strava API policy, app.services.provenance);
+# - dated only — an undated trace is in practice a planned itinerary, never
+#   ridden: it stays in the owner's private view (same rule as the community
+#   map, provenance.community_eligible_conditions).
+# (contribute_heatmap is NOT required: it is the consent to feed the community
+# map; sharing one's own heatmap is its own explicit opt-in.)
+_SHARE_STREAM_SQL = """
+    SELECT sport,
+           CASE WHEN display_coords IS NOT NULL AND display_coords_params = :fp
+                THEN NULL ELSE geometry_geojson END,
+           CASE WHEN display_coords_params = :fp THEN display_coords ELSE NULL END
+      FROM activities
+     WHERE user_id = :u
+       AND geometry_geojson IS NOT NULL AND geometry_geojson <> ''
+       AND source = :community_source
+       AND activity_date IS NOT NULL
+     ORDER BY id
+"""
+
+
+def masked_runs(coords: list, mask_m: float | None = None) -> list[list]:
+    """Endpoint-mask RAW fixes exactly like the public raw-trace map
+    (``raw_trace_display.mask_then_densify`` minus the densify): track breaks
+    on >2.5 km jumps, then ``trace_privacy.mask_endpoints`` (radius
+    ``TRACE_MASK_METERS``) — the end zones are built from the recorded fixes,
+    never from a simplified line. Each surviving run is then compacted for
+    display (Douglas-Peucker 2 m, 5 decimals, 2-D)."""
+    from app.services.display_geometry import DISPLAY_COORD_DECIMALS, _simplify_dp
+    from app.services.raw_trace_display import break_long_jumps
+    from app.services.trace_privacy import mask_endpoints
+
+    out = []
+    for run in mask_endpoints(break_long_jumps(coords), mask_m):
+        pts = [
+            [round(float(c[0]), DISPLAY_COORD_DECIMALS), round(float(c[1]), DISPLAY_COORD_DECIMALS)]
+            for c in _simplify_dp([[c[0], c[1]] for c in run])
+        ]
+        if len(pts) >= 2:
+            out.append(pts)
+    return out
+
+
+def _write_share_inputs(user_id: str, ndjson_path: str) -> int:
+    """Stream the user's SHAREABLE activities (see ``_SHARE_STREAM_SQL``) →
+    endpoint-masked NDJSON features carrying ``sport`` only (no activity id,
+    no name, no date). Same source polyline as the public raw-trace map (the
+    ``display_coords`` blob, or the JSON through the same stages). Returns
+    the number of features written (fully-masked traces are dropped)."""
+    from app.db.session import SessionLocal
+    from app.services.provenance import COMMUNITY_SOURCE
+    from app.services.raw_trace_display import (
+        display_coords_fingerprint,
+        max_span_km,
+        plausible_bbox,
+        prepared_coords,
+    )
+    from app.services.trace_privacy import mask_meters
+
+    m = mask_meters()
+    max_span = max_span_km()
+    bbox_clip = plausible_bbox()
+    written = 0
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            sa_text(_SHARE_STREAM_SQL),
+            {"u": user_id, "fp": display_coords_fingerprint(), "community_source": COMMUNITY_SOURCE},
+        ).yield_per(50)
+        with open(ndjson_path, "w") as out:
+            for sport, geojson_str, dc_blob in rows:
+                coords = prepared_coords(geojson_str, dc_blob, max_span, bbox_clip)
+                if coords is None:
+                    continue
+                runs = masked_runs(coords, m)
+                if not runs:
+                    continue  # fully masked (a short loop around home)
+                out.write(
+                    json.dumps(
+                        {
+                            "type": "Feature",
+                            "geometry": {"type": "MultiLineString", "coordinates": runs},
+                            "properties": {"sport": sport or "road"},
+                        },
+                        separators=(",", ":"),
+                    )
+                )
+                out.write("\n")
+                written += 1
+    finally:
+        db.close()
+    return written
+
+
 def _run_tippecanoe(ndjson_path: str, out_path: str) -> None:
     if not shutil.which("tippecanoe"):
         raise RuntimeError("tippecanoe not installed")
@@ -438,9 +571,10 @@ def _ensure_row(db, user_id: str) -> None:
 
 
 def build_for_user(user_id: str, force: bool = False) -> dict:
-    """Build + publish the user's file. Idempotent; safe to run concurrently
-    (the CAS on ``built_rev`` decides). Never raises for an ordinary failure:
-    the error is recorded in ``last_error`` and returned."""
+    """Build + publish the user's file (and, when the user shares it, the
+    masked shared artefact). Idempotent; safe to run concurrently (the CAS on
+    ``built_rev`` decides). Never raises for an ordinary failure: the error is
+    recorded in ``last_error`` and returned."""
     from app.db.session import SessionLocal
 
     store = get_store()
@@ -455,6 +589,7 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
         _ensure_row(db, user_id)
         db.commit()
         state = read_state(db, user_id)
+        want_share = has_share(db, user_id)
     except Exception as exc:  # noqa: BLE001 — e.g. lock_timeout on the one-time activation
         db.rollback()
         log.warning("my-heatmap build could not start user=%s: %s", user_id, exc)
@@ -462,8 +597,12 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
     finally:
         db.close()
     assert state is not None
-    if state.fresh and not force:
+    share_missing = want_share and state.share_version is None
+    if state.fresh and not force and not share_missing:
         return {"status": "fresh", "version": state.version}
+    if state.fresh and share_missing:
+        # Sharing was just turned on: same snapshot, republish with the share.
+        force = True
     rev0 = state.data_rev
     version = f"r{rev0}-{secrets.token_hex(8)}"
 
@@ -474,7 +613,10 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
         ndjson = os.path.join(tmp, "activities.ndjson")
         summary = os.path.join(tmp, "summary.json.gz")
         pmtiles = os.path.join(tmp, "activities.pmtiles")
+        share_ndjson = os.path.join(tmp, "shared.ndjson") if want_share else None
+        share_pmtiles = os.path.join(tmp, "shared.pmtiles")
         count = _write_inputs(user_id, ndjson, summary)
+        share_count = _write_share_inputs(user_id, share_ndjson) if share_ndjson else 0
         pm_bytes = 0
         if count:
             _run_tippecanoe(ndjson, pmtiles)
@@ -484,17 +626,35 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
         sum_bytes = os.path.getsize(summary)
         store.upload(summary_key(user_id, version), summary, "application/json", "gzip")
         uploaded.append(summary_key(user_id, version))
+        share: tuple[str, int, int] | None = None
+        if share_ndjson is not None:
+            share_bytes = 0
+            if share_count:
+                _run_tippecanoe(share_ndjson, share_pmtiles)
+                share_bytes = os.path.getsize(share_pmtiles)
+                store.upload(share_pmtiles_key(user_id, version), share_pmtiles, "application/vnd.pmtiles")
+                uploaded.append(share_pmtiles_key(user_id, version))
+            share = (version, share_bytes, share_count)
 
-        published, previous = _publish_cas(user_id, rev0, version, count, pm_bytes, sum_bytes, force)
+        published, previous, share_kept = _publish_cas(
+            user_id, rev0, version, count, pm_bytes, sum_bytes, force, share
+        )
         if not published:
             for k in uploaded:
                 store.delete(k)
             return {"status": "superseded", "rev": rev0}
+        if share is not None and not share_kept:
+            # Revoked while we were building: never leave a shared object.
+            store.delete(share_pmtiles_key(user_id, version))
         _cleanup_old_versions(store, user_id, keep={version, previous} - {None}, upto_rev=rev0)
+        _cleanup_old_versions(
+            store, user_id, keep={version} if share_kept else set(), upto_rev=rev0, prefix=SHARE_PREFIX
+        )
         took = round(time.time() - t0, 2)
         log.info(
-            "my-heatmap built user=%s version=%s activities=%d pmtiles=%dB summary=%dB in %.1fs",
-            user_id, version, count, pm_bytes, sum_bytes, took,
+            "my-heatmap built user=%s version=%s activities=%d pmtiles=%dB summary=%dB shared=%s in %.1fs",
+            user_id, version, count, pm_bytes, sum_bytes,
+            share_count if share_kept else "-", took,
         )
         return {
             "status": "published",
@@ -502,6 +662,7 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
             "activity_count": count,
             "pmtiles_bytes": pm_bytes,
             "summary_bytes": sum_bytes,
+            "share_activity_count": share_count if share_kept else None,
             "seconds": took,
         }
     except Exception as exc:  # noqa: BLE001 — recorded, never crashes the worker
@@ -517,12 +678,17 @@ def build_for_user(user_id: str, force: bool = False) -> dict:
 
 def _publish_cas(
     user_id: str, rev0: int, version: str, count: int, pm_bytes: int, sum_bytes: int,
-    force: bool = False,
-) -> tuple[bool, str | None]:
+    force: bool = False, share: tuple[str, int, int] | None = None,
+) -> tuple[bool, str | None, bool]:
     """Point the user's row at ``version`` iff no build of a newer snapshot
-    published meanwhile. Returns (published, previous_version)."""
+    published meanwhile. ``share`` = (share_version, bytes, feature count) of
+    the masked shared artefact: recorded only if the share still exists when
+    the CAS runs (a revoke racing the build wins — the revoke's own UPDATE of
+    this row, serialised by the row lock, clears it too). Returns
+    (published, previous_version, share_kept)."""
     from app.db.session import SessionLocal
 
+    sv, sb, sn = share if share is not None else (None, None, None)
     db = SessionLocal()
     try:
         row = db.execute(
@@ -536,21 +702,28 @@ def _publish_cas(
                        pmtiles_bytes = :pb,
                        summary_bytes = :sb,
                        built_at = now(),
-                       last_error = NULL
+                       last_error = NULL,
+                       share_version = CASE WHEN :has_sv AND EXISTS (
+                           SELECT 1 FROM my_heatmap_shares s WHERE s.user_id = :u
+                         ) THEN CAST(:sv AS varchar) END,
+                       share_pmtiles_bytes = CAST(:shb AS bigint),
+                       share_activity_count = CAST(:shn AS integer)
                  WHERE user_id = :u
                    AND (built_rev < :rev OR (:force AND built_rev = :rev))
                    -- a row deleted + recreated meanwhile (support delete,
                    -- merge) restarts data_rev at 1: never publish a snapshot
                    -- "newer" than the data, it would never be fresh again.
                    AND data_rev >= :rev
-             RETURNING previous_version
+             RETURNING previous_version, share_version IS NOT NULL
                 """
             ),
             {"v": version, "rev": rev0, "n": count, "pb": pm_bytes, "sb": sum_bytes, "u": user_id,
-             "force": force},
+             "force": force, "has_sv": sv is not None, "sv": sv, "shb": sb, "shn": sn},
         ).first()
         db.commit()
-        return (row is not None, row[0] if row is not None else None)
+        if row is None:
+            return (False, None, False)
+        return (True, row[0], bool(row[1]))
     finally:
         db.close()
 
@@ -576,12 +749,15 @@ def _version_rev(version: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _cleanup_old_versions(store, user_id: str, keep: set[str], upto_rev: int) -> int:
-    """Delete this user's objects of versions not in ``keep`` whose snapshot is
-    not newer than ``upto_rev``. A NEWER build running concurrently may have
-    uploaded but not yet CAS-published its objects: those are left alone."""
+def _cleanup_old_versions(
+    store, user_id: str, keep: set[str], upto_rev: int, prefix: str = USER_PREFIX
+) -> int:
+    """Delete this user's objects (under ``prefix``) of versions not in
+    ``keep`` whose snapshot is not newer than ``upto_rev``. A NEWER build
+    running concurrently may have uploaded but not yet CAS-published its
+    objects: those are left alone."""
     removed = 0
-    for key in store.list_keys(f"{USER_PREFIX}/{user_id}/"):
+    for key in store.list_keys(f"{prefix}/{user_id}/"):
         version = key.rsplit("/", 1)[-1].split(".", 1)[0]
         rev = _version_rev(version)
         if version in keep or (rev is not None and rev > upto_rev):
@@ -591,16 +767,26 @@ def _cleanup_old_versions(store, user_id: str, keep: set[str], upto_rev: int) ->
     return removed
 
 
+def _delete_share_row(db, user_id: str) -> None:
+    # ``::text``: never a cast error on a malformed id (CLI input).
+    db.execute(sa_text("DELETE FROM my_heatmap_shares WHERE user_id::text = :u"), {"u": user_id})
+
+
 def delete_for_user(user_id: str, db=None) -> int:
-    """GDPR / account merge: delete EVERY object of the user + the row.
+    """GDPR / account merge: kill the share link, then delete EVERY object of
+    the user (private ``users/`` AND shared ``shares/``) + the rows.
     Returns the number of objects deleted. Works with the flag off too (a
     file built while it was on must still be erased)."""
     from app.db.session import SessionLocal
 
-    removed = _delete_objects(user_id)
     own = db is None
     s = SessionLocal() if own else db
     try:
+        # The link first: 404 immediately, whatever happens next.
+        _delete_share_row(s, user_id)
+        if own:
+            s.commit()
+        removed = _delete_objects(user_id)
         s.execute(sa_text("DELETE FROM my_heatmap_files WHERE user_id = :u"), {"u": user_id})
         if own:
             s.commit()
@@ -610,14 +796,22 @@ def delete_for_user(user_id: str, db=None) -> int:
     return removed
 
 
+def _prefix_user_ids(store, prefix: str) -> set[str]:
+    return {k.split("/")[1] for k in store.list_keys(f"{prefix}/") if k.count("/") >= 2}
+
+
 def sweep_orphans(dry_run: bool = False) -> list[str]:
-    """Delete the files of users that no longer exist (missed GDPR step)."""
+    """Delete the files of users that no longer exist (missed GDPR step), and
+    the shared objects of users whose share no longer exists (a revocation
+    whose object deletion failed). Returns the affected user ids."""
     from app.db.session import SessionLocal
 
     store = get_store()
     if store is None:
         return []
-    user_ids = sorted({k.split("/")[1] for k in store.list_keys(f"{USER_PREFIX}/") if k.count("/") >= 2})
+    private_ids = _prefix_user_ids(store, USER_PREFIX)
+    shared_ids = _prefix_user_ids(store, SHARE_PREFIX)
+    user_ids = sorted(private_ids | shared_ids)
     if not user_ids:
         return []
     db = SessionLocal()
@@ -628,13 +822,39 @@ def sweep_orphans(dry_run: bool = False) -> list[str]:
                 sa_text("SELECT id::text FROM users WHERE id::text = ANY(:ids)"), {"ids": user_ids}
             )
         }
+        sharing = {
+            str(r[0])
+            for r in db.execute(
+                sa_text("SELECT user_id::text FROM my_heatmap_shares WHERE user_id::text = ANY(:ids)"),
+                {"ids": sorted(shared_ids)},
+            )
+        }
     finally:
         db.close()
     orphans = [u for u in user_ids if u not in existing]
+    stale_shares = sorted(u for u in shared_ids if u in existing and u not in sharing)
     if not dry_run:
         for u in orphans:
             delete_for_user(u)
-    return orphans
+        for u in stale_shares:
+            delete_share_objects(u)
+    return orphans + stale_shares
+
+
+def delete_share_objects(user_id: str) -> int:
+    """Delete every SHARED object of the user (revocation, sweep)."""
+    store = get_store()
+    if store is None:
+        return 0
+    try:
+        keys = store.list_keys(f"{SHARE_PREFIX}/{user_id}/")
+    except Exception as exc:  # bucket never created (flag never turned on)
+        if type(exc).__name__ == "NotFound":
+            return 0
+        raise
+    for key in keys:
+        store.delete(key)
+    return len(keys)
 
 
 # ── Scheduling (debounced per user, never in the request path) ──────────────
@@ -748,9 +968,10 @@ def mark_dirty(session: Session, user_id: str) -> None:
 
 
 def mark_deleted(session: Session, user_id: str) -> None:
-    """The user is going away (account merge / deletion): drop the pointer row
-    in ``session``'s transaction, delete the objects once it commits (nothing
+    """The user is going away (account merge / deletion): drop the share link
+    and the pointer row in ``session``'s transaction, delete the objects once it commits (nothing
     is lost on rollback). Works with the flag off."""
+    _delete_share_row(session, user_id)
     session.execute(sa_text("DELETE FROM my_heatmap_files WHERE user_id = :u"), {"u": user_id})
     session.info.setdefault(_DELETE_KEY, set()).add(user_id)
 
@@ -767,7 +988,7 @@ def _delete_objects(user_id: str) -> int:
         raise
     for key in keys:
         store.delete(key)
-    return len(keys)
+    return len(keys) + delete_share_objects(user_id)
 
 
 @event.listens_for(Session, "after_commit")

@@ -9,6 +9,7 @@ import { getToken } from '@/lib/auth';
 import { MY_TRACES_COLOR } from '@/lib/constants';
 import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import PlaceSearch from '@/components/PlaceSearch';
+import MyHeatmapShare from '@/components/map/MyHeatmapShare';
 import LanguageToggle from '@/components/LanguageToggle';
 import type { LayerToggles, WaymarkedToggles } from '@/hooks/useLayerToggles';
 
@@ -229,6 +230,9 @@ export default function MapToolbar(props: MapToolbarProps) {
                 )}
               </label>
             )}
+            {/* « Partager ma heatmap » — secret link, opt-in (renders nothing
+                when the per-user file feature is off for this account). */}
+            {authToken && <MyHeatmapShare dateLocale={dateLocale} />}
             {/* Community heatmap toggle + inline sport filter */}
             <div>
               <label

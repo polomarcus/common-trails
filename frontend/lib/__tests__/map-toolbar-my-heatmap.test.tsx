@@ -24,6 +24,13 @@ vi.mock('next/link', () => ({
 }));
 vi.mock('@/components/PlaceSearch', () => ({ default: () => null }));
 vi.mock('@/components/LanguageToggle', () => ({ default: () => null }));
+// The share panel fetches its status: never hit a real API from a unit test.
+vi.mock('@/lib/my-heatmap-share', () => ({
+  fetchShareStatus: () => Promise.resolve({ available: false, active: false }),
+  createOrRegenerateShare: vi.fn(),
+  revokeShare: vi.fn(),
+  formatShareDate: () => '',
+}));
 
 import MapToolbar, { type MapToolbarProps } from '@/components/map/MapToolbar';
 import MapLegend from '@/components/map/MapLegend';

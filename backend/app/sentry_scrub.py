@@ -125,6 +125,23 @@ def _walk(value: Any) -> Any:
     return value
 
 
+# Shared "Ma heatmap" links: /s/{token}/… — the token IS the credential.
+_SHARE_TOKEN_RE = re.compile(r"/s/[A-Za-z0-9_-]{16,}")
+
+
+def _redact_share_tokens(value: Any) -> Any:
+    """Recursively replace ``/s/<token>`` with ``/s/[token]`` in every string."""
+    if isinstance(value, str):
+        return _SHARE_TOKEN_RE.sub("/s/[token]", value) if "/s/" in value else value
+    if isinstance(value, dict):
+        return {k: _redact_share_tokens(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_share_tokens(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_share_tokens(v) for v in value)
+    return value
+
+
 def before_send(event: dict, hint: dict) -> dict | None:  # noqa: ARG001
     """Sentry ``before_send`` hook — scrub raw coords from event payload.
 
@@ -138,6 +155,7 @@ def before_send(event: dict, hint: dict) -> dict | None:  # noqa: ARG001
     """
     if not event:
         return event
+    event = _redact_share_tokens(event)
 
     req = event.get("request")
     if isinstance(req, dict):

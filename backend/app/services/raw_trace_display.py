@@ -976,36 +976,48 @@ def iter_masked_runs(db, *, bbox=None, sport=None, since_days=None):
         norm_sport = _normalize_heat_edge_sport(raw_sport)
         if sport_filter is not None and norm_sport not in sport_filter:
             continue
-        # FAST PATH (migration 0065): a fingerprint-current display_coords blob
-        # already IS the post-clip, post-outlier polyline — skip straight to
-        # mask + densify (same stages, same order → byte-identical output).
-        coords = decode_display_coords(dc_blob) if dc_blob is not None else None
+        coords = prepared_coords(geojson_str, dc_blob, max_span, bbox_clip)
         if coords is None:
-            if geojson_str is None:
-                continue  # corrupt blob AND no JSON shipped — defensive; unreachable
-            try:
-                coords = json.loads(geojson_str).get("coordinates", [])
-            except (json.JSONDecodeError, AttributeError, TypeError):
-                continue
-            if not coords or len(coords) < 2:
-                continue
-            # Region clip (opt-in) FIRST — drops wholly-corrupt traces (e.g. an
-            # activity entirely mid-ocean) that the median guard can't, since their
-            # own median sits on the glitch. This is the ``HEATMAP_RAW_BBOX`` glitch
-            # guard (``bbox_clip``), independent of the caller's export ``bbox``.
-            if bbox_clip is not None:
-                coords = [p for p in coords if _in_bbox(p, bbox_clip)]
-                if len(coords) < 2:
-                    continue
-            # Then reject GPS-glitch outliers (points implausibly far from the ride's
-            # own body) BEFORE densify — else densify would interpolate a dense line
-            # straight out to the corrupt coordinate. Raw mode draws verbatim, so
-            # this is the guard the OSM-match implicitly gave the matched pipeline.
-            coords = _reject_far_outliers(coords, max_span)
-        if len(coords) < 2:
             continue
         for run in mask_then_densify(coords, m):
             yield aid, user_id, norm_sport, run
+
+
+def prepared_coords(geojson_str, dc_blob, max_span: float, bbox_clip) -> list | None:
+    """The RAW fixes the mask runs on: the fingerprint-current
+    ``display_coords`` blob, or the same stages applied live to the JSON.
+    ``None`` when nothing drawable is left. Shared with the shared "Ma
+    heatmap" artefact (``my_heatmap_files._write_share_inputs``) so both
+    public surfaces mask the very same polyline."""
+    # FAST PATH (migration 0065): a fingerprint-current display_coords blob
+    # already IS the post-clip, post-outlier polyline — skip straight to
+    # mask + densify (same stages, same order → byte-identical output).
+    coords = decode_display_coords(dc_blob) if dc_blob is not None else None
+    if coords is None:
+        if geojson_str is None:
+            return None  # corrupt blob AND no JSON shipped — defensive; unreachable
+        try:
+            coords = json.loads(geojson_str).get("coordinates", [])
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            return None
+        if not coords or len(coords) < 2:
+            return None
+        # Region clip (opt-in) FIRST — drops wholly-corrupt traces (e.g. an
+        # activity entirely mid-ocean) that the median guard can't, since their
+        # own median sits on the glitch. This is the ``HEATMAP_RAW_BBOX`` glitch
+        # guard (``bbox_clip``), independent of the caller's export ``bbox``.
+        if bbox_clip is not None:
+            coords = [p for p in coords if _in_bbox(p, bbox_clip)]
+            if len(coords) < 2:
+                return None
+        # Then reject GPS-glitch outliers (points implausibly far from the ride's
+        # own body) BEFORE densify — else densify would interpolate a dense line
+        # straight out to the corrupt coordinate. Raw mode draws verbatim, so
+        # this is the guard the OSM-match implicitly gave the matched pipeline.
+        coords = _reject_far_outliers(coords, max_span)
+    if len(coords) < 2:
+        return None
+    return coords
 
 
 def mask_then_densify(coords: list, mask_m: float) -> list[list]:
@@ -1019,11 +1031,21 @@ def mask_then_densify(coords: list, mask_m: float) -> list[list]:
     the trace crosses (default densify gap is 15 m > lattice cell). Densify may
     insert ``None`` breaks on a >2.5 km gap, hence the re-split.
     """
-    from app.services.ingest import _DENSIFY_MAX_BRIDGE_M, _densify_coords
+    from app.services.ingest import _densify_coords
 
-    # Mirror densify's GPS-break rule on the RAW fixes first: a jump longer
-    # than the bridge cap is a track break, not a segment — otherwise the mask
-    # could cut a point onto that phantom line and densify would then draw it.
+    out: list[list] = []
+    for run in mask_endpoints(break_long_jumps(coords), mask_m):
+        out.extend(_split_runs(_densify_coords(run, max_gap=3.0)))
+    return out
+
+
+def break_long_jumps(coords: list) -> list:
+    """Mirror densify's GPS-break rule on the RAW fixes: a jump longer than
+    the bridge cap is a track break (``None``), not a segment — otherwise the
+    mask could cut a point onto that phantom line and densify would then draw
+    it."""
+    from app.services.ingest import _DENSIFY_MAX_BRIDGE_M
+
     raw: list = []
     prev = None
     for pt in coords:
@@ -1035,11 +1057,7 @@ def mask_then_densify(coords: list, mask_m: float) -> list[list]:
             raw.append(None)
         raw.append(pt)
         prev = pt
-
-    out: list[list] = []
-    for run in mask_endpoints(raw, mask_m):
-        out.extend(_split_runs(_densify_coords(run, max_gap=3.0)))
-    return out
+    return raw
 
 
 def gate_run(run: list, sport: str, users_by_cell: dict, deg: float,
