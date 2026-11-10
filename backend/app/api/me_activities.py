@@ -3,13 +3,17 @@
 GET /me/activities — GeoJSON FeatureCollection of the user's imported traces.
 Used by the frontend map to display and edit the user's personal routes.
 """
+import hashlib
 import json
 import logging
+import os
+import time
 import uuid
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import AfterValidator, BaseModel, Field
 from sqlalchemy.orm import Session
@@ -24,9 +28,9 @@ from app.services.display_geometry import (  # noqa: F401 — re-exported (tests
     _split_at_gaps,
 )
 from app.services.ingest import (
-    count_user_map_activities,
     get_activity_by_id,
     iter_user_map_activities,
+    user_map_activities_validator,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,26 @@ class ActivitiesResponse(BaseModel):
     type: str = "FeatureCollection"
     features: list
     total: int
+
+
+def _feature_properties(act: dict) -> dict:
+    """The Feature ``properties`` — shared by the parsed and spliced paths so
+    both emit exactly the same keys, defaults and order."""
+    return {
+        "id": act["id"],
+        "name": act.get("name") or "",
+        "sport": act.get("sport", "road"),
+        "distance_m": act.get("distance_m"),
+        "elevation_gain_m": act.get("elevation_gain_m"),
+        "activity_date": act.get("activity_date"),
+        "created_at": act.get("created_at"),
+        # True when the row has no real date → kept off the public heatmap.
+        "undated": bool(act.get("undated", False)),
+        "moving_time": act.get("moving_time"),
+        "provider": act.get("provider", "file"),
+        "provider_activity_id": act.get("provider_activity_id"),
+        "total_photo_count": act.get("total_photo_count") or 0,
+    }
 
 
 def _activity_to_feature(act: dict, compact: bool = False) -> dict:
@@ -54,6 +78,10 @@ def _activity_to_feature(act: dict, compact: bool = False) -> dict:
     else the full-precision gap-split geometry (exactly the pre-cache payload,
     no extra CPU) — a GET never writes; ``app.cli.backfill_display_geojson``
     fills the cache.
+
+    The list endpoint does not parse cached rows: it splices the cached text
+    verbatim (``_compact_feature_json``). This stays the parsed reference path
+    (detail view + NULL-cache fallback).
     """
     cached = act.get("display_geojson") if compact else None
     # Not backfilled yet (or detail view): the pre-cache behaviour, gap split
@@ -63,22 +91,79 @@ def _activity_to_feature(act: dict, compact: bool = False) -> dict:
     return {
         "type": "Feature",
         "geometry": geometry,
-        "properties": {
-            "id": act["id"],
-            "name": act.get("name") or "",
-            "sport": act.get("sport", "road"),
-            "distance_m": act.get("distance_m"),
-            "elevation_gain_m": act.get("elevation_gain_m"),
-            "activity_date": act.get("activity_date"),
-            "created_at": act.get("created_at"),
-            # True when the row has no real date → kept off the public heatmap.
-            "undated": bool(act.get("undated", False)),
-            "moving_time": act.get("moving_time"),
-            "provider": act.get("provider", "file"),
-            "provider_activity_id": act.get("provider_activity_id"),
-            "total_photo_count": act.get("total_photo_count") or 0,
-        },
+        "properties": _feature_properties(act),
     }
+
+
+_JSON_SEPARATORS = (",", ":")
+
+
+def _compact_feature_json(act: dict) -> tuple[str, bool]:
+    """One /me/activities list Feature as compact JSON text →
+    ``(text, used_fallback)``.
+
+    Cached rows (``display_geojson`` set): the cached geometry TEXT is spliced
+    verbatim between the Feature envelope and ``json.dumps`` of the properties
+    — never parsed. The cache is itself ``json.dumps(..., separators=(",", ":"))``
+    output (``compact_display_geojson``, the only writer: ingest, Strava stream
+    upgrade, backfill), so this is the same text the former
+    ``json.dumps(json.loads(cached))`` round-trip emitted, without parsing and
+    re-serialising every coordinate (~36 MB for a heavy account).
+
+    Safety: the cache is valid JSON by construction (written only from
+    ``json.dumps`` output, NULL on any failure). The O(1) guard below — a JSON
+    object's first/last characters — catches what could plausibly go wrong
+    with stored text (empty / truncated / non-object value): such a row takes
+    the parsed path, which raises on invalid JSON so the caller skips the row
+    (the previous behaviour) instead of emitting an invalid body.
+
+    NULL cache: the parsed path, unchanged (gap-split of the full geometry).
+    """
+    cached = act.get("display_geojson")
+    if cached and cached[0] == "{" and cached[-1] == "}":
+        props = json.dumps(_feature_properties(act), separators=_JSON_SEPARATORS)
+        return '{"type":"Feature","geometry":' + cached + ',"properties":' + props + "}", False
+    feature = _activity_to_feature(act, compact=True)
+    return json.dumps(feature, separators=_JSON_SEPARATORS), True
+
+
+# The streamed body is emitted in chunks of at least this many bytes. One tiny
+# chunk per feature made every ASGI send + gzip call pay per-message overhead;
+# chunks >= 128 KiB also let Starlette's GZipMiddleware compress in a worker
+# thread instead of on the event loop.
+STREAM_CHUNK_BYTES = 256 * 1024
+
+# Bump whenever the /me/activities OUTPUT FORMAT changes for unchanged rows
+# (new property, different geometry derivation, …): it is part of the ETag,
+# so a deploy that changes the format invalidates every client's cached copy.
+ME_ACTIVITIES_FORMAT_VERSION = "1"
+# Belt and braces for a forgotten bump: Cloud Run sets K_REVISION per deploy,
+# so every deploy also invalidates cached copies (one refetch per client).
+_DEPLOY_REVISION = os.environ.get("K_REVISION", "")
+
+ME_ACTIVITIES_CACHE_CONTROL = "private, no-cache"
+
+
+def _me_activities_etag(
+    user_id: str, sport: str | None, limit: int, count: int, digest: str
+) -> str:
+    """Weak ETag over the format version, the user, the query params and the
+    row validator (``user_map_activities_validator``). Weak because the same
+    entity is served gzip-encoded or identity (GZipMiddleware)."""
+    raw = "|".join(
+        [ME_ACTIVITIES_FORMAT_VERSION, _DEPLOY_REVISION, user_id, sport or "*", str(limit), str(count), digest]
+    )
+    return 'W/"' + hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest() + '"'
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 9110 If-None-Match: weak comparison over a comma-separated list."""
+    if not if_none_match:
+        return False
+    if if_none_match.strip() == "*":
+        return True
+    opaque = etag.removeprefix("W/")
+    return any(c.strip().removeprefix("W/") == opaque for c in if_none_match.split(","))
 
 
 @router.get("/me/activities")
@@ -86,7 +171,8 @@ async def me_activities(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     sport: str | None = Query(None, description="road|gravel|mtb|offroad — omit for all"),
     limit: int = Query(200, ge=1, le=5000),
-) -> StreamingResponse:
+    if_none_match: str | None = Header(None),
+) -> Response:
     """Return personal activities as a GeoJSON FeatureCollection (private).
 
     Each Feature contains the route LineString geometry + sport/distance metadata.
@@ -98,9 +184,9 @@ async def me_activities(
     body approaches/exceeds Cloud Run's 32 MiB non-streaming response cap → a
     silent 500 → the map shows no personal routes. A streamed response is NOT
     subject to that cap. The body is emitted incrementally — the header, then
-    one ``json.dumps(feature)`` per row comma-separated, then the closing
-    ``]}`` — so the full feature list is never built in memory. The JSON shape
-    is byte-for-byte the same object the frontend already parses with
+    the comma-separated features, then the closing ``]}``, buffered into
+    ``STREAM_CHUNK_BYTES`` chunks — so the full feature list is never built in
+    memory. The JSON shape is the object the frontend parses with
     ``resp.json()``: ``{"type":"FeatureCollection","total":N,"features":[...]}``.
 
     **SQL-side filter/order/limit** (memory fix, follow-up to the 32 MiB one):
@@ -115,38 +201,77 @@ async def me_activities(
     (what ``[-limit:]`` on the insertion-ordered list produced).
 
     **Compact geometry** (payload fix): each feature carries the DISPLAY
-    geometry (gap-split → Douglas-Peucker 2 m → 5-decimal coords), read from
-    the precomputed ``display_geojson`` cache (rows not backfilled yet get the
-    pre-cache full-precision gap-split geometry) — ~19× smaller gzipped on a
-    dense 1 Hz ride. Full precision stays on
+    geometry (gap-split → Douglas-Peucker 2 m → 5-decimal coords), the
+    precomputed ``display_geojson`` cache spliced verbatim (rows not backfilled
+    yet get the pre-cache full-precision gap-split geometry) — ~19× smaller
+    gzipped on a dense 1 Hz ride. Full precision stays on
     ``/me/activities/{id}``.
+
+    **HTTP revalidation**: weak ``ETag`` + ``Cache-Control: private,
+    no-cache``. The browser keeps the body and revalidates on every /map
+    mount; an unchanged corpus answers ``304`` with no body after ONE indexed
+    query (``user_map_activities_validator`` — no geometry read), which also
+    yields ``total``.
     """
+    started = time.perf_counter()
     user_id = current_user.user_id
 
     # ``total`` is emitted at the head of the body, so it must be known before
-    # the rows stream: a cheap indexed COUNT, capped at ``limit``. (A write
-    # landing between the COUNT and the row scan could skew it by a row —
-    # same near-never mismatch class as the defensive per-feature skip below,
-    # accepted for O(1) memory.)
-    total = min(count_user_map_activities(user_id, sport=sport), limit)
+    # the rows stream: a cheap indexed COUNT (capped at ``limit``), computed in
+    # the same query as the validator. Computed BEFORE the row scan: a write
+    # landing in between yields a body at least as new as the ETag, so the
+    # next revalidation misses and refetches (never a stale 304). It can skew
+    # ``total`` by a row — same near-never mismatch class as the defensive
+    # per-feature skip below, accepted for O(1) memory.
+    count, digest = await run_in_threadpool(user_map_activities_validator, user_id, sport)
+    total = min(count, limit)
+    etag = _me_activities_etag(user_id, sport, limit, count, digest)
+    cache_headers = {"ETag": etag, "Cache-Control": ME_ACTIVITIES_CACHE_CONTROL}
+
+    if _etag_matches(if_none_match, etag):
+        logger.info(
+            "me_activities: 304 rows=%d elapsed_ms=%.0f",
+            total, (time.perf_counter() - started) * 1000,
+        )
+        return Response(status_code=304, headers=cache_headers)
 
     def _iter_body() -> Iterator[bytes]:
-        yield f'{{"type":"FeatureCollection","total":{total},"features":['.encode()
-        first = True
-        for act in iter_user_map_activities(user_id, sport=sport, limit=limit):
-            try:
-                feature = _activity_to_feature(act, compact=True)
-            except (json.JSONDecodeError, KeyError, TypeError):
-                continue
-            chunk = json.dumps(feature, separators=(",", ":"))
-            if first:
-                first = False
-                yield chunk.encode()
-            else:
-                yield ("," + chunk).encode()
-        yield b"]}"
+        rows = fallbacks = skipped = sent = 0
+        complete = False
+        buf = [f'{{"type":"FeatureCollection","total":{total},"features":[']
+        size = len(buf[0])
+        try:
+            for act in iter_user_map_activities(user_id, sport=sport, limit=limit):
+                try:
+                    text, fell_back = _compact_feature_json(act)
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    skipped += 1
+                    continue
+                if rows:
+                    text = "," + text
+                rows += 1
+                fallbacks += fell_back
+                buf.append(text)
+                size += len(text)
+                if size >= STREAM_CHUNK_BYTES:
+                    chunk = "".join(buf).encode()
+                    sent += len(chunk)
+                    yield chunk
+                    buf, size = [], 0
+            buf.append("]}")
+            chunk = "".join(buf).encode()
+            sent += len(chunk)
+            yield chunk
+            complete = True
+        finally:
+            logger.info(
+                "me_activities: 200 rows=%d fallbacks=%d skipped=%d bytes=%d "
+                "elapsed_ms=%.0f complete=%s",
+                rows, fallbacks, skipped, sent,
+                (time.perf_counter() - started) * 1000, complete,
+            )
 
-    return StreamingResponse(_iter_body(), media_type="application/json")
+    return StreamingResponse(_iter_body(), media_type="application/json", headers=cache_headers)
 
 
 class ContributionStatus(BaseModel):
