@@ -13,7 +13,14 @@ Run (local dev):        docker compose exec backend python -m app.cli.my_heatmap
 Run (prod, via proxy):  DATABASE_URL=... MY_HEATMAP_BUCKET=common-trails-my-heatmap-prod \\
                         MY_HEATMAP_FILES_ENABLED=true python -m app.cli.my_heatmap_files backfill --pace 1
 
-Backfill options: --user-id U (one user), --limit N (cap users this run),
+PROD: run ``backfill --enqueue``. Jobs run under the default compute service
+account, which has NO access to the private bucket (objectAdmin is granted to
+the API service account only, on purpose): an in-process build from a job
+fails with 403. ``--enqueue`` only schedules each user's rebuild on the worker
+(Cloud Tasks, API service account), exactly like the ORM hook does.
+
+Backfill options: --enqueue (schedule on the worker instead of building here),
+--user-id U (one user), --limit N (cap users this run),
 --pace S (sleep between users — DB courtesy on db-f1-micro), --force (rebuild
 even fresh files, e.g. after a tile-format change). Users are processed
 lightest first so the bulk of accounts is served early.
@@ -72,6 +79,7 @@ def backfill(
     limit: int | None = None,
     pace_seconds: float = 0.0,
     force: bool = False,
+    enqueue: bool = False,
 ) -> dict:
     if not mhf.flag_enabled() or mhf.get_store() is None:
         raise SystemExit(
@@ -84,7 +92,10 @@ def backfill(
         if not mhf.is_enabled_for(uid):
             counts["not_allowed"] = counts.get("not_allowed", 0) + 1
             continue
-        res = mhf.build_for_user(uid, force=force)
+        if enqueue:
+            res = {"status": mhf.schedule_rebuild(uid, reason="backfill")}
+        else:
+            res = mhf.build_for_user(uid, force=force)
         counts[res["status"]] = counts.get(res["status"], 0) + 1
         log.info("[%d/%d] user=%s → %s", i, len(users), uid, res)
         if pace_seconds > 0:
@@ -102,14 +113,19 @@ if __name__ == "__main__":
     b.add_argument("--user-id", default=None)
     b.add_argument("--limit", type=int, default=None, help="Max users this run.")
     b.add_argument("--pace", type=float, default=0.0, help="Seconds to sleep between users.")
-    b.add_argument("--force", action="store_true", help="Rebuild fresh files too.")
+    b.add_argument("--force", action="store_true", help="Rebuild fresh files too (in-process only).")
+    b.add_argument("--enqueue", action="store_true",
+                   help="Schedule each rebuild on the worker (prod jobs: no bucket access here).")
     d = sub.add_parser("delete", help="Delete one user's objects + row (GDPR).")
     d.add_argument("--user-id", required=True)
     s = sub.add_parser("sweep-orphans", help="Delete files of users that no longer exist.")
     s.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.cmd == "backfill":
-        backfill(user_id=args.user_id, limit=args.limit, pace_seconds=args.pace, force=args.force)
+        if args.enqueue and args.force:
+            parser.error("--force builds in-process; it cannot be combined with --enqueue")
+        backfill(user_id=args.user_id, limit=args.limit, pace_seconds=args.pace, force=args.force,
+                 enqueue=args.enqueue)
     elif args.cmd == "delete":
         n = mhf.delete_for_user(args.user_id)
         log.info("deleted %d object(s) + row for user %s", n, args.user_id)
