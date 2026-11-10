@@ -783,6 +783,8 @@ from app.api.me_stats import router as me_stats_router
 from app.api.notifications import router as notifications_router
 from app.api.routes import router as routes_router
 from app.api.share import router as share_router
+from app.api.shared_heatmap import SharedHeatmapCORSMiddleware
+from app.api.shared_heatmap import router as shared_heatmap_router
 from app.api.tags_export import router as tags_export_router
 from app.api.trips import router as trips_router
 
@@ -831,6 +833,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+# Shared "Ma heatmap" links (/s/…): CORS `*` without credentials, Origin /
+# Cookie / Authorization stripped — must wrap the credentialed CORSMiddleware
+# above (added after it = outer). Every other path is untouched.
+app.add_middleware(SharedHeatmapCORSMiddleware)
 
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request, exc):
@@ -877,6 +883,7 @@ app.include_router(me_photos_router)
 app.include_router(notifications_router)
 app.include_router(tags_export_router)
 app.include_router(share_router)
+app.include_router(shared_heatmap_router)
 app.include_router(collections_router)
 app.include_router(collections_public_router)
 app.include_router(trips_router)

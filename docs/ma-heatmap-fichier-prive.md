@@ -223,8 +223,16 @@ demain. Un fichier ne peut pas être servi `ready` avec des données périmées.
   les objets `users/{id}/` et la ligne. Le trigger ne suffit pas (il marque
   périmé, il ne supprime rien).
 - `python -m app.cli.my_heatmap_files sweep-orphans` : supprime les préfixes
-  `users/{id}/` dont l'utilisateur n'existe plus (filet si l'étape est oubliée).
-- Fusion : le fichier de l'absorbé est supprimé, celui du survivant reconstruit.
+  `users/{id}/` et `shares/{id}/` dont l'utilisateur n'existe plus (filet si
+  l'étape est oubliée), et les objets `shares/{id}/` d'un utilisateur dont le
+  partage n'existe plus.
+- Le lien partagé (§10) : `delete` supprime d'abord la ligne
+  `my_heatmap_shares` (404 immédiat), puis `users/{id}/` **et** `shares/{id}/`.
+  La FK `ON DELETE CASCADE` vers `users` tue aussi le lien si la ligne
+  utilisateur est supprimée avant.
+- Fusion : le fichier de l'absorbé est supprimé, celui du survivant
+  reconstruit ; le lien partagé de l'absorbé est supprimé (le survivant n'en
+  hérite pas).
 
 ## 8. Mesures (données synthétiques, 2026-11-09)
 
@@ -271,28 +279,76 @@ s'il gêne, le paginer ou le charger après les tuiles est une suite possible.
 Retour arrière : couper le flag → manifest `disabled` → le front repasse sur
 `/me/activities` sans redéploiement du front.
 
-## 10. Partage de « Ma heatmap » (décidé, PR suivante)
+## 10. Partage de « Ma heatmap » (implémenté)
 
 Décision de Paul : partage **activé par l'utilisateur**. Un bouton « Partager ma
 heatmap » crée un lien à **jeton aléatoire impossible à deviner** ; désactivé par
-défaut, révocable. Conçu ici, **implémenté dans une PR séparée** (celle-ci est
-déjà large et reste derrière un flag coupé ; le partage s'appuie dessus sans le
-modifier).
+défaut, révocable. Implémenté derrière le même flag (`MY_HEATMAP_FILES_ENABLED`
++ liste blanche) : flag coupé, tout lien répond 404 et la création est refusée
+(la révocation reste toujours possible).
+
+Code : `app/services/my_heatmap_share.py` (jeton, statut, révocation,
+résolution), `app/api/me_heatmap.py` (`GET|POST|DELETE /me/heatmap/share`,
+côté propriétaire), `app/api/shared_heatmap.py` (`/s/{jeton}/…`, public),
+`app/services/pmtiles_reader.py` + `mvt_raster.py` (lecture de tuile et rendu
+PNG sans dépendance), migration 0069, `frontend/components/map/MyHeatmapShare.tsx`
+(menu Calques, sous « Ma heatmap »).
 
 ### 10.1 Deux artefacts, jamais le même objet
 
 | | privé (cette PR) | partagé |
 |---|---|---|
-| géométrie | `display_geojson` **non masquée** | **masquée** comme la carte publique : `trace_privacy.mask_endpoints` (rayon `TRACE_MASK_METERS`, même code que l'export raw de la heatmap communautaire) appliqué avant tippecanoe |
+| géométrie | `display_geojson` **non masquée** | **masquée** comme la carte publique : `trace_privacy.mask_endpoints` (rayon `TRACE_MASK_METERS`) sur les **points GPS bruts** (`display_coords`, ou le JSON passé par les mêmes étapes — `raw_trace_display.prepared_coords` + `break_long_jumps`, exactement la chaîne de la carte publique), puis Douglas-Peucker 2 m / 5 décimales, avant tippecanoe |
+| traces incluses | toutes | **datées** et de provenance **`manual_upload`** seulement (voir ci-dessous) |
 | objets | `users/{id}/{v}.pmtiles` | `shares/{id}/{v}.pmtiles` (même bucket privé, préfixe distinct) |
 | propriétés des tuiles | `id`, `sport` | `sport` seulement (pas d'id d'activité, pas de nom) |
 | lecture | proxy authentifié, pas de CORS | `/s/{jeton}/…`, **CORS `*`**, sans cookie |
 
-Le build partagé est un second passage du même `build_for_user` (même lecture,
-même `rev0`, même CAS — colonne `share_version`), donc **même invalidation**
-(triggers, hook de session, fusion, manifest) ; il n'est fait que pour les
-utilisateurs qui ont un partage actif. Révocation, fusion et suppression RGPD
-suppriment aussi `shares/{id}/`.
+Le build partagé est un second passage du même `build_for_user` (même `rev0`,
+même CAS — colonnes `share_version`, `share_pmtiles_bytes`,
+`share_activity_count`), donc **même invalidation** (triggers, hook de session,
+fusion, manifest) ; il n'est fait que pour les utilisateurs qui ont un partage
+actif. Révocation, fusion et suppression RGPD suppriment aussi `shares/{id}/`.
+
+Précisions d'implémentation :
+
+- **Masquage sur les points bruts, pas sur `display_geojson`.** Les zones
+  d'extrémité de `mask_endpoints` sont construites sur les positions
+  enregistrées (ancres distinctes, `MIN_ANCHORS`…) : sur une ligne déjà
+  simplifiée, un premier point périmé aligné avec la route ferait disparaître
+  le domicile des ancres. Le passage partagé relit donc la géométrie brute —
+  une seconde lecture en flux (`_write_share_inputs`), **uniquement pour les
+  utilisateurs qui partagent**. Une écriture entre les deux lectures bumpe
+  `data_rev` > `rev0` : le fichier publié est aussitôt périmé et reconstruit,
+  comme pour la lecture principale.
+- **Traces exclues du partage** (restent dans la vue privée) :
+  - **sans date** — en pratique des itinéraires planifiés jamais roulés ;
+    même règle que la carte commune (`community_eligible_conditions`), et la
+    vue privée les marque déjà « non publiques » ;
+  - **Strava API** (`source = 'strava_api'`) et provenance inconnue (`NULL`,
+    issues de l'ancien import API) — la politique API Strava réserve ces
+    données à la vue **du propriétaire** (`app/services/provenance.py`) ; un
+    lien partagé les montrerait à des tiers. Un utilisateur dont toutes les
+    sorties viennent de l'API Strava partage donc une heatmap vide (l'UI le
+    dit et affiche le nombre de sorties partagées) ; ré-importer son archive
+    Strava les rend partageables.
+  - `contribute_heatmap` n'est **pas** requis : c'est le consentement à
+    alimenter la carte commune ; partager sa propre heatmap est un opt-in
+    distinct.
+- `source` rejoint les colonnes surveillées par les triggers (migration 0069
+  recrée la fonction `UPDATE`) : la promotion d'un doublon réécrit `source`.
+- Révocation pendant un build : la transaction du CAS verrouille la ligne
+  `my_heatmap_shares` (`FOR SHARE`) et n'enregistre `share_version` que si elle
+  existe encore ; sinon le build supprime son objet partagé. Une révocation
+  concurrente attend le commit du CAS puis efface elle-même pointeur et objets.
+  Filet : `sweep-orphans` supprime aussi les objets `shares/{id}/` d'un
+  utilisateur sans partage actif ; et si une route `/s/` trouve le pointeur
+  vers un objet disparu, elle l'efface et replanifie un build (auto-réparation).
+- Changer `TRACE_MASK_METERS` ou l'algorithme de masquage ne bumpe pas
+  `data_rev` : relancer `python -m app.cli.my_heatmap_files backfill --force`
+  pour reconstruire les artefacts partagés existants.
+- `my_heatmap_shares.user_id` a une FK `users.id ON DELETE CASCADE` : supprimer
+  le compte tue le lien même si une étape du runbook est oubliée.
 
 ### 10.2 Jeton
 
@@ -304,7 +360,26 @@ suppriment aussi `shares/{id}/`.
   **404 immédiatement** (lookup à chaque requête, pas de cache côté serveur) ;
   « Regénérer » = nouveau jeton, l'ancien meurt.
 - Comparaison par hash indexé (temps constant sur l'égalité de hash), rate limit
-  sur `/s/*` (slowapi existant) contre l'énumération.
+  sur `/s/*` (slowapi existant, 600/min/IP pour les tuiles, 120/min pour le
+  style) contre l'énumération.
+- Le jeton n'apparaît dans aucun log applicatif (seul l'id du propriétaire est
+  journalisé), les access logs uvicorn sont au niveau WARNING, et
+  `sentry_scrub` remplace `/s/<jeton>` par `/s/[token]` dans les événements
+  (et masque les variables locales `token` / toute valeur au format d'un
+  jeton) ; un filtre de log fait de même sur les loggers `slowapi` (429) et
+  `uvicorn.access`.
+  Les journaux de requêtes Cloud Run contiennent l'URL (accès limité au projet
+  GCP) — comme pour tout lien-capacité.
+- **Validité : pas d'expiration automatique** (décision déléguée par Paul,
+  2026-11-10). Le lien est fait pour être collé comme calque dans gpx.studio,
+  OsmAnd ou Locus : une URL qui expire casse le calque **silencieusement**
+  (tuiles vides, aucun message), sans que l'utilisateur sache pourquoi. La
+  sécurité repose sur : 192 bits d'entropie, stockage du seul hash, masquage
+  des extrémités, exclusion Strava/sans date, révocation immédiate et
+  regénération en un clic. L'UI affiche « lien créé le <date> » pour que
+  l'utilisateur voie l'âge du lien et décide de le regénérer.
+- Le lien n'étant pas stocké, une visite ultérieure affiche « Partage actif —
+  lien créé le … » sans l'URL ; « Regénérer le lien » en affiche un nouveau.
 
 ### 10.3 Ce qu'expose le lien (compatibilité gpx.studio, OsmAnd, Locus, MapLibre)
 
@@ -329,13 +404,20 @@ vectoriel** (pas de protocole `pmtiles://`). Le lien expose donc :
 | zooms | figés au build (les rasters publics par sport : z6–z12) | z4–z16 (sur-zoom de z14) |
 | révocation | supprimer N objets | immédiate |
 
+Implémentation : `pmtiles_reader` lit en-tête + répertoires (cache LRU par
+objet, versions immuables) puis la tuile par une Range ; `mvt_raster` décode le
+MVT (protobuf écrit à la main, sans dépendance) et dessine les lignes avec
+Pillow (sur-échantillonnage ×2), tuiles 256 px, z0–z18 (au-delà de z14, rendu
+depuis la tuile z14 ancêtre). L'URL absolue du style vient de
+`MY_HEATMAP_SHARE_BASE_URL` si défini, sinon `X-Forwarded-Proto` + `Host`.
+
 Le trafic d'un lien partagé est faible et bursty (un utilisateur qui ajoute un
 calque) : rendu à la demande, `Cache-Control: public, max-age=300` (un client
 garde au pire 5 min une tuile déjà vue après révocation ; aucun CDN devant l'API
 aujourd'hui). Si un lien devient populaire, passer à la pyramide est local à ce
 endpoint.
 
-### 10.4 Tests prévus
+### 10.4 Tests (`backend/tests/test_my_heatmap_share.py`, `frontend/lib/__tests__/my-heatmap-share.test.tsx`)
 
 - jeton : ≥ 128 bits d'entropie (longueur/alphabet), unicité sur N créations,
   jamais dérivable de l'id utilisateur ;
@@ -345,7 +427,11 @@ endpoint.
 - l'objet privé n'est **jamais** atteignable par `/s/…` (le chemin n'est construit
   que depuis `shares/`), et `/me/heatmap/…` ne répond pas au jeton ;
 - CORS `*` sur `/s/*` uniquement, aucun en-tête CORS sur `/me/heatmap/*` ;
-- suppression de compte / RGPD / fusion → `shares/{id}/` vidé et ligne supprimée.
+- suppression de compte / RGPD / fusion → `shares/{id}/` vidé et ligne supprimée ;
+- sans date et Strava API exclus ; propriétés de tuile = `sport` seul, sans id ;
+- lecteur PMTiles / décodeur MVT vérifiés contre les bibliothèques de référence
+  (`pmtiles`, `mapbox-vector-tile`, ~17 000 tuiles avec répertoires feuilles)
+  au développement ; les tests gardent les valeurs de référence de l'id Hilbert.
 
 ## 11. Hors périmètre / suites
 

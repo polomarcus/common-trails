@@ -48,6 +48,7 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `MY_HEATMAP_LOCAL_DIR` | vide | à définir pour tester | — | Stockage disque (dev/tests uniquement) |
 | `MY_HEATMAP_DEBOUNCE_S` | `60` | — | `60` | Fenêtre de débounce des rebuilds par utilisateur |
 | `INTERNAL_MY_HEATMAP_HANDLER_URL` | vide | — | `<worker>/internal/my-heatmap/rebuild` | Cible Cloud Tasks (file `CLOUD_TASKS_ARTEFACT_QUEUE`) |
+| `MY_HEATMAP_SHARE_BASE_URL` | vide (= `X-Forwarded-Proto` + `Host`) | — | vide | Origine absolue des liens « Partager ma heatmap » (`/s/{jeton}/…`, [doc §10](ma-heatmap-fichier-prive.md)) |
 
 ## Imports, jobs et déclencheurs
 

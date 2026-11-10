@@ -179,7 +179,9 @@ that's fine (user never uploaded an archive).
 private bucket `common-trails-my-heatmap-prod` —
 [`ma-heatmap-fichier-prive.md`](ma-heatmap-fichier-prive.md)). Deleting the
 `activities` rows only marks it stale; the objects must be deleted explicitly
-(works whether the feature flag is on or off):
+(works whether the feature flag is on or off). The same command also kills the
+user's **share link** (`my_heatmap_shares` row → `/s/<token>/…` answers 404)
+and deletes the masked shared file (`shares/USER_ID/`):
 
 ```bash
 DATABASE_URL=... MY_HEATMAP_BUCKET=common-trails-my-heatmap-prod \
@@ -187,8 +189,9 @@ DATABASE_URL=... MY_HEATMAP_BUCKET=common-trails-my-heatmap-prod \
 ```
 
 Backstop for a forgotten step: `python -m app.cli.my_heatmap_files sweep-orphans
---dry-run` lists file sets whose user no longer exists (drop `--dry-run` to
-delete them).
+--dry-run` lists file sets (`users/` and `shares/`) whose user no longer
+exists, and shared files whose share was revoked (drop `--dry-run` to delete
+them).
 
 ## 6. (Legacy) heat_edges_agg recompute — skip in raw mode
 

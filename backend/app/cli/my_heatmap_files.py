@@ -4,8 +4,10 @@ Subcommands:
 
   backfill       Build the file of every user that has map activities and no
                  fresh file (idempotent + resumable: fresh files are skipped).
-  delete         GDPR / support: delete ALL objects of one user + the row.
-  sweep-orphans  Delete files whose user no longer exists (missed GDPR step).
+  delete         GDPR / support: kill the user's share link, then delete ALL
+                 objects of one user (private users/ AND shared shares/) + rows.
+  sweep-orphans  Delete files (users/ + shares/) whose user no longer exists
+                 (missed GDPR step), and shared files whose share is revoked.
 
 Run (local dev):        docker compose exec backend python -m app.cli.my_heatmap_files backfill
 Run (prod, via proxy):  DATABASE_URL=... MY_HEATMAP_BUCKET=common-trails-my-heatmap-prod \\

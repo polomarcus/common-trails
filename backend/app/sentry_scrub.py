@@ -125,6 +125,34 @@ def _walk(value: Any) -> Any:
     return value
 
 
+# Shared "Ma heatmap" links: /s/{token}/… — the token IS the credential.
+_SHARE_TOKEN_RE = re.compile(r"/s/[A-Za-z0-9_-]{16,}")
+# A bare share token (stack-frame local ``token``, path params …):
+# token_urlsafe(24) = exactly 32 URL-safe base64 chars.
+_BARE_TOKEN_RE = re.compile(r"^'?[A-Za-z0-9_-]{32}'?$")
+_TOKEN_KEYS = {"token", "share_token"}
+
+
+def _redact_share_tokens(value: Any) -> Any:
+    """Recursively replace ``/s/<token>`` with ``/s/[token]`` in every string,
+    and drop bare share tokens (frame variables named ``token``, any value
+    shaped exactly like one — Sentry sends local variables by default)."""
+    if isinstance(value, str):
+        if _BARE_TOKEN_RE.match(value):
+            return "[token]"
+        return _SHARE_TOKEN_RE.sub("/s/[token]", value) if "/s/" in value else value
+    if isinstance(value, dict):
+        return {
+            k: ("[token]" if isinstance(k, str) and k in _TOKEN_KEYS and v else _redact_share_tokens(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_share_tokens(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_share_tokens(v) for v in value)
+    return value
+
+
 def before_send(event: dict, hint: dict) -> dict | None:  # noqa: ARG001
     """Sentry ``before_send`` hook — scrub raw coords from event payload.
 
@@ -138,6 +166,7 @@ def before_send(event: dict, hint: dict) -> dict | None:  # noqa: ARG001
     """
     if not event:
         return event
+    event = _redact_share_tokens(event)
 
     req = event.get("request")
     if isinstance(req, dict):

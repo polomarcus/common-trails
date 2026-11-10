@@ -192,7 +192,7 @@ def _user_id_of(client, headers) -> str:
 
 
 def test_hook_columns_match_trigger():
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0068_my_heatmap_files.py"
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0069_my_heatmap_shares.py"
     tree = ast.parse(path.read_text())
     cols = next(
         ast.literal_eval(n.value)
@@ -612,9 +612,9 @@ def test_concurrent_older_build_cannot_overwrite_newer(mhf_env, users):
     finally:
         db.close()
     # An older snapshot losing the race must not publish.
-    published, _ = mhf._publish_cas(uid, built[0] - 1, "r0-0000000000000000", 0, 0, 0)
+    published, _, _ = mhf._publish_cas(uid, built[0] - 1, "r0-0000000000000000", 0, 0, 0)
     assert not published
-    published, _ = mhf._publish_cas(uid, built[0], "r0-0000000000000001", 0, 0, 0)
+    published, _, _ = mhf._publish_cas(uid, built[0], "r0-0000000000000001", 0, 0, 0)
     assert not published
 
 
@@ -854,7 +854,7 @@ def test_build_racing_a_row_reset_never_publishes_ahead_of_data(mhf_env, users):
         db.commit()
     finally:
         db.close()
-    published, _ = mhf._publish_cas(uid, rev, "r9-0000000000000000", 0, 0, 0)
+    published, _, _ = mhf._publish_cas(uid, rev, "r9-0000000000000000", 0, 0, 0)
     assert not published
     assert mhf.build_for_user(uid)["status"] == "published"
     db = SessionLocal()
