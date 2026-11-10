@@ -11,6 +11,7 @@ export default defineConfig({
     // Only include tests that use vitest API (not legacy tsx-based tests)
     include: [
       'lib/__tests__/map-utils.test.ts',
+      'lib/__tests__/map-close-activity-layers.test.tsx',
       'lib/__tests__/gpx-utils.test.ts',
       'lib/__tests__/format.test.ts',
       'lib/__tests__/folder-zip.test.ts',
