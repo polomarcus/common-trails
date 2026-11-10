@@ -683,14 +683,26 @@ def _publish_cas(
     """Point the user's row at ``version`` iff no build of a newer snapshot
     published meanwhile. ``share`` = (share_version, bytes, feature count) of
     the masked shared artefact: recorded only if the share still exists when
-    the CAS runs (a revoke racing the build wins — the revoke's own UPDATE of
-    this row, serialised by the row lock, clears it too). Returns
+    the CAS runs (the share row is locked FOR SHARE until commit, so a racing
+    revoke either wins before, or waits and then clears it). Returns
     (published, previous_version, share_kept)."""
     from app.db.session import SessionLocal
 
     sv, sb, sn = share if share is not None else (None, None, None)
     db = SessionLocal()
     try:
+        if sv is not None:
+            # Lock the share row (FOR SHARE) for the whole CAS transaction: a
+            # concurrent revoke's DELETE either committed before (→ no row, the
+            # share is dropped here) or waits for our commit and then clears
+            # share_version + deletes the objects itself. Without the lock the
+            # UPDATE's EXISTS could see a row a revoke deletes meanwhile.
+            on = db.execute(
+                sa_text("SELECT 1 FROM my_heatmap_shares WHERE user_id::text = :u FOR SHARE"),
+                {"u": user_id},
+            ).first()
+            if on is None:
+                sv = sb = sn = None
         row = db.execute(
             sa_text(
                 """
@@ -703,9 +715,7 @@ def _publish_cas(
                        summary_bytes = :sb,
                        built_at = now(),
                        last_error = NULL,
-                       share_version = CASE WHEN :has_sv AND EXISTS (
-                           SELECT 1 FROM my_heatmap_shares s WHERE s.user_id = :u
-                         ) THEN CAST(:sv AS varchar) END,
+                       share_version = CAST(:sv AS varchar),
                        share_pmtiles_bytes = CAST(:shb AS bigint),
                        share_activity_count = CAST(:shn AS integer)
                  WHERE user_id = :u
@@ -718,7 +728,7 @@ def _publish_cas(
                 """
             ),
             {"v": version, "rev": rev0, "n": count, "pb": pm_bytes, "sb": sum_bytes, "u": user_id,
-             "force": force, "has_sv": sv is not None, "sv": sv, "shb": sb, "shn": sn},
+             "force": force, "sv": sv, "shb": sb, "shn": sn},
         ).first()
         db.commit()
         if row is None:

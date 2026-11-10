@@ -337,10 +337,16 @@ Précisions d'implémentation :
     distinct.
 - `source` rejoint les colonnes surveillées par les triggers (migration 0069
   recrée la fonction `UPDATE`) : la promotion d'un doublon réécrit `source`.
-- Révocation pendant un build : le CAS n'enregistre `share_version` que si la
-  ligne `my_heatmap_shares` existe encore ; sinon le build supprime son objet
-  partagé. Filet : `sweep-orphans` supprime aussi les objets `shares/{id}/`
-  d'un utilisateur sans partage actif.
+- Révocation pendant un build : la transaction du CAS verrouille la ligne
+  `my_heatmap_shares` (`FOR SHARE`) et n'enregistre `share_version` que si elle
+  existe encore ; sinon le build supprime son objet partagé. Une révocation
+  concurrente attend le commit du CAS puis efface elle-même pointeur et objets.
+  Filet : `sweep-orphans` supprime aussi les objets `shares/{id}/` d'un
+  utilisateur sans partage actif ; et si une route `/s/` trouve le pointeur
+  vers un objet disparu, elle l'efface et replanifie un build (auto-réparation).
+- Changer `TRACE_MASK_METERS` ou l'algorithme de masquage ne bumpe pas
+  `data_rev` : relancer `python -m app.cli.my_heatmap_files backfill --force`
+  pour reconstruire les artefacts partagés existants.
 - `my_heatmap_shares.user_id` a une FK `users.id ON DELETE CASCADE` : supprimer
   le compte tue le lien même si une étape du runbook est oubliée.
 
@@ -358,7 +364,10 @@ Précisions d'implémentation :
   style) contre l'énumération.
 - Le jeton n'apparaît dans aucun log applicatif (seul l'id du propriétaire est
   journalisé), les access logs uvicorn sont au niveau WARNING, et
-  `sentry_scrub` remplace `/s/<jeton>` par `/s/[token]` dans les événements.
+  `sentry_scrub` remplace `/s/<jeton>` par `/s/[token]` dans les événements
+  (et masque les variables locales `token` / toute valeur au format d'un
+  jeton) ; un filtre de log fait de même sur les loggers `slowapi` (429) et
+  `uvicorn.access`.
   Les journaux de requêtes Cloud Run contiennent l'URL (accès limité au projet
   GCP) — comme pour tout lien-capacité.
 - **Validité : pas d'expiration automatique** (décision déléguée par Paul,

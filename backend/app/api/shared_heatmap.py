@@ -90,8 +90,17 @@ def _tile(res: ResolvedShare, z: int, x: int, y: int) -> tuple[pmtiles_reader.He
         raise HTTPException(status_code=404, detail="Not found")
     try:
         return pmtiles_reader.get_tile(key, _read_fn(store, key), z, x, y)
-    except FileNotFoundError as exc:  # object deleted (revocation racing this request)
+    except (FileNotFoundError, pmtiles_reader.PMTilesError) as exc:
+        _object_missing(res, exc)
         raise HTTPException(status_code=404, detail="Not found") from exc
+
+
+def _object_missing(res: ResolvedShare, exc: Exception) -> None:
+    """The pointed-at shared object is gone or unreadable: self-heal (clear
+    the pointer + rebuild). Logs the owner id, never the token."""
+    log.warning("my-heatmap shared object unreadable user=%s: %s", res.user_id, type(exc).__name__)
+    if res.share_version:
+        share_svc.heal_missing_object(res.user_id, res.share_version)
 
 
 @router.get("/{token}/heatmap.pmtiles")
@@ -101,7 +110,12 @@ def shared_pmtiles(token: str, request: Request, db: Annotated[Session, Depends(
     store = mhf.get_store()
     if res.key is None or store is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return range_response(request, store, res.key, res.share_pmtiles_bytes, _etag(res), PUBLIC_CACHE)
+    try:
+        return range_response(request, store, res.key, res.share_pmtiles_bytes, _etag(res), PUBLIC_CACHE)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            _object_missing(res, exc)
+        raise
 
 
 @router.get("/{token}/style.json")
@@ -188,7 +202,8 @@ def shared_raster_tile(
         # The archive's real max zoom (header cached per immutable version).
         try:
             zmax = pmtiles_reader.header_and_root(res.key, _read_fn(store, res.key))[0].max_zoom
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, pmtiles_reader.PMTilesError) as exc:
+            _object_missing(res, exc)
             raise HTTPException(status_code=404, detail="Not found") from exc
     dz = max(0, z - zmax)
     header, data = _tile(res, z - dz, x >> dz, y >> dz)
@@ -212,7 +227,7 @@ _CORS_HEADERS = [
 class SharedHeatmapCORSMiddleware:
     """Pure ASGI. For ``/s/…`` only:
 
-    - answers CORS preflights itself (``*``, GET/HEAD, ``Range``);
+    - answers CORS preflights itself (``*``, GET, ``Range``);
     - strips ``Origin``, ``Cookie`` and ``Authorization`` from the request, so
       neither the site's credentialed CORS policy nor cookie auth can apply;
     - sets ``Access-Control-Allow-Origin: *`` (never with credentials) on the
@@ -235,7 +250,7 @@ class SharedHeatmapCORSMiddleware:
                 "status": 204,
                 "headers": [
                     *_CORS_HEADERS,
-                    (b"access-control-allow-methods", b"GET, HEAD, OPTIONS"),
+                    (b"access-control-allow-methods", b"GET, OPTIONS"),
                     (b"access-control-allow-headers", b"Range, If-Match, If-None-Match, Cache-Control"),
                     (b"access-control-max-age", b"86400"),
                 ],

@@ -125,6 +125,27 @@ def revoke(db, user_id: str) -> bool:
     return bool(n)
 
 
+def heal_missing_object(user_id: str, share_version: str) -> None:
+    """The row points at a shared object that is gone (a revoke or a sweep
+    raced a publish): forget it and rebuild — otherwise the file looks fresh
+    and the link would serve 404s until the user's data changes."""
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.execute(
+            sa_text(
+                "UPDATE my_heatmap_files SET share_version = NULL, share_pmtiles_bytes = NULL, "
+                "share_activity_count = NULL WHERE user_id = :u AND share_version = :v"
+            ),
+            {"u": user_id, "v": share_version},
+        )
+        db.commit()
+    finally:
+        db.close()
+    mhf.schedule_rebuild(user_id, reason="share-object-missing")
+
+
 @dataclass(frozen=True)
 class ResolvedShare:
     user_id: str

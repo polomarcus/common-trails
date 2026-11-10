@@ -401,10 +401,23 @@ def test_private_object_never_reachable_by_token(share_env, client, auth_headers
     for k in store.list_keys(f"shares/{uid}/"):
         store.delete(k)
     pmtiles_reader.clear_cache()
+    share_env.clear()
     assert _get(client, urls["pmtiles"]).status_code == 404
+    # Self-heal: the dangling pointer is cleared and a rebuild scheduled.
+    assert any(u == uid for u, _ in share_env)
+    db = SessionLocal()
+    try:
+        assert mhf.read_state(db, uid).share_version is None
+    finally:
+        db.close()
     pub = _public_urls(urls, coords)
-    assert client.get(pub["pbf"]).status_code == 404
-    assert client.get(pub["png"]).status_code == 404
+    pbf = client.get(pub["pbf"])
+    assert pbf.status_code == 204 and pbf.content == b""
+    png = client.get(pub["png"])
+    assert Image.open(io.BytesIO(png.content)).getchannel("A").getextrema()[1] == 0
+    # Rebuilt → served again (from shares/ only).
+    assert mhf.build_for_user(uid)["share_activity_count"] == 1
+    assert client.get(pub["pbf"]).status_code == 200
     # The private proxy does not answer to a token (no cookie, token as version).
     assert client.get("/me/heatmap/manifest", headers={"Authorization": f"Bearer {token}"}).status_code == 401
     assert client.get(f"/me/heatmap/{token}.pmtiles", headers={"Range": "bytes=0-9"}).status_code == 401
@@ -633,6 +646,44 @@ def test_sweep_removes_shared_objects_without_share(share_env, users):  # noqa: 
 
 
 # ── Sentry, base URL, reader ─────────────────────────────────────────────────
+
+
+def test_tile_with_missing_object_heals(share_env, client, auth_headers, users):  # noqa: F811
+    uid, coords = _share_user(client, auth_headers, users, extra=False)
+    urls = client.post("/me/heatmap/share", headers=auth_headers).json()["urls"]
+    mhf.build_for_user(uid)
+    for k in mhf.get_store().list_keys(f"shares/{uid}/"):
+        mhf.get_store().delete(k)
+    pmtiles_reader.clear_cache()
+    pub = _public_urls(urls, coords)
+    assert client.get(pub["pbf"]).status_code == 404
+    db = SessionLocal()
+    try:
+        assert mhf.read_state(db, uid).share_version is None
+    finally:
+        db.close()
+    assert mhf.build_for_user(uid)["status"] == "published"
+
+
+def test_log_redactor_hides_share_tokens():
+    from app.logging_config import ShareTokenRedactor
+
+    t = share_svc.new_token()
+    rec = logging.LogRecord("slowapi", logging.INFO, __file__, 1,
+                            "ratelimit %s (%s) exceeded at endpoint: %s", ("600/minute", "ip", f"/s/{t}/1/2/3.png"), None)
+    ShareTokenRedactor().filter(rec)
+    assert t not in rec.getMessage() and "/s/[token]" in rec.getMessage()
+
+
+def test_sentry_scrub_redacts_frame_locals():
+    from app.sentry_scrub import before_send
+
+    t = share_svc.new_token()
+    ev = {"exception": {"values": [{"stacktrace": {"frames": [
+        {"vars": {"token": t, "z": 14}}, {"vars": {"x": f"'{t}'", "other": "short"}},
+    ]}}]}}
+    out = json.dumps(before_send(ev, {}))
+    assert t not in out and '"z": 14' in out
 
 
 def test_sentry_scrub_redacts_share_tokens():
