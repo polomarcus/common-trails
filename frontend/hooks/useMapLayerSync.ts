@@ -416,8 +416,12 @@ export function useMapLayerSync(params: {
       applyUserTraceOpacity(m, false);
       // Restore layer toggles saved before activity selection
       if (layersBeforeActivityRef.current) {
-        setLayers(() => layersBeforeActivityRef.current!);
+        // Capture BEFORE clearing the ref: React runs an updater lazily (at the
+        // next render), after the ref is nulled — `() => ref.current!` set the
+        // layer toggles to null and crashed /map on closing a ride.
+        const saved = layersBeforeActivityRef.current;
         layersBeforeActivityRef.current = null;
+        setLayers(saved);
       }
       // Clear markers only if no viewed route is showing either
       if (!viewedRoute) {
@@ -469,8 +473,9 @@ export function useMapLayerSync(params: {
     } else {
       // Restore layers when route is closed
       if (layersBeforeRouteRef.current) {
-        setLayers(() => layersBeforeRouteRef.current!);
+        const saved = layersBeforeRouteRef.current; // same lazy-updater trap as above
         layersBeforeRouteRef.current = null;
+        setLayers(saved);
       }
       if (waymarkedBeforeRouteRef.current) {
         setWaymarked(waymarkedBeforeRouteRef.current);
