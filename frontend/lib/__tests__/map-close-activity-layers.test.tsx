@@ -37,12 +37,16 @@ const ride: ActivityItem = {
 
 let seen: LayerToggles | null = null;
 let select: (a: ActivityItem | null) => void = () => {};
+let view: (r: unknown) => void = () => {};
+const route = { coords: [[3, 43], [3.2, 43.2]] };
 
 function Harness() {
   const [layers, setLayers] = useState<LayerToggles>(INITIAL);
   const [waymarked, setWaymarked] = useState<WaymarkedToggles>({ hiking: false, cycling: false, mtb: false });
   const [selected, setSelected] = useState<ActivityItem | null>(null);
+  const [viewed, setViewed] = useState<unknown>(null);
   select = setSelected;
+  view = setViewed;
   seen = layers;
   const layersReady = useRef(true);
   const nullRef = <T,>() => ({ current: null as T | null });
@@ -50,7 +54,7 @@ function Harness() {
     mapInstance: map, layersReady, layers, setLayers, waymarked, setWaymarked,
     highContrast: false, rv: {}, heatmapSport: 'all', heatmapDays: null,
     loadCommunityHeatmap: () => {}, loadDfciTrails: () => {},
-    selectedActivity: selected, viewedRoute: null, editParentRoute: null,
+    selectedActivity: selected, viewedRoute: viewed, editParentRoute: null,
     routeVariants: [], visibleVariantIds: new Set(),
     photoData: null, setPhotoData: () => {}, setLightboxPhotos: () => {}, setLightboxPhoto: () => {},
     photoMarkersRef: useRef([]), maplibreModuleRef: useRef(null),
@@ -79,6 +83,28 @@ describe('/map — closing a selected ride', () => {
 
     act(() => select(null));
     expect(seen).not.toBeNull();
+    expect(seen).toEqual(INITIAL);
+  });
+
+  it('ride + route open together: overlays stay hidden until both are closed', () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root!.render(<Harness />));
+    const hidden = { heatmap: false, dfci: false, myTraces: false };
+
+    act(() => select(ride));
+    act(() => view(route));
+    act(() => select(null));
+    expect(seen).toMatchObject(hidden);       // route still open
+    act(() => view(null));
+    expect(seen).toEqual(INITIAL);            // not the hidden snapshot
+
+    act(() => view(route));
+    act(() => select(ride));
+    act(() => view(null));
+    expect(seen).toMatchObject(hidden);       // ride still open
+    act(() => select(null));
     expect(seen).toEqual(INITIAL);
   });
 });
