@@ -127,4 +127,13 @@ describe('MapActivitiesNotice', () => {
     expect(container.querySelector('[data-testid="map-activities-capped"]')!.textContent)
       .toBe('5000 sorties les plus récentes affichées');
   });
+
+  it('per-user PMTiles file (every activity, no cap): no "most recent shown" note above 5000', async () => {
+    auth.token = 'cookie-auth';
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<I18nProvider><MapActivitiesNotice count={14000} uncapped /></I18nProvider>);
+    });
+    expect(container.querySelector('[data-testid="map-activities-capped"]')).toBeNull();
+  });
 });

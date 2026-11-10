@@ -126,6 +126,16 @@ WORKER_RUN_URL="https://${WORKER_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app" #
 # env-file AND the jobs' job_env_for, so the two can never disagree.
 HEATMAP_GCS_BUCKET="common-trails-heatmap-${ENV}"
 HEATMAP_PUBLIC_BASE_URL="https://tiles.chemins-communs.fr"
+# PRIVATE per-user "Ma heatmap" files (docs/ma-heatmap-fichier-prive.md). A
+# DIFFERENT bucket from the public one above, on purpose: these traces are NOT
+# endpoint-masked and start at users' homes. Never fronted by a CDN, never
+# granted to allUsers; served only through the authenticated /me/heatmap proxy.
+# Asserted in step 0b. Feature flag OFF by default — flip with
+# MY_HEATMAP_FILES_ENABLED=true (optionally MY_HEATMAP_FILES_USERS="<uuid>;<uuid>"
+# for a staged rollout) in the deployer's env.
+MY_HEATMAP_BUCKET_NAME="common-trails-my-heatmap-${ENV}"
+MY_HEATMAP_FILES_ENABLED="${MY_HEATMAP_FILES_ENABLED:-false}"
+MY_HEATMAP_FILES_USERS="${MY_HEATMAP_FILES_USERS:-}"
 
 # ── Cloud Scheduler (2026-11-07 ops audit P0-1/P0-2) ─────────────────────────
 # The daily/monthly backstops call the Cloud Run Admin API `…/jobs/<job>:run`
@@ -261,6 +271,12 @@ CLOUD_TASKS_INVOKER_SA: "${TASKS_INVOKER_SA}"
 INTERNAL_HEAT_HANDLER_URL: "${WORKER_RUN_URL}/internal/ingest/heat"
 CLOUD_TASKS_ARTEFACT_QUEUE: "common-trails-artefact-rebuild-${ENV}"
 INTERNAL_ARTEFACT_HANDLER_URL: "${WORKER_RUN_URL}/internal/artefacts/rebuild"
+# Per-user private "Ma heatmap" rebuilds reuse the artefact-rebuild queue (no
+# new queue to create) with their own handler on the WORKER (tippecanoe).
+INTERNAL_MY_HEATMAP_HANDLER_URL: "${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
+MY_HEATMAP_BUCKET: "${MY_HEATMAP_BUCKET_NAME}"
+MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED:-false}"
+MY_HEATMAP_FILES_USERS: "${MY_HEATMAP_FILES_USERS}"
 CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE: "common-trails-strava-webhook-${ENV}"
 INTERNAL_STRAVA_WEBHOOK_HANDLER_URL: "${WORKER_RUN_URL}/internal/strava/webhook-event"
 INTERNAL_STRAVA_HEALTH_HANDLER_URL: "${RUN_URL}/internal/strava/health-check"
@@ -410,6 +426,66 @@ else
   echo 'ARCHIVE_RESUMABLE_UPLOADS: "false"' >> "$ENV_FILE"
 fi
 
+# ── 0b. Assert the PRIVATE "Ma heatmap" bucket ──────────────────────────────
+# Per-user PMTiles of UNMASKED personal traces (docs/ma-heatmap-fichier-prive.md
+# §3). Declarative + idempotent, like the CORS assertion above:
+#   • create it if missing (region-local, uniform bucket-level access, public
+#     access prevention ENFORCED from birth);
+#   • re-assert UBLA + public-access-prevention on every deploy (GCS then
+#     REFUSES any allUsers / allAuthenticatedUsers binding or object ACL);
+#   • grant the runtime SA (web proxies Range reads, worker builds, both
+#     delete) objectAdmin on THIS bucket only — no signed URLs, so no
+#     signBlob / CORS needed;
+#   • FAIL the deploy if prevention is not enforced or a public principal is
+#     bound: shipping the feature against a public bucket would publish homes.
+# Runs ONLY when MY_HEATMAP_FILES_ENABLED=true. Flag OFF (the default) → the
+# step is skipped entirely: no bucket or IAM call, prod infra untouched.
+# No CDN, no lifecycle rule (the app deletes superseded versions itself), and
+# GCS soft delete OFF: a GDPR-deleted (or superseded) file of home-start traces
+# must not stay recoverable for the default 7 days.
+echo "[0b/3] Asserting private bucket gs://${MY_HEATMAP_BUCKET_NAME} ..."
+mh_fail() {  # only reached with the flag ON → abort (never ship against an unverified bucket)
+  if [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]]; then
+    echo "   ✗ $1 — ABORT (MY_HEATMAP_FILES_ENABLED=true)" >&2
+    exit 1
+  fi
+  echo "   ! $1 — continuing: MY_HEATMAP_FILES_ENABLED is off, the bucket is unused" >&2
+  return 1
+}
+assert_my_heatmap_bucket() {
+  if ! gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" >/dev/null 2>&1; then
+    gcloud storage buckets create "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+      --location="$REGION" --uniform-bucket-level-access --public-access-prevention --soft-delete-duration=0 \
+      || { mh_fail "could not create gs://${MY_HEATMAP_BUCKET_NAME}"; return; }
+    echo "   ✓ created (private)"
+  fi
+  gcloud storage buckets update "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+    --uniform-bucket-level-access --public-access-prevention --clear-soft-delete >/dev/null \
+    || { mh_fail "could not enforce public-access-prevention on gs://${MY_HEATMAP_BUCKET_NAME}"; return; }
+  local pap
+  pap="$(gcloud storage buckets describe "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+    --format='value(public_access_prevention)' 2>/dev/null)"
+  if [[ "$pap" != "enforced" ]]; then
+    mh_fail "gs://${MY_HEATMAP_BUCKET_NAME}: public_access_prevention='${pap}' (expected enforced)"; return
+  fi
+  gcloud storage buckets add-iam-policy-binding "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" \
+    --member="serviceAccount:${API_SA}" --role="roles/storage.objectAdmin" >/dev/null \
+    || { mh_fail "objectAdmin binding for ${API_SA} FAILED"; return; }
+  if gcloud storage buckets get-iam-policy "gs://${MY_HEATMAP_BUCKET_NAME}" --project="$PROJECT" --format=json 2>/dev/null \
+      | grep -Eq '"(allUsers|allAuthenticatedUsers)"'; then
+    mh_fail "gs://${MY_HEATMAP_BUCKET_NAME} has a PUBLIC IAM member"; return
+  fi
+  echo "   ✓ private bucket asserted (UBLA, public_access_prevention=enforced, objectAdmin → ${API_SA})"
+}
+if [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]]; then
+  assert_my_heatmap_bucket || true
+else
+  # Flag OFF (default): ZERO bucket/IAM call — the deploy touches exactly the
+  # infra it touched before this feature. The bucket is created/asserted by
+  # the first deploy that turns the flag on.
+  echo "   – skipped (MY_HEATMAP_FILES_ENABLED=false: feature off, bucket unused)"
+fi
+
 # ── Deploy one Cloud Run service ─────────────────────────────────────────────
 # Shared knobs across both services (cost-tuned on db-f1-micro): min=0
 # (cold-start accepted — see the webhook caveat in docs/prod-deploy.md), max=1
@@ -482,6 +558,11 @@ deploy_service "$WORKER_SERVICE" "2Gi" "WORKER (heavy /internal/*)" 0  # min=0: 
 # script's shebang resolves to whatever `env bash` finds — and macOS system
 # bash is 3.2, which has no associative arrays. Echoes the comma-separated
 # KEY=VALUE list to merge for $1, or empty for a job that carries no app env.
+# Per-user "Ma heatmap" rebuild wiring for the INGESTING jobs (same values as
+# the env-file; the allow-list uses ';' — ',' is --update-env-vars' separator).
+# Empty while the flag is OFF: the jobs' env stays exactly as before.
+MY_HEATMAP_JOB_ENV=",GCP_PROJECT=${PROJECT},MY_HEATMAP_FILES_ENABLED=${MY_HEATMAP_FILES_ENABLED},MY_HEATMAP_FILES_USERS=${MY_HEATMAP_FILES_USERS//,/;},MY_HEATMAP_BUCKET=${MY_HEATMAP_BUCKET_NAME},CLOUD_TASKS_ARTEFACT_QUEUE=common-trails-artefact-rebuild-${ENV},CLOUD_TASKS_LOCATION=${REGION},CLOUD_TASKS_INVOKER_SA=${TASKS_INVOKER_SA},INTERNAL_MY_HEATMAP_HANDLER_URL=${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
+[[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]] || MY_HEATMAP_JOB_ENV=""
 job_env_for() {
   case "$1" in
     # The archive-drain worker: runs OSM matching + fires the post-drain PMTiles
@@ -521,10 +602,17 @@ job_env_for() {
       # builds the "calque" tile URL from email._heatmap_public_base_url(); unset
       # on the job, it fell back to storage.googleapis.com (blocked by ad-blockers
       # / Firefox — the very reason tiles.* exists). Same value as the services.
-      echo "OVERPASS_ENABLED=false,UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},OSM_TILE_CACHE_MAX=800,OSM_GRID_CACHE_MAX=150,OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000,HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL}" ;;
+      # + MY_HEATMAP_JOB_ENV: per-user "Ma heatmap" rebuild wiring (empty when the flag is OFF).
+      echo "OVERPASS_ENABLED=false${MY_HEATMAP_JOB_ENV},UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},OSM_TILE_CACHE_MAX=800,OSM_GRID_CACHE_MAX=150,OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000,HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL}" ;;
     # Every other job that does OSM matching / ingestion must ALSO keep Overpass
     # off (same foreign-tile slowdown if it ran with OVERPASS_ENABLED absent→true).
-    "common-trails-import-strava-${ENV}"|"common-trails-rebuild-heatmap-${ENV}"|"common-trails-resync-strava-${ENV}"|"common-trails-group-edges-osm-${ENV}")
+    "common-trails-import-strava-${ENV}"|"common-trails-resync-strava-${ENV}")
+      # + the per-user "Ma heatmap" rebuild wiring: these jobs INGEST, and the
+      # ORM hook (app.services.my_heatmap_files) enqueues the user's debounced
+      # rebuild from wherever the write happens. Missing → no-op; the manifest
+      # re-schedules on the next /map view (self-heal), just less promptly.
+      echo "OVERPASS_ENABLED=false${MY_HEATMAP_JOB_ENV}" ;;
+    "common-trails-rebuild-heatmap-${ENV}"|"common-trails-group-edges-osm-${ENV}")
       echo "OVERPASS_ENABLED=false" ;;
     # The re-sync reminder emailer: EMAIL_FROM so the reminder is sent from our
     # verified domain (not Resend's onboarding sender). RESEND_API_KEY is a

@@ -12,6 +12,9 @@ export const MAP_ACTIVITIES_LIMIT = 5000;
 interface MapActivitiesNoticeProps {
   /** Activities returned by /me/activities; null while not loaded yet. */
   count: number | null;
+  /** The traces come from the per-user PMTiles file, which holds EVERY
+   *  activity — never the "N most recent shown" cap. */
+  uncapped?: boolean;
 }
 
 /**
@@ -24,7 +27,7 @@ interface MapActivitiesNoticeProps {
  * logged out, so reading getToken() here would make a signed-in client's first
  * render differ from the HTML → hydration mismatch (React #418).
  */
-export default function MapActivitiesNotice({ count }: MapActivitiesNoticeProps) {
+export default function MapActivitiesNotice({ count, uncapped = false }: MapActivitiesNoticeProps) {
   const t = useT();
   const [loggedIn, setLoggedIn] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -87,7 +90,7 @@ export default function MapActivitiesNotice({ count }: MapActivitiesNoticeProps)
     );
   }
 
-  if (count >= MAP_ACTIVITIES_LIMIT) {
+  if (!uncapped && count >= MAP_ACTIVITIES_LIMIT) {
     return (
       <div
         data-testid="map-activities-capped"

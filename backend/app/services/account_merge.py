@@ -344,6 +344,14 @@ def merge_synthetic_account(
     # 6) Delete the now-empty synthetic user row.
     db.execute(sa_text("DELETE FROM users WHERE id = :id"), {"id": absorbed_user_id})
 
+    # 7) Private "Ma heatmap" files: the bulk UPDATE + raw DELETEs above bypass
+    #    the ORM hook. Survivor → rebuild after commit; absorbed → its pointer
+    #    row now, its objects after commit (docs/ma-heatmap-fichier-prive.md §7).
+    from app.services import my_heatmap_files
+
+    my_heatmap_files.mark_dirty(db, survivor_user_id)
+    my_heatmap_files.mark_deleted(db, absorbed_user_id)
+
     all_ways = list({*dedup_ways, *hash_ways})
     result.heat_edges_recomputed = len(all_ways)
     result.merged = True

@@ -65,4 +65,10 @@ describe('SelectedActivityCard — undated activity', () => {
     expect(note()).toBeNull();
     expect(container.textContent).toContain('2024');
   });
+
+  it('renders before its coordinates are fetched (per-user PMTiles path: list has none)', () => {
+    render({ ...base, coords: [], center: [3.5, 43.5] });
+    const link = container.querySelector('a[href^="/map?"]');
+    expect(link?.getAttribute('href')).toBe('/map?lat=43.50000&lon=3.50000&zoom=12');
+  });
 });

@@ -57,3 +57,54 @@ export function applyUserTraceOpacity(map: any, dimmed: boolean): void {
   map.setPaintProperty(USER_TRACE_LINE_LAYER, 'line-opacity', line);
   map.setPaintProperty(USER_TRACE_GLOW_LAYER, 'line-opacity', glow);
 }
+
+export const USER_TRACE_HIT_LAYER = 'user-activities-hit';
+export const USER_TRACE_SOURCE = 'user-activities';
+/** Layer name inside the per-user PMTiles (backend my_heatmap_files.TILE_LAYER). */
+export const USER_TRACE_TILE_LAYER = 'activities';
+
+/**
+ * The three "Ma heatmap" layers (glow, line, wide transparent hit area), in
+ * draw order. SSOT for both source flavours: the legacy `geojson` source fed by
+ * GET /me/activities, and the per-user private PMTiles (`vector`, which needs a
+ * `source-layer`). Same ids either way, so the hover/click handlers, the
+ * visibility toggles and the dimming keep working across a source swap.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function userTraceLayerSpecs(color: string, sourceLayer?: string): any[] {
+  const base = {
+    type: 'line',
+    source: USER_TRACE_SOURCE,
+    ...(sourceLayer ? { 'source-layer': sourceLayer } : {}),
+  };
+  const layout = { visibility: 'visible', 'line-cap': 'round', 'line-join': 'round' };
+  return [
+    {
+      ...base,
+      id: USER_TRACE_GLOW_LAYER,
+      layout,
+      paint: {
+        'line-color': color,
+        'line-width': USER_TRACE_GLOW_WIDTH,
+        'line-opacity': USER_TRACE_GLOW_OPACITY,
+        'line-blur': USER_TRACE_GLOW_BLUR,
+      },
+    },
+    {
+      ...base,
+      id: USER_TRACE_LINE_LAYER,
+      layout,
+      paint: {
+        'line-color': color,
+        'line-width': USER_TRACE_LINE_WIDTH,
+        'line-opacity': USER_TRACE_LINE_OPACITY,
+      },
+    },
+    {
+      ...base,
+      id: USER_TRACE_HIT_LAYER,
+      layout,
+      paint: { 'line-color': 'transparent', 'line-width': 20, 'line-opacity': 0 },
+    },
+  ];
+}
