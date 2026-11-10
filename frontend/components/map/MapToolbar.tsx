@@ -335,6 +335,31 @@ export default function MapToolbar(props: MapToolbarProps) {
               </label>
             ))}
 
+            {/* Sentiers balisés (GR, GT, EuroVelo, VTT) — visible without unfolding
+                "Plus de calques": they paint over the heatmap, users must find the off switch. */}
+            <div style={{ borderTop: '1px solid #f0f0f0', margin: '4px 0' }} />
+            <div style={{ padding: '4px 8px', fontSize: 10, color: '#aaa', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('map.toolbar.waymarkedHeader')}</div>
+            {WAYMARKED_LAYERS.map(({ key, label }) => (
+              <label
+                key={key}
+                data-testid={`toggle-waymarked-${key}`}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '7px 14px', cursor: 'pointer', fontSize: 13, color: '#333',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#f5f5f5'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              >
+                <input
+                  type="checkbox"
+                  checked={waymarked[key]}
+                  onChange={() => setWaymarked(prev => ({ ...prev, [key]: !prev[key] }))}
+                  style={{ accentColor: '#388e3c', width: 16, height: 16, flexShrink: 0 }}
+                />
+                {label.startsWith('map.') ? t(label) : label}
+              </label>
+            ))}
+
             {/* "Plus de calques" expandable section */}
             <div style={{ borderTop: '1px solid #f0f0f0', margin: '4px 0' }} />
             <button
@@ -385,28 +410,6 @@ export default function MapToolbar(props: MapToolbarProps) {
                   </label>
                 ))}
 
-                {/* Sentiers balisés */}
-                <div style={{ borderTop: '1px solid #f0f0f0', margin: '4px 0' }} />
-                <div style={{ padding: '4px 8px', fontSize: 10, color: '#aaa', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('map.toolbar.waymarkedHeader')}</div>
-                {WAYMARKED_LAYERS.map(({ key, label }) => (
-                  <label
-                    key={key}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '7px 14px', cursor: 'pointer', fontSize: 13, color: '#333',
-                    }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#f5f5f5'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={waymarked[key]}
-                      onChange={() => setWaymarked(prev => ({ ...prev, [key]: !prev[key] }))}
-                      style={{ accentColor: '#388e3c', width: 16, height: 16, flexShrink: 0 }}
-                    />
-                    {label.startsWith('map.') ? t(label) : label}
-                  </label>
-                ))}
               </>
             )}
 
