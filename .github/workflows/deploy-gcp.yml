@@ -48,6 +48,10 @@ jobs:
       # 349136; NEVER pass '' (empty = allow-all subscriptions, a security
       # downgrade). Secret already exists in the repo.
       STRAVA_WEBHOOK_SUBSCRIPTION_ID: ${{ secrets.STRAVA_WEBHOOK_SUBSCRIPTION_ID }}
+      # Private per-user "Ma heatmap" files (docs/ma-heatmap-fichier-prive.md §9).
+      # ON for every account; rollback = set to "false" and redeploy (the front
+      # falls back to /me/activities via the manifest, no front rebuild).
+      MY_HEATMAP_FILES_ENABLED: "true"
 
     steps:
       - name: Checkout
