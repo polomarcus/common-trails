@@ -4644,6 +4644,52 @@ def count_user_map_activities(user_id: str, sport: str | None = None) -> int:
         db.close()
 
 
+def user_map_activities_validator(user_id: str, sport: str | None = None) -> tuple[int, str]:
+    """``(count, digest)`` of the user's map-displayable activities, in ONE
+    indexed query — the HTTP validator (ETag) for ``GET /me/activities``.
+
+    ``count`` is the same COUNT as ``count_user_map_activities`` (same WHERE).
+    ``digest`` is the md5 of every matching row's ``id:xmin``, ordered by id.
+
+    Why ``xmin`` and not a list of columns: Postgres gives every row VERSION a
+    new ``xmin`` (the inserting transaction id) — ANY ``UPDATE`` of the row
+    (sport edit, rename, date change, geometry upgrade/promotion, display cache
+    backfill, contribute/consent flags, photo count…) writes a new tuple with a
+    new ``xmin``, an INSERT adds an id, a DELETE removes one. So the digest
+    changes whenever anything the feed serialises can have changed, without
+    enumerating columns (a column added to the feed later is covered for free)
+    and WITHOUT detoasting a single geometry: only the heap tuple header and the
+    ``id`` are read (``geometry_geojson <> ''`` in the shared WHERE short-circuits
+    on the toast header length). Freezing keeps the raw ``xmin`` (PG ≥ 9.4), so
+    VACUUM does not churn it; a dump/restore does — a harmless cache miss.
+
+    The digest covers ALL matching rows, not only the ``limit`` most recent:
+    a superset of what the response depends on (a change outside the window is
+    a spurious, harmless revalidation miss).
+    """
+    from sqlalchemy import func, literal, literal_column, select
+    from sqlalchemy.dialects.postgresql import aggregate_order_by
+
+    from app.db.models import Activity
+    from app.db.session import SessionLocal
+
+    row_key = func.concat(Activity.id, ":", literal_column("activities.xmin::text"))
+    digest = func.md5(
+        func.coalesce(func.string_agg(row_key, aggregate_order_by(literal(","), Activity.id)), "")
+    )
+    stmt = (
+        select(func.count(), digest)
+        .select_from(Activity)
+        .where(*_map_activity_filters(user_id, sport))
+    )
+    db = SessionLocal()
+    try:
+        count, md5 = db.execute(stmt).one()
+        return int(count or 0), str(md5)
+    finally:
+        db.close()
+
+
 def iter_user_map_activities(
     user_id: str, sport: str | None = None, limit: int | None = None
 ) -> Iterator[dict]:

@@ -71,7 +71,9 @@ class TestMeActivitiesStreaming:
         )
 
         async def _run():
-            resp = await me_activities(current_user=user, sport=None, limit=5000)
+            resp = await me_activities(
+                current_user=user, sport=None, limit=5000, if_none_match=None
+            )
             assert isinstance(resp, StreamingResponse)
             # body_iterator is an async iterator (starlette wraps our sync gen).
             chunks = [chunk async for chunk in resp.body_iterator]
