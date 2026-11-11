@@ -1,4 +1,9 @@
-"""Regression: heat_edges only ever stores known partition sports.
+"""Regression: the heatmap only ever buckets traces into known sports.
+
+``_normalize_heat_edge_sport`` is LIVE: the raw-trace build uses it to bucket
+traces per sport. Its name, this file's name and the "partition" wording below
+date from the ``heat_edges`` table (partitioned by sport), dropped by
+migration 0072 — the rule it pins is unchanged.
 
 Bug history (May 2026): bulk GPX imports with --sport offroad wrote 1M+
 edges with sport='offroad' that landed in heat_edges_default partition,

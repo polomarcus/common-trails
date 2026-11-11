@@ -43,11 +43,11 @@ gcp-precheck:
 	fi; \
 	echo "✅ GCP context: gcloud=$$account / $$project / ADC=$$adc_email"
 
-## ⚠️ DESTRUCTIVE — wipe prod heat_edges, heat_edge_contributors, activities.
-## Preserves users, integration_accounts, oauth_states (so JWTs + Strava
-## links survive the wipe). Use before a full re-ingest from clean GPX
-## source files, when the existing heat_edges are known-broken (e.g. all
-## grid-fallback due to missing OSM data at ingest time).
+## ⚠️ DESTRUCTIVE — wipe prod activities (and, through the CASCADE, the rows
+## that reference them by foreign key, e.g. activity_cells). Preserves users
+## (so JWTs survive the wipe). Use before a full re-ingest from clean GPX
+## source files. The matched-era tables this target used to truncate
+## (heat_edges, heat_edge_contributors) were dropped by migration 0072.
 ##
 ## Requires CONFIRM=YES. Without it, prints what would be wiped and exits.
 ##
@@ -64,8 +64,8 @@ gcp-precheck:
 ## This single-shell form prevents that.
 prod-wipe-user-data: gcp-precheck
 	@if [ "$(CONFIRM)" != "YES" ]; then \
-	    echo "⚠  Dry-run. Would TRUNCATE: heat_edges, heat_edge_contributors, activities"; \
-	    echo "   Preserved: users, integration_accounts, oauth_states, route_*, trip_*"; \
+	    echo "⚠  Dry-run. Would TRUNCATE: activities (CASCADE)"; \
+	    echo "   Preserved: users, route_*, trip_*"; \
 	    echo "   Run with CONFIRM=YES to actually wipe."; \
 	    exit 0; \
 	fi ; \
@@ -75,8 +75,8 @@ prod-wipe-user-data: gcp-precheck
 	pkill -f "cloud-sql-proxy.*common-trails-prod" 2>/dev/null || true ; \
 	cloud-sql-proxy --port 5433 common-trails:europe-west1:common-trails-prod > /tmp/csqlp-prod.log 2>&1 & \
 	PROXY_PID=$$! ; sleep 4 ; \
-	echo "→ TRUNCATE on prod heat_edges + heat_edge_contributors + activities…" ; \
-	PGPASSWORD="$$DB_PWD" psql -h 127.0.0.1 -p 5433 -U api -d common_trails -c "BEGIN; TRUNCATE TABLE heat_edge_contributors RESTART IDENTITY; TRUNCATE TABLE heat_edges RESTART IDENTITY CASCADE; TRUNCATE TABLE activities RESTART IDENTITY CASCADE; COMMIT;" || EXIT=$$? ; \
+	echo "→ TRUNCATE on prod activities…" ; \
+	PGPASSWORD="$$DB_PWD" psql -h 127.0.0.1 -p 5433 -U api -d common_trails -c "BEGIN; TRUNCATE TABLE activities RESTART IDENTITY CASCADE; COMMIT;" || EXIT=$$? ; \
 	kill $$PROXY_PID 2>/dev/null || true ; \
 	exit $${EXIT:-0}
 

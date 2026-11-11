@@ -2,8 +2,11 @@
 
 Data separation:
 - PRIVATE: activities, activity_cells
-- COMMON (ODbL): heat_cells, edge_popularity, routes, route_versions, route_forks,
-                  suggestions, route_tags
+- COMMON (ODbL): routes, route_versions, route_forks, suggestions, route_tags,
+                  dfci_edges
+
+The community heatmap is built from ``activities`` (raw masked traces); the
+tables of the retired map-matching pipeline were dropped by migration 0072.
 """
 import uuid
 from datetime import UTC, datetime
@@ -429,119 +432,7 @@ class ActivityCell(Base):
     zoom = Column(Integer, nullable=False, default=14)
 
 
-# ── Heatmap models (COMMON — ODbL) ───────────────────────────────────────────
-
-class HeatCell(Base):
-    """Aggregated community heat cell (ODbL). K-anonymity enforced at read time."""
-    __tablename__ = "heat_cells"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    cell_key = Column(String(32), nullable=False, index=True)
-    zoom = Column(Integer, nullable=False, default=14)
-    sport = Column(String(50), nullable=False, default="road")
-    user_count = Column(Integer, nullable=False, default=0)
-    pass_count = Column(Integer, nullable=False, default=0)
-
-    __table_args__ = (UniqueConstraint("cell_key", "sport"),)
-
-
-class EdgePopularity(Base):
-    """Popularity score per road segment (ODbL)."""
-    __tablename__ = "edge_popularity"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    edge_id = Column(BigInteger, nullable=False, unique=True, index=True)
-    sport = Column(String(50), nullable=False, default="road")
-    popularity = Column(Float, nullable=False, default=0.0)
-    updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-
-# ── PostGIS edge tables (replaces in-memory stores) ──────────────────────────
-
-class HeatEdge(Base):
-    """Community heat edge between two GPS-snapped points (ODbL)."""
-    __tablename__ = "heat_edges"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    edge_key = Column(Text, nullable=False)
-    sport = Column(Text, nullable=False, index=True)
-
-    __table_args__ = (
-        UniqueConstraint("edge_key", "sport"),
-        # Migration 0034 creates a PARTIAL index (`WHERE osm_way_id IS NOT NULL`)
-        # so the grid-fallback rows — which dominate the table — don't bloat the
-        # index. The model must reproduce that shape so a fresh DB bootstrapped
-        # from `Base.metadata.create_all()` (CI, ephemeral envs) matches
-        # the prod-via-Alembic schema bit-for-bit. `index=True` on the column
-        # would have generated a full index → drift.
-        Index(
-            "ix_heat_edges_osm_way_id",
-            "osm_way_id",
-            postgresql_where=sa_text("osm_way_id IS NOT NULL"),
-        ),
-    )
-    user_count = Column(Integer, default=0)
-    pass_count = Column(Integer, default=0)
-    forward_count = Column(Integer, default=0)
-    backward_count = Column(Integer, default=0)
-    ele_delta_m = Column(Float, default=0.0)
-    slope_grade = Column(Float, default=0.0)
-    surface_type = Column(Text, default="unknown")
-    highway_type = Column(Text, default="unknown")
-    tracktype = Column(Text, nullable=True)
-    smoothness = Column(Text, nullable=True)
-    trail_network = Column(Boolean, default=False)
-    trail_type = Column(Text, nullable=True)
-    # Migration 0034 — tag heat_edges with the OSM way they snapped onto.
-    # Used by build_pmtiles to render a single feature per way (no
-    # spaghetti). NULL = grid-fallback row. Index lives in __table_args__
-    # above as a partial index (postgresql_where) to match migration 0034.
-    osm_way_id = Column(BigInteger, nullable=True)
-    # Migration 0039 — confidence + source of the OSM match (spatial,
-    # grid_fallback). Drives `data_quality` in /routes/surface_stats.
-    match_confidence = Column(Float, nullable=True)
-    match_source = Column(Text, nullable=True)
-    # Migration 0042 — Crouzet confidence on the surface label. Lets the
-    # frontend fade overlay opacity by confidence instead of dropping
-    # everything at the data_quality=poor cliff.
-    surface_confidence = Column(Float, nullable=True)
-    geometry = Column(Geometry("LINESTRING", srid=4326), nullable=False) if _HAS_GEOALCHEMY else Column(Text)
-
-
-class HeatEdgeContributor(Base):
-    """K-anonymity dedup: tracks which user_id_hashes contributed to each edge.
-
-    Cascade-delete is enforced at the schema level by an AFTER DELETE
-    trigger on `heat_edges` (migration 0046). A real FOREIGN KEY can't
-    be declared here because `heat_edges` is partitioned by sport
-    (migration 0029) and its only unique constraint is
-    `(edge_key, sport)` — but this table has no `sport` column. The
-    trigger matches on `edge_key`, which embeds sport by construction
-    (see `_edge_key` in services/ingest.py), so cross-partition
-    collisions are impossible.
-
-    PK is `(edge_key, user_id_hash, activity_id)` since migration 0052.
-    The activity_id triple lets us distinguish "same user, same edge,
-    different activity" (real new pass — bump pass_count) from "same
-    activity re-ingested" (full rebuild / fixture bootstrap path —
-    pass_count must stay put). See migration 0052 for the why.
-    """
-    __tablename__ = "heat_edge_contributors"
-
-    edge_key = Column(Text, nullable=False, primary_key=True)
-    user_id_hash = Column(BigInteger, nullable=False, primary_key=True)
-    activity_id = Column(UUID(as_uuid=False), nullable=False, primary_key=True)
-    activity_date = Column(DateTime(timezone=True), nullable=True)
-
-
-class HeatCellContributor(Base):
-    """K-anonymity dedup: tracks which user_id_hashes contributed to each cell."""
-    __tablename__ = "heat_cell_contributors"
-
-    cell_key = Column(Text, nullable=False, primary_key=True)
-    sport = Column(Text, nullable=False, primary_key=True)
-    user_id_hash = Column(BigInteger, nullable=False, primary_key=True)
-
+# ── Reference edges (COMMON — ODbL, from OSM) ────────────────────────────────
 
 class DfciEdge(Base):
     """DFCI fire-prevention track segment (ODbL, from OSM)."""
@@ -552,19 +443,6 @@ class DfciEdge(Base):
     surface = Column(Text, default="unknown")
     highway = Column(Text, default="track")
     trail_type = Column(Text, default="DFCI")
-    slope_grade = Column(Float, default=0.0)
-    geometry = Column(Geometry("LINESTRING", srid=4326), nullable=False) if _HAS_GEOALCHEMY else Column(Text)
-
-
-class TrailEdge(Base):
-    """Marked trail segment — GR, GT, GRP, PR, EV (ODbL, from OSM)."""
-    __tablename__ = "trail_edges"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    ref = Column(Text, nullable=True)
-    surface = Column(Text, default="unknown")
-    highway = Column(Text, default="path")
-    trail_type = Column(Text, nullable=False)
     slope_grade = Column(Float, default=0.0)
     geometry = Column(Geometry("LINESTRING", srid=4326), nullable=False) if _HAS_GEOALCHEMY else Column(Text)
 
@@ -645,112 +523,6 @@ class RouteAnnotation(Base):
     )
 
 
-class OsmRoadEdge(Base):
-    """Cached OSM road segment for map-matching heatmap edges (per z14 tile).
-
-    Migration 0056 (substrate slim) recreated this table PARTITIONED
-    ``BY LIST (region)`` — partitions are created on demand by
-    the OSM import CLI (removed with the matched pipeline; one per Geofabrik region) plus a DEFAULT
-    partition for ``region='adhoc'`` rows (tests, dev-only Overpass fetch,
-    fixture loads). Same migration moved the full-way polyline to the
-    ``osm_ways`` side-table (was duplicated ×13.5 per segment = 15 GB),
-    changed ``tile_key`` TEXT → BIGINT (``app.services.tile_keys``), and
-    dropped ``fetched_at`` (per-region freshness lives in ``osm_import_meta``).
-
-    Earlier column history:
-    - ``ele_*`` / ``slope_grade`` (0041) — DEM-derived, populated at PBF import.
-    - ``surface_confidence`` (0042) — strength of the OSM surface signal [0, 1].
-    - ``bridge_yes`` / ``tunnel_yes`` (0053) — critical-connectors layer in
-      ``_build_bbox_graph`` (river crossings routable without Strava traces).
-    """
-    __tablename__ = "osm_road_edges"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    region = Column(Text, primary_key=True, nullable=False, default="adhoc",
-                    server_default="adhoc")  # LIST partition key
-    tile_key = Column(BigInteger, nullable=False, index=True)  # x*100000+y, see tile_keys.py
-    osm_way_id = Column(BigInteger, nullable=False)
-    segment_idx = Column(Integer, nullable=False)
-    surface = Column(Text, default="unknown")
-    highway = Column(Text, default="unknown")
-    geometry = Column(Geometry("LINESTRING", srid=4326), nullable=False) if _HAS_GEOALCHEMY else Column(Text)
-    ele_start_m = Column(Float, nullable=True)
-    ele_end_m = Column(Float, nullable=True)
-    ele_delta_m = Column(Float, nullable=True)
-    slope_grade = Column(Float, nullable=True)
-    surface_confidence = Column(Float, nullable=True)
-    bridge_yes = Column(Boolean, nullable=False, default=False)
-    tunnel_yes = Column(Boolean, nullable=False, default=False)
-
-
-class OsmWay(Base):
-    """Full OSM way polyline, stored ONCE per way (migration 0056).
-
-    Replaces the per-segment ``way_geometry`` duplication on
-    ``osm_road_edges``. No GiST on ``way_geometry`` — every consumer joins
-    by ``osm_way_id`` (display aggregation, exports, paved-skeleton ranking);
-    zero spatial queries exist on the way polyline. ``region`` is the last
-    importer that wrote the way (boundary ways shared by two regional PBFs
-    keep the most recent import's copy).
-    """
-    __tablename__ = "osm_ways"
-
-    osm_way_id = Column(BigInteger, primary_key=True)
-    way_geometry = Column(Geometry("LINESTRING", srid=4326), nullable=False) if _HAS_GEOALCHEMY else Column(Text)
-    region = Column(Text, nullable=False, default="adhoc", server_default="adhoc")
-
-
-class OsmImportMeta(Base):
-    """Per-region OSM import bookkeeping (migration 0056).
-
-    Was written by the import guard of the (removed) OSM import CLI after a
-    successful region import; the >60 %-of-previous-count sanity check reads
-    it. Replaces the dropped per-row ``fetched_at``.
-    """
-    __tablename__ = "osm_import_meta"
-
-    region = Column(Text, primary_key=True)
-    imported_at = Column(DateTime(timezone=True), nullable=False, default=_now)
-    row_count = Column(BigInteger, nullable=False)
-
-
-class HeatEdgeAgg(Base):
-    """Pre-materialised by-``(osm_way_id, sport)`` display aggregate (migration 0057).
-
-    Holds the OSM-matched half of the heatmap aggregation (MAX counts, raw
-    K-agnostic ``user_count``, smooth OSM way geometry) so the PMTiles build
-    + live MVT fallback read an indexed table instead of re-running the
-    ~5 M-row GROUP BY (which OOMed the whole-world build on db-f1-micro).
-    Maintained INCREMENTALLY per-activity (recompute-from-source) — NOT the
-    full-refresh matview that 0055 dropped. Grid-fallback rows are NOT stored
-    here (read live from ``heat_edges``); see migration 0057.
-    """
-    __tablename__ = "heat_edges_agg"
-
-    osm_way_id = Column(BigInteger, primary_key=True)
-    sport = Column(Text, primary_key=True)
-    # geometry(Geometry) — usually the way's LineString, MultiLineString on
-    # the disjoint-merge fallback (local dev without the OSM PBF).
-    # spatial_index=False → the explicit gist Index below is the ONLY
-    # geometry index (matches migration 0057's ``ix_heat_edges_agg_geometry``;
-    # avoids a duplicate geoalchemy2 auto-index under create_all in CI).
-    geometry = (
-        Column(Geometry("GEOMETRY", srid=4326, spatial_index=False), nullable=False)
-        if _HAS_GEOALCHEMY else Column(Text)
-    )
-    user_count = Column(Integer, nullable=False, default=0)
-    pass_count = Column(Integer, nullable=False, default=0)
-    forward_count = Column(Integer, nullable=False, default=0)
-    backward_count = Column(Integer, nullable=False, default=0)
-    highway_type = Column(Text, nullable=False, default="unknown", server_default="unknown")
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now)
-
-    __table_args__ = (
-        Index("ix_heat_edges_agg_geometry", "geometry", postgresql_using="gist"),
-        Index("ix_heat_edges_agg_sport", "sport"),
-    )
-
-
 class TripPOI(Base):
     """A point of interest attached to a trip (water, food, camp, etc.)."""
     __tablename__ = "trip_pois"
@@ -767,47 +539,6 @@ class TripPOI(Base):
     created_at = Column(DateTime(timezone=True), default=_now)
 
     trip = relationship("Trip", back_populates="pois")
-
-
-# ── Contraction Hierarchies ─────────────────────────────────────────────────
-
-class CHShortcut(Base):
-    """Precomputed CH shortcut edge for fast long-distance routing."""
-    __tablename__ = "ch_shortcuts"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    sport = Column(Text, nullable=False, index=True)
-    source_lon = Column(Float, nullable=False)
-    source_lat = Column(Float, nullable=False)
-    target_lon = Column(Float, nullable=False)
-    target_lat = Column(Float, nullable=False)
-    via_lon = Column(Float, nullable=False)
-    via_lat = Column(Float, nullable=False)
-    cost = Column(Float, nullable=False)
-    ch_level = Column(Integer, nullable=False)
-    profile_hash = Column(Text, nullable=False)
-    inline_coords = Column(Text, nullable=True)  # JSON array of [lon, lat] pairs
-    cumulative_ascent_m = Column(Float, default=0.0)
-
-    __table_args__ = (
-        # Composite indexes for tile bbox queries
-        # (sport, source_lon, source_lat) for forward search
-        # (sport, target_lon, target_lat) for backward search
-    )
-
-
-class CHBuildStatus(Base):
-    """Tracks CH build state per sport for lazy rebuild and backoff."""
-    __tablename__ = "ch_build_status"
-
-    sport = Column(Text, primary_key=True)
-    ch_version = Column(Integer, default=0)
-    edge_version = Column(Integer, default=0)
-    profile_hash = Column(Text, nullable=True)
-    started_at = Column(DateTime(timezone=True), nullable=True)
-    completed_at = Column(DateTime(timezone=True), nullable=True)
-    failed_count = Column(Integer, default=0)
-    last_failure_at = Column(DateTime(timezone=True), nullable=True)
 
 
 # ── Notifications (post-login banner for long-running imports) ───────────────
