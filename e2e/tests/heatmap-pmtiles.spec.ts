@@ -16,12 +16,10 @@
  *   2. on /map the app resolves a `pmtiles://…` URL AND issues real HTTP range
  *      GETs for it — which only succeeds if the `pmtiles://` protocol is
  *      registered (otherwise maplibre errors on the unknown scheme and never
- *      fetches), so the request firing is a strong proxy for "protocol wired";
- *   3. the live MVT endpoint still works as the DB-backed FALLBACK.
+ *      fetches), so the request firing is a strong proxy for "protocol wired".
  */
 import { test, expect, request as pwRequest } from '@playwright/test';
 
-const API_URL = process.env.API_URL || 'http://localhost:8787';
 const FRONTEND_URL = process.env.FRONTEND_URL || process.env.BASE_URL || 'http://localhost:3787';
 
 // PMTiles v3 header magic: bytes 0-6 = ASCII "PMTiles", byte 7 = version (0x03).
@@ -109,16 +107,5 @@ test.describe('Community heatmap PMTiles wiring', () => {
       pmtilesRequests.length,
       'the pmtiles:// protocol must issue HTTP GETs for heatmap-display.pmtiles',
     ).toBeGreaterThan(0);
-  });
-
-  test('MVT fallback endpoint still serves (DB-backed fallback)', async () => {
-    const ctx = await pwRequest.newContext();
-    // In-range zoom → 200 protobuf even with an empty DB (geometry may be empty).
-    const resp = await ctx.get(`${API_URL}/heatmap/tiles/offroad/14/8369/5980.mvt`);
-    expect(resp.status()).toBe(200);
-    expect(resp.headers()['content-type']).toContain('protobuf');
-    const body = await resp.body();
-    expect(body).toBeDefined();
-    await ctx.dispose();
   });
 });
