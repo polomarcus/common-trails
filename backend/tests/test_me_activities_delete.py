@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 import gpxpy
 import gpxpy.gpx
+import pytest
 from sqlalchemy import text as sa_text
 
 from app.db.session import SessionLocal
@@ -117,6 +118,7 @@ class TestDeleteActivity:
         resp = client.delete("/me/activities/not-a-uuid", headers=auth_headers)
         assert resp.status_code == 404
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_404_when_not_owner_and_row_survives(self, client, auth_headers):
         lon0, lat0 = _unique_start()
         activity_id = _upload(client, auth_headers, "Owner Only Del", lon0, lat0)
@@ -134,6 +136,7 @@ class TestDeleteActivity:
         finally:
             db.close()
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_delete_own_removes_row_and_heat_contributions(self, client, auth_headers):
         lon0, lat0 = _unique_start()
         activity_id = _upload(client, auth_headers, "Delete Me", lon0, lat0)
@@ -195,6 +198,7 @@ class TestDeleteActivity:
         assert resp.status_code == 404
         fake.assert_not_called()
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_delete_preserves_other_users_contributions(self, client, auth_headers):
         """User A + B ride the same (unique) track; deleting A's activity
         must keep the shared edges alive with B's counts recounted."""

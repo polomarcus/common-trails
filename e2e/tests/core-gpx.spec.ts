@@ -1,25 +1,17 @@
 /**
- * CHEMINS COMMUNS — Core E2E tests: GPX Upload + Heatmap K-anonymity
+ * CHEMINS COMMUNS — Core E2E tests: GPX upload → the activity is stored and
+ * readable by its owner.
  *
- * Split from core.spec.ts — no logic changes.
+ * The community heatmap is the STATIC raw PMTiles (built offline by
+ * `build_pmtiles`), so nothing here reads a live heatmap endpoint: the
+ * matched-era `/heatmap/stats` (K-anonymity cells) and `/heatmap/trails`
+ * (edges, forward/backward counts) assertions were removed with that pipeline.
  */
 import { test, expect, request } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
 
 const API_URL = process.env.API_URL || 'http://localhost:8787';
-
-// Return empty graph tiles for ALL core tests so client-side routing falls
-// through to the server cascade.
-test.beforeEach(async ({ page }) => {
-  await page.route('**/routing/graph/**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ v: 1, edges: [] }),
-    });
-  });
-});
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -37,10 +29,10 @@ async function registerAndLogin(apiContext: Awaited<ReturnType<typeof request.ne
   return { token: data.access_token, email, password, username, user_id: data.user_id };
 }
 
-// ── Test 3: Upload GPX fixture + heatmap K-anonymity ─────────────────────
+// ── Test 3: Upload GPX fixture ────────────────────────────────────────────
 
-test.describe('3. GPX Upload + Heatmap K-anonymity', () => {
-  test('upload GPX fixture with contribute_heatmap=true', async () => {
+test.describe('3. GPX Upload', () => {
+  test('upload GPX fixture with contribute_heatmap=true → visible in /me/activities', async () => {
     const apiContext = await request.newContext();
     const { token } = await registerAndLogin(apiContext);
 
@@ -64,107 +56,24 @@ test.describe('3. GPX Upload + Heatmap K-anonymity', () => {
     const data = await resp.json();
     expect(data.imported + data.skipped).toBeGreaterThanOrEqual(1);
 
-    await apiContext.dispose();
-  });
-
-  test('heatmap stats respects K-anonymity (K=2)', async () => {
-    const apiContext = await request.newContext();
-
-    const statsResp = await apiContext.get(
-      `${API_URL}/heatmap/stats?sport=road&zoom=14&min_lon=4.82&min_lat=45.74&max_lon=4.86&max_lat=45.76`
-    );
-    expect(statsResp.status()).toBe(200);
-
-    const data = await statsResp.json();
-    expect(data).toHaveProperty('k_anonymity');
-    expect(data.k_anonymity).toBeGreaterThanOrEqual(1);
-
-    // All returned cells must have user_count >= k_anonymity
-    for (const cell of data.cells || []) {
-      expect(cell.user_count).toBeGreaterThanOrEqual(data.k_anonymity);
-    }
-    expect(Array.isArray(data.cells)).toBe(true);
-
-    await apiContext.dispose();
-  });
-
-  test('trail heatmap: 2 users uploading same GPX → /heatmap/trails returns edges', async () => {
-    const apiContext = await request.newContext();
-    const gpxPath = path.join(__dirname, '../fixtures/gpx/test_route.gpx');
-    const gpxContent = fs.readFileSync(gpxPath);
-
-    // Upload as 2 distinct users with contribute_heatmap=true
-    for (let i = 0; i < 2; i++) {
-      const { token } = await registerAndLogin(apiContext);
-      const resp = await apiContext.post(`${API_URL}/gpx/upload`, {
-        headers: { Authorization: `Bearer ${token}` },
-        multipart: {
-          file: { name: 'test_route.gpx', mimeType: 'application/gpx+xml', buffer: gpxContent },
-          sport: 'road',
-          contribute_heatmap: 'true',
-        },
-      });
-      expect(resp.status()).toBe(202);
-      const data = await resp.json();
-      expect(['computing', 'done']).toContain(data.heatmap_status);
-    }
-
-    // After K=2 users, /heatmap/trails must return line features
-    // Use bbox filter to restrict to Lyon area (test_route.gpx coords) to avoid
-    // interference from demo activities (Montpellier area, lon~3.87, lat~43.61)
-    const trailResp = await apiContext.get(
-      `${API_URL}/heatmap/trails?sport=road&min_lon=4.82&min_lat=45.74&max_lon=4.86&max_lat=45.77`
-    );
-    expect(trailResp.status()).toBe(200);
-    const trails = await trailResp.json();
-    expect(trails.type).toBe('FeatureCollection');
-    expect(trails.features.length).toBeGreaterThan(0);
-    // Each feature must be a LineString respecting K-anonymity
-    // (K=2 in production, K=1 in dev — use whatever the server reports)
-    const k = (trails.metadata as any)?.k_anonymity ?? 1;
-    for (const feat of trails.features) {
-      expect(feat.geometry.type).toBe('LineString');
-      expect(feat.properties.user_count).toBeGreaterThanOrEqual(k);
-    }
-
-    await apiContext.dispose();
-  });
-
-  test('trail heatmap features include forward_count and backward_count', async () => {
-    const apiContext = await request.newContext();
-    const gpxPath = path.join(__dirname, '../fixtures/gpx/test_route.gpx');
-    const gpxContent = fs.readFileSync(gpxPath);
-
-    // Upload as 3 distinct users (2 forward, 1 backward via reverse coords)
-    // so forward/backward counts are different
-    for (let i = 0; i < 3; i++) {
-      const { token } = await registerAndLogin(apiContext);
-      const resp = await apiContext.post(`${API_URL}/gpx/upload`, {
-        headers: { Authorization: `Bearer ${token}` },
-        multipart: {
-          file: { name: 'test_route.gpx', mimeType: 'application/gpx+xml', buffer: gpxContent },
-          sport: 'road',
-          contribute_heatmap: 'true',
-        },
-      });
-      expect(resp.status()).toBe(202);
-    }
-
-    const trailResp = await apiContext.get(
-      `${API_URL}/heatmap/trails?sport=road&min_lon=4.82&min_lat=45.74&max_lon=4.86&max_lat=45.77`
-    );
-    expect(trailResp.status()).toBe(200);
-    const trails = await trailResp.json();
-    expect(trails.features.length).toBeGreaterThan(0);
-    for (const feat of trails.features) {
-      expect(feat.properties).toHaveProperty('forward_count');
-      expect(feat.properties).toHaveProperty('backward_count');
-      expect(typeof feat.properties.forward_count).toBe('number');
-      expect(typeof feat.properties.backward_count).toBe('number');
-      expect(feat.properties.forward_count + feat.properties.backward_count).toBe(
-        feat.properties.pass_count
-      );
-    }
+    // The upload is stored with its geometry and readable by its owner — the
+    // rows `build_pmtiles` (raw display) and "Ma heatmap" are built from.
+    const actResp = await apiContext.get(`${API_URL}/me/activities?sport=road`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(actResp.status()).toBe(200);
+    const geojson = await actResp.json();
+    expect(geojson.type).toBe('FeatureCollection');
+    expect(geojson.total).toBeGreaterThanOrEqual(1);
+    const feat = geojson.features[geojson.features.length - 1];
+    expect(feat.geometry.type).toBe('LineString');
+    expect(feat.properties.sport).toBe('road');
+    // test_route.gpx is in Lyon (lon≈4.83, lat≈45.75)
+    const [lon, lat] = feat.geometry.coordinates[0];
+    expect(lon).toBeGreaterThan(4.7);
+    expect(lon).toBeLessThan(5.0);
+    expect(lat).toBeGreaterThan(45.6);
+    expect(lat).toBeLessThan(45.9);
 
     await apiContext.dispose();
   });

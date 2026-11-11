@@ -30,7 +30,7 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 
 | Variable | Défaut code | Dev (compose) | Prod | Rôle |
 |---|---|---|---|---|
-| `HEATMAP_DISPLAY_SOURCE` | `matched` | — | `raw` | Source de la heatmap (`raw_trace_display.raw_display_enabled`) |
+| `HEATMAP_DISPLAY_SOURCE` | `raw` | `raw` | `raw` | Source de la heatmap (`raw_trace_display.raw_display_enabled`) |
 | `HEATMAP_MIN_USERS` | `1` | — | `1` | Plancher d'utilisateurs distincts par cellule (mode raw) |
 | `TRACE_MASK_METERS` | `200` | — | `200` | Extrémités masquées (`trace_privacy.mask_meters`) |
 | `HEATMAP_RAW_BBOX` | vide | — | `-12;34;32;62` | Écarte les traces entièrement hors région (corrompues) |

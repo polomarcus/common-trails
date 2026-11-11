@@ -28,13 +28,6 @@ export default defineConfig({
     {
       name: 'default',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: /routing-heatmap-fixture|routing-quality-montpellier/,
-    },
-    {
-      name: 'heatmap-fixture',
-      use: { ...devices['Desktop Chrome'] },
-      testMatch: /routing-heatmap-fixture|routing-quality-montpellier/,
-      dependencies: ['default'],
     },
   ],
 });

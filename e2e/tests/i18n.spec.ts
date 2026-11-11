@@ -6,14 +6,6 @@ import { test, expect } from '@playwright/test';
 test.beforeEach(async ({ page }) => {
   // Clear localStorage to ensure default French locale
   await page.addInitScript(() => localStorage.removeItem('ct_locale'));
-  // Stub routing graph to avoid network delays
-  await page.route('**/routing/graph/**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ v: 1, edges: [] }),
-    });
-  });
 });
 
 test.describe('Language switch', () => {

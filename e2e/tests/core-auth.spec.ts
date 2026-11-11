@@ -8,18 +8,6 @@ import { test, expect, request } from '@playwright/test';
 const API_URL = process.env.API_URL || 'http://localhost:8787';
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3787';
 
-// Return empty graph tiles for ALL core tests so client-side routing falls
-// through to the server cascade.
-test.beforeEach(async ({ page }) => {
-  await page.route('**/routing/graph/**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ v: 1, edges: [] }),
-    });
-  });
-});
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function registerAndLogin(apiContext: Awaited<ReturnType<typeof request.newContext>>) {
