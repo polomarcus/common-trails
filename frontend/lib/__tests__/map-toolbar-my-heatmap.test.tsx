@@ -169,6 +169,19 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
     expect(container.querySelector('[data-testid="my-heatmap-download"]')).toBeNull();
   });
 
+  // Non-régression (2026-11-11) : pas de pastille « tous les sports » sur la
+  // carte, et une rangée de période (Tout / 1 an / 60 j / 30 j) sans effet sur
+  // la heatmap statique — « Tout » se lisait comme « tous les sports ».
+  it('heatmap commune: an "all sports" chip comes first, and the dead period chips are gone', async () => {
+    await act(async () => { root = createRoot(container); root.render(<Harness />); });
+    const chips = Array.from(container.querySelectorAll('[data-testid^="heatmap-sport-"]'))
+      .filter((el) => el.getAttribute('data-testid') !== 'heatmap-sport-filter');
+    expect(chips[0].getAttribute('data-testid')).toBe('heatmap-sport-all');
+    expect(chips[0].textContent).toBe('Tous');
+    expect(container.querySelector('[data-testid="heatmap-time-filter"]')).toBeNull();
+    expect(container.querySelector('[data-testid^="heatmap-time-"]')).toBeNull();
+  });
+
   it('the two toggles are independent: each flips only its own layer, both can be on', async () => {
     auth.token = 'cookie-auth';
     await act(async () => { root = createRoot(container); root.render(<Harness />); });

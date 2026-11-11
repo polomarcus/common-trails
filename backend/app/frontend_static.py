@@ -116,6 +116,21 @@ def register_frontend(app: FastAPI, frontend_dir: Path) -> None:
                 html_file = frontend_dir / f"{first}.html"
                 if html_file.is_file():
                     return html_response(html_file)
+            # Same collision one level down: /me/routes is BOTH the "Mes
+            # itinéraires" page and the API list endpoint. Opened in a browser
+            # it showed the raw API JSON ({"detail":"Not authenticated"},
+            # 2026-11-11). A navigation (Accept: text/html) whose exact clean
+            # path has an exported page gets that page; fetch() calls (Accept
+            # */* or JSON) still reach the API.
+            clean = request.url.path.strip("/")
+            if "/" in clean and "text/html" in accept:
+                nested = frontend_dir / f"{clean}.html"
+                try:
+                    is_page = nested.is_file() and _inside(frontend_dir, nested)
+                except OSError:  # e.g. a 300-char segment → ENAMETOOLONG
+                    is_page = False
+                if is_page:
+                    return html_response(nested)
         return await call_next(request)
 
     if not frontend_dir.is_dir():
