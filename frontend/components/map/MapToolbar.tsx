@@ -312,8 +312,6 @@ export default function MapToolbar(props: MapToolbarProps) {
                 </div>
               )}
             </div>
-            {/* Apparence — one collapsed line AFTER both heatmap toggles, so they
-                stay side by side. */}
             {/* Export of the rider's OWN traces (every activity, GeoJSON). A plain
                 same-origin link: the session cookie authenticates it and the
                 browser streams the attachment straight to disk. */}
@@ -331,6 +329,8 @@ export default function MapToolbar(props: MapToolbarProps) {
                 ⬇ {t('map.myHeatmap.download')}
               </a>
             )}
+            {/* Apparence — one collapsed line AFTER both heatmap toggles, so they
+                stay side by side. */}
             <HeatmapAppearancePanel showMine={!!authToken && layers.myTraces} showCommunity={layers.heatmap} />
             {/* DFCI toggle */}
             {(
