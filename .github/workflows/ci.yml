@@ -274,9 +274,25 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright deps
+        # `--with-deps` runs an `apt-get install` of system libraries/fonts. On
+        # 2026-11-11 the runners' apt mirror (azure.archive.ubuntu.com) stopped
+        # resolving for hours and EVERY PR's E2E died here, before a single
+        # test ran. Retry it once, then fall back to the browser alone: the
+        # ubuntu-24.04 image already ships the libraries Chromium needs (the
+        # apt step mostly adds fonts), so the suite still runs.
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          # 2 × 150 s at most: the job has a 20 min budget and the fallback must
+          # still have time to run when apt HANGS instead of failing fast.
+          for attempt in 1 2; do
+            if timeout 150 npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::playwright install --with-deps failed (attempt $attempt)"
+            sleep 15
+          done
+          echo "::warning::system deps could not be installed (apt mirror unreachable?) — installing the browser only"
+          npx playwright install chromium
         working-directory: e2e
 
       - name: Run Playwright tests (shard ${{ matrix.shard }}/2)
