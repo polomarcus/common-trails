@@ -184,6 +184,10 @@ jobs:
           TEST_MODE: "true"
           ENABLE_STRAVA_INTEGRATION: "true"
           JWT_SECRET: "ci-test-secret"
+          # "Ma heatmap" private file ON, stored in a directory inside the
+          # backend container (my-heatmap-private-file.spec.ts). E2E job only.
+          MY_HEATMAP_FILES_ENABLED: "true"
+          MY_HEATMAP_LOCAL_DIR: "/tmp/my-heatmap"
           DOCKER_BUILDKIT: "1"
           COMPOSE_DOCKER_CLI_BUILD: "1"
 
@@ -298,6 +302,10 @@ jobs:
           # spec stops at upload completion when this is unset, so a local
           # run never drains someone's dev queue).
           E2E_ARCHIVE_DRAIN_CMD: "docker compose -f ../docker-compose.backend.yml exec -T backend python -m app.jobs.ingest_pending_archives --pace 0"
+          # my-heatmap-private-file.spec.ts builds ONE user's private PMTiles
+          # with the real CLI (in TEST_MODE nothing schedules it), then loads
+          # /map. The spec appends `--user-id <id>`. Unset locally → skipped.
+          E2E_MY_HEATMAP_BUILD_CMD: "docker compose -f ../docker-compose.backend.yml exec -T backend python -m app.cli.my_heatmap_files backfill"
 
       - name: Dump backend logs on failure
         if: failure()
