@@ -150,7 +150,7 @@ export default function MethodePage() {
           <P muted>{t('methode.privacyNotKanon')}</P>
         </Card>
 
-        {/* Vos traces, votre consentement */}
+        {/* Tes traces, ton consentement */}
         <Card>
           <Title emoji="✅">{t('methode.provenanceTitle')}</Title>
           <P>{t('methode.provenanceDesc')}</P>
@@ -176,7 +176,7 @@ export default function MethodePage() {
           <P>{t('methode.integrityDesc')}</P>
         </Card>
 
-        {/* Le routage : on vous laisse les meilleurs outils */}
+        {/* Le routage : on te laisse les meilleurs outils */}
         <Card>
           <Title emoji="🧭">{t('methode.routingTitle')}</Title>
           <P>{t('methode.routingDesc')}</P>
