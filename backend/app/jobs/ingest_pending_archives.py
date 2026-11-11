@@ -32,7 +32,6 @@ import gzip
 import io
 import logging
 import os
-import re
 import time
 
 from sqlalchemy import text as sa_text
@@ -49,12 +48,9 @@ log = logging.getLogger(__name__)
 # ── DB-gentleness knobs (2026-07-20 incident: ONE 2,813-activity archive
 #    pegged db-f1-micro for ~7 h → Cloud Run 429 → site DOWN) ────────────────
 
-# Per-way chunk size for the end-of-archive heat_edges_agg recompute.
-HEAT_AGG_WAYS_PER_CHUNK = 500
-
 # Inter-member pacing — the drain's f1-micro breathing room. A fixed sleep was
 # always a GUESS at the DB's speed: 1.0 s was tuned for the OSM-matching era
-# (30 s–3 min of DB work per activity); post raw-trace pivot a member ingest is a
+# (30 s–3 min of DB work per activity); a member ingest is now a
 # light parse + dedup-SELECT + INSERT (measured ~2.5 ms on docker Postgres, more
 # on a loaded f1-micro), so any fixed guess is either wasteful (a 16k-member
 # Garmin archive spent HOURS asleep) or unsafe on a slow instance.
@@ -62,8 +58,8 @@ HEAT_AGG_WAYS_PER_CHUNK = 500
 # ADAPTIVE pacing removes the guess: sleep proportional to the PREVIOUS member's
 # REAL ingest wall-time (× DRAIN_PACE_RATIO, capped at DRAIN_PACE_MAX_SECONDS), so
 # the drain self-throttles to whatever DB it's hitting. ratio 1.0 → sleep ≈ the
-# work took → ~50 % DB duty cycle; a fast DB barely pauses, a slow/loaded one (or
-# a heavy legacy matched-mode member) automatically gets proportionally MORE room.
+# work took → ~50 % DB duty cycle; a fast DB barely pauses, a slow/loaded one
+# automatically gets proportionally MORE room.
 # An explicit DRAIN_PACE_SECONDS (or a pace_seconds arg) pins a FIXED sleep
 # instead — the ops escape hatch and how tests force pace=0.
 _DEFAULT_PACE_SECONDS = 0.25   # legacy fixed fallback (only when adaptive is off)
@@ -159,7 +155,7 @@ def _apply_drain_statement_timeout() -> None:
 
     Registered as an engine ``connect`` listener + ``engine.dispose()`` so
     pre-existing pooled connections are recycled into budgeted ones — this
-    covers the sessions ``_update_heat_edges`` opens internally, not just the
+    covers the sessions ``ingest_activity`` opens internally, not just the
     drain's own. A timed-out statement raises inside the member's ingest and
     the existing per-member error isolation records the row ``failed``.
     Idempotent: registers once per process.
@@ -194,69 +190,17 @@ def _apply_drain_statement_timeout() -> None:
     log.info("drain statement_timeout set to %dms for all DB connections", timeout_ms)
 
 
-def _recompute_heat_agg_batched(touched_ways: set[int]) -> None:
-    """ONE deduplicated ``heat_edges_agg`` recompute for a whole archive/batch.
-
-    The per-activity incremental hook is deferred during a drain (see
-    ``ingest_activity(collect_touched_ways=…)``): across an archive the same
-    OSM ways are touched dozens of times, and recomputing them per activity
-    (5-46 s of SQL each) is what pegged prod. Here the union is recomputed
-    once, chunked so a huge archive never issues one giant statement.
-
-    Best-effort like ``ingest._maintain_heat_agg``: the heat_edges rows are
-    already committed, so a failure here must NOT fail the drain — the drift
-    check / next backfill are the safety net. Commits per chunk.
-    """
-    if not touched_ways:
-        return
-    from app.db.session import SessionLocal
-    from app.jobs.rebuild_heat_agg import (
-        agg_maintenance_enabled,
-        recompute_heat_agg_for_ways,
-    )
-
-    if not agg_maintenance_enabled():
-        return
-    ordered = sorted(touched_ways)
-    db = SessionLocal()
-    try:
-        t0 = time.time()
-        deleted = upserted = 0
-        for i in range(0, len(ordered), HEAT_AGG_WAYS_PER_CHUNK):
-            d, u = recompute_heat_agg_for_ways(db, ordered[i:i + HEAT_AGG_WAYS_PER_CHUNK])
-            db.commit()
-            deleted += d
-            upserted += u
-        log.info(
-            "heat_agg batched recompute: ways=%d upserted=%d deleted=%d took=%.0fms",
-            len(ordered), upserted, deleted, (time.time() - t0) * 1000,
-        )
-    except Exception:
-        db.rollback()
-        log.warning(
-            "batched heat_agg recompute failed for %d ways (heat_edges already "
-            "committed; drift check will catch it)", len(ordered), exc_info=True,
-        )
-        try:
-            import sentry_sdk
-            sentry_sdk.capture_exception()
-        except Exception:  # noqa: BLE001
-            pass
-    finally:
-        db.close()
-
-
 def _ping_pmtiles_rebuild(imported: int, skip_heat_computation: bool) -> bool:
-    """After a drain that ingested >=1 activity WITH heat computation on, fire a
-    single best-effort PMTiles rebuild so the new contribution appears on the
-    public heatmap (the small ``/imports/files`` path already does the
-    equivalent via ``enqueue_artefact_rebuild``).
+    """After a drain that ingested >=1 activity, fire a single best-effort
+    PMTiles rebuild so the new contribution appears on the public heatmap (the
+    small ``/imports/files`` path does the equivalent).
 
     Once per drain batch — NOT per activity — to avoid stampeding the rebuild.
-    NEVER raises: the ``heat_edges``/``heat_edges_agg`` writes are already
-    committed, so a failed ping must not fail the drain (the row stays ``done``);
-    the next drain or an unrelated rebuild catches up. No-ops when heat was
-    skipped (nothing new to display) or nothing was imported. Returns whether a
+    NEVER raises: the activities are already committed, so a failed ping must
+    not fail the drain (the row stays ``done``); the next drain or an unrelated
+    rebuild catches up. No-ops when ``skip_heat_computation`` is set (the
+    caller opted out of the rebuild — tests / scale runs) or nothing was
+    imported. Returns whether a
     build execution was actually requested (truthy ``jobs:run``).
     """
     if skip_heat_computation or imported < 1:
@@ -293,7 +237,7 @@ class _ArchiveRebuildPinger:
     batch (up to 5 archives, possibly hours), while each archive's "done" email
     went out as soon as THAT archive finished — the email arrived long before
     the traces reached the heatmap. Now ``archive_finished`` runs right after
-    the archive's agg recompute and BEFORE its terminal email:
+    the archive's last member and BEFORE its terminal email:
 
     * first contributing archive of the run → ping immediately;
     * a later one → ping again only if the previous ping is older than
@@ -360,71 +304,6 @@ class _ArchiveRebuildPinger:
     def batch_finished(self) -> None:
         if self._deferred:
             self._ping(self._deferred, time.monotonic())
-
-
-# ── Spatial-locality ordering (2026-07-20 perf) ──────────────────────────────
-# A user's archive lists activities in UPLOAD/date order, so consecutive members
-# jump between regions (a 2015 Spain trip, then 2016 Montpellier rides, …). The
-# OSM matcher reloads 17k–65k segments PER activity when the tiles aren't warm in
-# the segment cache, so region-hopping thrashes the LRU → constant DB reloads
-# (the 1–2 min/activity prod symptom). Ordering members by a COARSE spatial key
-# (the z14 tile of the first GPS point) groups nearby activities together so the
-# now-large 8 Gi-job segment cache stays warm across the run. The key is probed
-# cheaply from the GPX head (no full parse); FIT / unparseable members get None
-# and cluster at the end (still processed, just not locality-optimized).
-
-# How many decompressed head bytes to scan for the first lat/lon. A GPX header +
-# first <trkpt> is well under this; bounding the read keeps the probe O(1)/member
-# and caps the .gz decompression.
-_SPATIAL_PROBE_HEAD_BYTES = 65_536
-_GPX_LAT_RE = re.compile(rb"""lat=["'](-?\d+(?:\.\d+)?)["']""")
-_GPX_LON_RE = re.compile(rb"""lon=["'](-?\d+(?:\.\d+)?)["']""")
-# Sort key for members whose tile could not be probed — sorts AFTER every known
-# tile so the unknowns are handled last, together.
-_UNKNOWN_SORT_KEY = (1, 0)
-
-
-def _member_spatial_key(raw: bytes, filename: str) -> int | None:
-    """Coarse z14 tile key from a member's FIRST GPS point — for cache-locality
-    ordering ONLY (never for ingest correctness).
-
-    Cheap by design: gunzips a bounded head for ``.gz`` and regex-scans for the
-    first ``lat="…"`` / ``lon="…"`` (any attribute order; ``<bounds>`` near the
-    track is an acceptable approximation). Returns ``None`` for FIT / non-GPX
-    members or any probe failure — callers treat ``None`` as "unknown tile".
-    """
-    low = filename.lower()
-    head = raw
-    if low.endswith(".gz"):
-        try:
-            with gzip.GzipFile(fileobj=io.BytesIO(raw)) as gz:
-                head = gz.read(_SPATIAL_PROBE_HEAD_BYTES)
-        except Exception:
-            return None
-        low = low[:-3]
-    else:
-        head = raw[:_SPATIAL_PROBE_HEAD_BYTES]
-    if not low.endswith((".gpx", ".tcx", ".xml")):
-        return None  # FIT (binary) and friends: no cheap probe
-    m_lat = _GPX_LAT_RE.search(head)
-    m_lon = _GPX_LON_RE.search(head)
-    if not (m_lat and m_lon):
-        return None
-    try:
-        from app.services.tile_keys import tile_key_from_latlon
-
-        return tile_key_from_latlon(float(m_lat.group(1)), float(m_lon.group(1)))
-    except Exception:
-        return None
-
-
-def _spatial_sort_key(tile_key: int | None) -> tuple[int, int]:
-    """Total order for :func:`sorted`: known tiles first (ascending by the
-    BIGINT key, which is ``x*100000+y`` → a raster scan that keeps a metro's
-    tiles adjacent), unknown-tile members last."""
-    if tile_key is None:
-        return _UNKNOWN_SORT_KEY
-    return (0, tile_key)
 
 
 def decompress_member(raw: bytes, filename: str) -> tuple[bytes, str]:
@@ -518,24 +397,6 @@ def _claim_batch(db, limit: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _order_pending_batch(batch: list[dict]) -> None:
-    """Sort a claimed per-member batch in place by first-point spatial locality
-    (see the ``_member_spatial_key`` block). Best-effort: a member whose bytes
-    can't be loaded/probed sorts last, unordered. Never raises — ordering is a
-    perf optimization, never a correctness gate."""
-    if len(batch) < 2:
-        return
-    for row in batch:
-        key: int | None = None
-        try:
-            raw = archive_intake.load_member(row["storage_backend"], row["storage_key"])
-            key = _member_spatial_key(raw, row["original_filename"] or "")
-        except Exception:
-            log.debug("spatial probe failed for pending row %s", row.get("id"), exc_info=True)
-        row["_spatial_key"] = key
-    batch.sort(key=lambda r: _spatial_sort_key(r.get("_spatial_key")))
-
-
 # Third slot of an "imported" ``_ingest_member_bytes`` result: the activity has
 # no date → personal-only (``provenance.community_eligible_conditions``).
 UNDATED = "undated"
@@ -558,8 +419,6 @@ def _ingest_member_bytes(
     resolved_sport: str | None,
     contribute_heatmap: bool,
     source: str | None,
-    skip_heat_computation: bool,
-    collect_touched_ways: set[int] | None = None,
     fallback_sport: str | None = None,
     fallback_date=None,
     stats: dict | None = None,
@@ -568,10 +427,6 @@ def _ingest_member_bytes(
     queue AND the whole-archive streaming drain) so provenance stamping +
     the sport cascade + #453 promotion can't drift between the two paths.
     (No ``db`` arg: ``ingest_activity`` opens its own short-lived session.)
-
-    ``collect_touched_ways``: when set, the per-activity ``heat_edges_agg``
-    recompute is deferred and the touched osm_way_ids accumulate there — the
-    drain batches ONE recompute per archive (see ``_recompute_heat_agg_batched``).
 
     ``fallback_date``: the activities.csv ``Activity Date`` of this member,
     used ONLY when the file itself carries no timestamp (a CSV-listed activity
@@ -627,8 +482,6 @@ def _ingest_member_bytes(
         user_id=user_id,
         activity_data=activity_data,
         contribute_heatmap=contribute_heatmap,
-        skip_heat_computation=skip_heat_computation,
-        collect_touched_ways=collect_touched_ways,
     )
     # "promoted" (③): a manual-upload member that upgraded a pre-existing
     # Strava-API twin to the community layer — counts as a successful import.
@@ -660,27 +513,11 @@ def drain_pending(
     _apply_drain_statement_timeout()
 
     summary = {"processed": 0, "imported": 0, "skipped": 0, "failed": 0}
-    touched_ways: set[int] = set()
     db = SessionLocal()
     try:
         batch = _claim_batch(db, limit)
     finally:
         db.close()
-
-    # Spatial-locality ordering: probe each claimed member's first-point tile
-    # (loading its bytes once) and sort so consecutive ingests reuse warm OSM
-    # tiles instead of thrashing the segment cache. The ingest loop below
-    # re-loads the bytes — a probe-then-reload keeps peak RAM bounded to one
-    # member (the per-member queue is the legacy small-zip path; batches are
-    # tiny, default 50). A probe failure just leaves the member unordered.
-    #
-    # LEGACY MATCHED MODE ONLY: under the raw-trace pivot there is no OSM
-    # matcher and no segment cache to keep warm, so the sort is vestigial —
-    # its probe would just DOUBLE-read every member from storage (GCS) for
-    # nothing. Same reasoning that dropped the whole-archive drain's pre-sort.
-    from app.services.raw_trace_display import raw_display_enabled
-    if not raw_display_enabled():
-        _order_pending_batch(batch)
 
     last_work_s: float | None = None
     for i, row in enumerate(batch):
@@ -705,8 +542,6 @@ def drain_pending(
                 fallback_sport=queued_pick,
                 contribute_heatmap=bool(row["contribute_heatmap"]),
                 source=row["source"],
-                skip_heat_computation=skip_heat_computation,
-                collect_touched_ways=touched_ways,
             )
             if outcome == "imported":
                 summary["imported"] += 1
@@ -726,8 +561,6 @@ def drain_pending(
             db.close()
             last_work_s = time.monotonic() - _t0
 
-    # ONE deduplicated agg recompute for the whole batch (deferred per-member).
-    _recompute_heat_agg_batched(touched_ways)
     _ping_pmtiles_rebuild(summary["imported"], skip_heat_computation)
     log.info("drain_pending summary: %s", summary)
     return summary
@@ -1011,12 +844,10 @@ def drain_pending_archives(
     member into memory at a time, so the ~400 MB decompressed payload is never
     fully materialised.
 
-    Members are ingested in ONE streaming pass, in iteration order (the OSM-era
-    spatial-locality pre-sort was dropped with the raw-trace pivot — there is no
-    segment cache to keep warm). Inter-member pacing is ADAPTIVE by default
+    Members are ingested in ONE streaming pass, in iteration order. Inter-member pacing is ADAPTIVE by default
     (``_resolve_pace_mode`` / ``_next_pace``): each sleep is the previous member's
     real ingest wall-time × ``DRAIN_PACE_RATIO`` (capped), so the drain self-tunes
-    to the live DB — trivial in raw mode (~ms/member), backing off automatically
+    to the live DB — trivial normally (~ms/member), backing off automatically
     on a slow/loaded instance. A fixed ``DRAIN_PACE_SECONDS`` overrides it.
 
     Idempotent + concurrency-safe: rows are claimed ``FOR UPDATE SKIP LOCKED``,
@@ -1054,11 +885,6 @@ def drain_pending_archives(
     for arch in batch:
         summary["archives"] += 1
         counts = {"members_total": 0, "imported": 0, "skipped": 0, "failed": 0}
-        # Touched osm_way_ids for THIS archive — the per-activity agg
-        # recompute is deferred; ONE deduplicated batch runs at end-of-archive
-        # (including on failure mid-way: the heat_edges rows for the members
-        # already ingested are committed, so the agg must not drift).
-        touched_ways: set[int] = set()
         # NO session is opened here: member ingests each use their own
         # short-lived session inside ingest_activity, and the terminal
         # transition opens one just-in-time (_finish_archive_now). The old
@@ -1078,12 +904,7 @@ def drain_pending_archives(
             ) as zf:
                 # ONE pass — ingest each member straight from the bytes
                 # iter_zip_members already yields (holds only ONE member at a
-                # time; ``ZipFile.read`` is lazy). The pre-pivot code did TWO
-                # passes: scan → sort by spatial tile-key → re-read each member,
-                # to keep the OSM segment cache warm. That cache died with the
-                # raw-trace pivot (no matcher), so the sort was vestigial and the
-                # re-read only DOUBLED the zip I/O — worst for big nested Garmin
-                # archives, where PASS 2 re-opened every inner UploadedFiles_*.zip.
+                # time; ``ZipFile.read`` is lazy).
                 # One pass reads each member exactly once. Pace is ADAPTIVE —
                 # each sleep is the PREVIOUS member's real ingest time × ratio
                 # (capped), so the drain self-tunes to the DB; iter_zip_members
@@ -1141,8 +962,6 @@ def drain_pending_archives(
                             fallback_sport=arch["fallback_sport"],
                             contribute_heatmap=bool(arch["contribute_heatmap"]),
                             source=arch["source"],
-                            skip_heat_computation=skip_heat_computation,
-                            collect_touched_ways=touched_ways,
                             fallback_date=csv_dates.get(name),
                             stats=counts,
                         )
@@ -1162,9 +981,6 @@ def drain_pending_archives(
                         log.error("archive %s member %s failed", arch["id"], name, exc_info=True)
                     finally:
                         last_work_s = time.monotonic() - _t0
-            # End-of-archive: ONE deduplicated agg recompute, BEFORE the
-            # terminal transition so status='done' implies a fresh aggregate.
-            _recompute_heat_agg_batched(touched_ways)
             # Rebuild ping BEFORE the email: the email promises the heatmap
             # update within ~30 min, so the build must already be requested.
             pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
@@ -1207,9 +1023,8 @@ def drain_pending_archives(
             summary["archives_failed"] += 1
             reason = f"archive rejected: {exc}"
             log.warning("pending archive %s rejected: %s", arch.get("id"), exc)
-            # Members ingested before the cap tripped already wrote heat_edges —
-            # recompute their ways so the aggregate doesn't drift.
-            _recompute_heat_agg_batched(touched_ways)
+            # Members ingested before the cap tripped are committed — they
+            # still deserve their rebuild ping.
             pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
             try:
                 _finish_archive_now(arch["id"], "failed", counts, error=reason[:1000])
@@ -1221,10 +1036,8 @@ def drain_pending_archives(
             summary["archives_failed"] += 1
             sentry_sdk.capture_exception(exc)
             log.error("pending archive %s failed", arch.get("id"), exc_info=True)
-            # Partial-drain flush: heat_edges rows for the already-ingested
-            # members are committed — the agg must not drift (golden asserts
-            # agg freshness for every touched way).
-            _recompute_heat_agg_batched(touched_ways)
+            # Partial drain: the already-ingested members are committed —
+            # they still deserve their rebuild ping.
             pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
             try:
                 _finish_archive_now(arch["id"], "failed", counts, error=str(exc)[:1000])
