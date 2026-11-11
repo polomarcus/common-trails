@@ -55,7 +55,6 @@ describe('Strava import wizard — every routed string exists in both locales', 
     'strava.signupToContributeSub',
     'strava.communityMap',
     'strava.contributeHeatmap',
-    'strava.canLeavePage',
     'strava.importProgress',
     'strava.resultImported',
     'strava.resultSkipped',
@@ -70,21 +69,6 @@ describe('Strava import wizard — every routed string exists in both locales', 
     'strava.archiveHelpLink',
     'strava.sportFromArchive',
     'strava.sportConfirmTitle',
-    'strava.importViaStrava',
-    'strava.queued',
-    'strava.queuedOther',
-    'strava.queuedWait',
-    'strava.readingHistory',
-    'strava.statNew',
-    'strava.statError',
-    'strava.statImported',
-    'strava.startingImport',
-    'strava.connectingReading',
-    'strava.continuesBackground',
-    'strava.gpsHighQuality',
-    'strava.importStravaMin',
-    'strava.willExportGpx',
-    'strava.continueWithStrava',
     // Strava-archive HELP block (help-only after the unified-dropzone refactor —
     // the deposit itself lives once, in the hero ContributionDropzone; this
     // section only explains WHY + HOW to get the archive out of Strava).
@@ -131,20 +115,18 @@ describe('Admin dashboard — every card / stat / column string is routed (no Fr
     'admin.card.engagement', 'admin.card.provenance', 'admin.card.bySport',
     'admin.card.routes', 'admin.card.heatmap', 'admin.card.graphHealth',
     'admin.card.network', 'admin.card.database', 'admin.card.recentRoutes',
-    'admin.card.recentActivities', 'admin.card.recentJobs', 'admin.card.stravaSync',
+    'admin.card.recentActivities', 'admin.card.recentJobs',
     'admin.stat.signedUp', 'admin.stat.importedTraces', 'admin.stat.cumulativeDistance',
     'admin.stat.cumulativeElevation', 'admin.stat.signups7d', 'admin.stat.signups30d',
-    'admin.stat.active7d', 'admin.stat.active30d', 'admin.stat.stravaConnected',
+    'admin.stat.active7d', 'admin.stat.active30d',
     'admin.stat.total', 'admin.stat.edges', 'admin.stat.cells', 'admin.stat.maxContributors',
     'admin.stat.pctOnOsm', 'admin.stat.pctGridFallback', 'admin.stat.vertices',
     'admin.stat.deadEnds', 'admin.stat.pctDeadEnds', 'admin.stat.dfciTracks',
-    'admin.stat.markedTrails', 'admin.stat.size', 'admin.stat.connected',
-    'admin.stat.delay30d', 'admin.stat.tokenExpired', 'admin.provider.gpxUpload',
+    'admin.stat.markedTrails', 'admin.stat.size', 'admin.provider.gpxUpload',
     'admin.col.name', 'admin.col.author', 'admin.col.sport', 'admin.col.visibility',
     'admin.col.distance', 'admin.col.elevation', 'admin.col.created', 'admin.col.source',
     'admin.col.imported', 'admin.col.job', 'admin.col.execution', 'admin.col.status',
-    'admin.col.start', 'admin.col.duration', 'admin.col.athlete', 'admin.col.lastSync',
-    'admin.col.delay', 'admin.col.failures',
+    'admin.col.start', 'admin.col.duration',
     'admin.sport.road', 'admin.sport.gravel', 'admin.sport.mtb',
     'admin.sport.offroad', 'admin.sport.running',
     // Archives (contributions) card — pending_archives queue observability.
@@ -275,7 +257,7 @@ describe('Map surface — every routed string exists in both locales', () => {
     // toolbar
     'map.toolbar.heatmapLayer', 'map.toolbar.myHeatmap', 'map.offroadCombined', 'map.toolbar.timeAll',
     'map.toolbar.moreLayers', 'map.toolbar.cellCoverage', 'map.toolbar.hillshade',
-    'map.toolbar.stravaPhotos', 'map.toolbar.waymarkedHeader', 'map.toolbar.basemap',
+    'map.toolbar.waymarkedHeader', 'map.toolbar.basemap',
     'map.toolbar.exportBtn', 'map.toolbar.exportTitle',
     'map.toolbar.exploreModeOn', 'map.toolbar.exploreModeOff',
     'map.dfciTracks', 'map.dfciTracksCount',
@@ -285,7 +267,7 @@ describe('Map surface — every routed string exists in both locales', () => {
     // import launcher (thin signpost → /strava; the in-map upload form + the
     // Garmin/Komoot export tutorials were removed in the unified-dropzone pass)
     'map.importTitle', 'map.import.launcherBody', 'map.import.launcherCta',
-    'map.howRouting.signalsIntro', 'map.howRouting.learnMore', 'map.lightbox.photo',
+    'map.howRouting.signalsIntro', 'map.howRouting.learnMore',
     // NOTE: the in-app WASM route editor + route-mode toolbar were decommissioned
     // in #518. Their keys (map.editor.*, map.method.*/methodDesc.*, map.waypoints.*,
     // map.route.*, map.toolbar.routeMode*/drafts, routing status/toasts, warming
@@ -299,7 +281,7 @@ describe('Map surface — every routed string exists in both locales', () => {
     'map.sportFilter.running', 'map.comparison', 'map.openOnPanoramax', 'map.linkCopied',
     // panels
     'map.legend.popularity', 'map.legend.myActivities',
-    'map.activity.distance', 'map.activity.viewDetails', 'map.photos.stripLabel', 'map.photos.stravaPhoto',
+    'map.activity.distance', 'map.activity.viewDetails',
   ];
 
   it.each(mapKeys)('%s is defined in fr and en', (key) => {

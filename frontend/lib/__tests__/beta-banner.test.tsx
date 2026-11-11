@@ -19,7 +19,6 @@ vi.mock('next/link', () => ({
     React.createElement('a', { href, ...rest }, children),
 }));
 vi.mock('@/components/ElevationProfile', () => ({ default: () => null }));
-vi.mock('@/components/map/ActivityPhotoStrip', () => ({ default: () => null }));
 
 import BetaBanner, { BETA_BANNER_DISMISSED_KEY } from '@/components/BetaBanner';
 import MapLegend from '@/components/map/MapLegend';
@@ -126,7 +125,7 @@ describe('bottom-anchored /map panels sit above the banner', () => {
       root.render(
         <I18nProvider>
           <MapLegend
-            layers={{ heatmap: true, dfci: false, myTraces: false, myCells: false, hillshade: false, photos: false }}
+            layers={{ heatmap: true, dfci: false, myTraces: false, myCells: false, hillshade: false }}
             waymarked={{ hiking: false, cycling: false, mtb: false }}
           />
         </I18nProvider>,

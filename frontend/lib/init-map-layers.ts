@@ -3,10 +3,9 @@
  *
  * The in-app WASM router + drag-edit route editor were decommissioned
  * (chore/decommission-wasm-routing). This module now builds ONLY the
- * read-only display layers (heatmap, DFCI, user activities/cells/photos,
+ * read-only display layers (heatmap, DFCI, user activities/cells,
  * selected-activity highlight, variant overlays) and wires the view-only
- * interactions (trace hover popup, activity selection, heatmap inspect,
- * photo clusters).
+ * interactions (trace hover popup, activity selection, heatmap inspect).
  *
  * Two exported functions:
  *   1. addMapSourcesAndLayers — pure layer/source setup
@@ -293,52 +292,6 @@ function addUserLayers(m: any): void {
     paint: { 'line-color': '#2d6a4f', 'line-width': 1, 'line-opacity': 0.4 },
   });
 
-  // ③d User photos — clustered GeoJSON source
-  m.addSource('user-photos', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-    cluster: true,
-    clusterMaxZoom: 14,
-    clusterRadius: 50,
-  });
-  m.addLayer({
-    id: 'user-photos-clusters',
-    type: 'circle',
-    source: 'user-photos',
-    filter: ['has', 'point_count'],
-    layout: { visibility: 'none' },
-    paint: {
-      'circle-color': '#4a90d9',
-      'circle-radius': ['step', ['get', 'point_count'], 18, 10, 24, 50, 30],
-      'circle-stroke-width': 2,
-      'circle-stroke-color': '#fff',
-    },
-  });
-  m.addLayer({
-    id: 'user-photos-cluster-count',
-    type: 'symbol',
-    source: 'user-photos',
-    filter: ['has', 'point_count'],
-    layout: {
-      visibility: 'none',
-      'text-field': '{point_count_abbreviated}',
-      'text-size': 13,
-    },
-    paint: { 'text-color': '#fff' },
-  });
-  // Individual (unclustered) photo hit circle — transparent, for click detection
-  m.addLayer({
-    id: 'user-photos-point',
-    type: 'circle',
-    source: 'user-photos',
-    filter: ['!', ['has', 'point_count']],
-    layout: { visibility: 'none' },
-    paint: {
-      'circle-radius': 24,
-      'circle-opacity': 0,
-    },
-  });
-
   // ③b Selected activity highlight — bright glow + prominent line on top
   m.addSource('selected-activity', {
     type: 'geojson',
@@ -549,17 +502,4 @@ export function wireMapEventHandlers(
     if (hits.length === 0) setters.setSelectedActivity(null);
   });
 
-  // ── Photo clusters ───────────────────────────────────────────────────
-  m.on('click', 'user-photos-clusters', (e: any) => {
-    const feature = e.features?.[0];
-    if (!feature) return;
-    const clusterId = feature.properties.cluster_id;
-    const source = m.getSource('user-photos') as any;
-    source.getClusterExpansionZoom(clusterId, (err: any, zoom: number) => {
-      if (err) return;
-      m.easeTo({ center: feature.geometry.coordinates, zoom });
-    });
-  });
-  m.on('mouseenter', 'user-photos-clusters', () => { m.getCanvas().style.cursor = 'pointer'; });
-  m.on('mouseleave', 'user-photos-clusters', () => { m.getCanvas().style.cursor = ''; });
 }

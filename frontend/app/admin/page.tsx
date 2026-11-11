@@ -11,28 +11,9 @@ import {
   ageMs,
   freshnessLevel,
   relativeParts,
-  resyncLevel,
-  stravaLevel,
   sparklinePath,
   FRESHNESS_THRESHOLDS,
 } from '@/lib/admin-metrics';
-
-interface SyncUser {
-  athlete_name: string;
-  last_synced_at: string | null;
-  delay_days: number | null;
-  sync_failures: number;
-  token_expired: boolean;
-  disabled: boolean;
-}
-
-interface SyncStatus {
-  total_connected: number;
-  stale_30d: number;
-  token_expired: number;
-  disabled: number;
-  users: SyncUser[];
-}
 
 interface RecentJob {
   job: string;
@@ -62,9 +43,6 @@ interface DashboardData {
   routes: {
     total: number;
     by_visibility: Record<string, number>;
-  };
-  integrations: {
-    strava_connected: number;
   };
   heatmap: {
     edges: number;
@@ -123,16 +101,6 @@ interface AdminUserRow {
   username: string;
   is_admin: boolean;
   created_at: string | null;
-  strava: {
-    athlete_id: string | null;
-    athlete_name: string | null;
-    connected_at: string | null;
-    expires_at: number | null;
-    token_expired: boolean;
-    last_synced_at: string | null;
-    sync_failures: number;
-    reconnect_required: boolean;
-  } | null;
   activities: {
     total: number;
     total_distance_m: number;
@@ -262,22 +230,6 @@ function FreshnessPanel({ freshness }: { freshness: Freshness }) {
     ageMs(freshness.heat_agg_updated_at, now),
     FRESHNESS_THRESHOLDS.rebuild.amber, FRESHNESS_THRESHOLDS.rebuild.red,
   );
-  const resyncColor = resyncLevel(freshness.last_resync_status);
-  const resyncStatusLabel = (() => {
-    const s = (freshness.last_resync_status || '').toUpperCase();
-    if (s === 'COMPLETED') return t('admin.mon.resync.completed');
-    if (s === 'RUNNING') return t('admin.mon.resync.running');
-    if (s === 'PENDING') return t('admin.mon.resync.pending');
-    if (s === 'FAILED') return t('admin.mon.resync.failed');
-    return t('admin.mon.resync.none');
-  })();
-  const stravaColor = stravaLevel(freshness);
-  const stravaText = (() => {
-    if (freshness.strava_connected <= 0) return t('admin.mon.strava.none');
-    if (freshness.strava_reconnect_required) return t('admin.mon.strava.reconnect');
-    if (freshness.strava_sync_failures > 0) return t('admin.mon.strava.failures', { n: freshness.strava_sync_failures });
-    return t('admin.mon.strava.ok');
-  })();
 
   return (
     <Card title={t('admin.mon.freshness')}>
@@ -287,17 +239,6 @@ function FreshnessPanel({ freshness }: { freshness: Freshness }) {
           label={t('admin.mon.lastRebuild')}
           level={rebuildLevel}
           text={`${rel(freshness.heat_agg_updated_at)} · ${t('admin.mon.ways', { n: freshness.heat_edges_agg })}`}
-        />
-        <FreshnessRow
-          label={t('admin.mon.lastResync')}
-          level={resyncColor}
-          text={freshness.last_resync_at ? `${resyncStatusLabel} · ${rel(freshness.last_resync_at)}` : resyncStatusLabel}
-        />
-        <FreshnessRow label={t('admin.mon.stravaSync')} level={stravaColor} text={stravaText} />
-        <FreshnessRow
-          label={t('admin.mon.webhook')}
-          level={freshness.webhook_subscription_present ? 'green' : 'amber'}
-          text={freshness.webhook_subscription_present ? t('admin.mon.webhook.present') : t('admin.mon.webhook.missing')}
         />
       </div>
     </Card>
@@ -369,7 +310,6 @@ export default function AdminPage() {
     offroad: t('admin.sport.offroad'), running: t('admin.sport.running'),
   };
   const [data, setData] = useState<DashboardData | null>(null);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [recentRoutes, setRecentRoutes] = useState<RecentRoute[]>([]);
   const [recentActivities, setRecentActivities] = useState<RecentActivity[]>([]);
   const [recentJobs, setRecentJobs] = useState<RecentJob[]>([]);
@@ -377,7 +317,6 @@ export default function AdminPage() {
   const [archives, setArchives] = useState<ArchivesData | null>(null);
   const [requeueing, setRequeueing] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<HeatmapMetricsResponse | null>(null);
-  const [resyncLoading, setResyncLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -398,11 +337,6 @@ export default function AdminPage() {
       .then(d => { setData(d); setError(null); setLastRefresh(new Date()); })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
-    // Fetch sync status separately (non-blocking)
-    fetch(`${API_URL}/admin/sync-status`, { headers, credentials: 'include' })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setSyncStatus(d); })
-      .catch(() => {});
     // Recent routes + activities — fire-and-forget. If they 401/403 the
     // main dashboard load already surfaced the error; we just leave these
     // empty rather than re-render the error chrome.
@@ -420,8 +354,8 @@ export default function AdminPage() {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.items) setRecentJobs(d.items); })
       .catch(() => {});
-    // Per-user observability rows (identity + Strava linkage + sync health
-    // + traces breakdown). Non-blocking — the main dashboard load owns the
+    // Per-user observability rows (identity + traces breakdown).
+    // Non-blocking — the main dashboard load owns the
     // error chrome.
     fetch(`${API_URL}/admin/users`, { headers, credentials: 'include' })
       .then(r => r.ok ? r.json() : null)
@@ -440,19 +374,6 @@ export default function AdminPage() {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.freshness) setMetrics(d); })
       .catch(() => {});
-  };
-
-  const triggerResync = () => {
-    setResyncLoading(true);
-    const token = document.cookie.match(/auth_token=([^;]+)/)?.[1]
-      || localStorage.getItem('token');
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    fetch(`${API_URL}/admin/resync`, { method: 'POST', headers, credentials: 'include' })
-      .then(r => r.json())
-      .then(() => { /* refresh after a moment */ setTimeout(fetchData, 2000); })
-      .catch(() => {})
-      .finally(() => setResyncLoading(false));
   };
 
   // One-click recovery for a failed archive row: POST the requeue endpoint
@@ -552,7 +473,6 @@ export default function AdminPage() {
                 <Stat label={t('admin.stat.signups30d')} value={data.users.signups_30d} color="#16a34a" />
                 <Stat label={t('admin.stat.active7d')} value={data.users.active_7d} color="#2563eb" />
                 <Stat label={t('admin.stat.active30d')} value={data.users.active_30d} color="#2563eb" />
-                <Stat label={t('admin.stat.stravaConnected')} value={data.integrations.strava_connected} color="#fc4c02" />
               </div>
             </Card>
 
@@ -931,9 +851,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Per-user observability table — identity, Strava linkage, sync
-            health chip, traces breakdown. Built for multi-user beta even
-            though today there's one user. */}
+        {/* Per-user observability table — identity, traces breakdown. */}
         {adminUsers.length > 0 && (
           <div style={{ marginTop: 24 }} data-testid="admin-users-table">
             <Card title={t('admin.users.section')}>
@@ -946,8 +864,6 @@ export default function AdminPage() {
                     <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left', color: '#6b7280', fontWeight: 600 }}>
                       <th style={{ padding: '8px 12px' }}>{t('admin.users.col.user')}</th>
                       <th style={{ padding: '8px 12px' }}>{t('admin.users.col.role')}</th>
-                      <th style={{ padding: '8px 12px' }}>{t('admin.users.col.strava')}</th>
-                      <th style={{ padding: '8px 12px' }}>{t('admin.users.col.sync')}</th>
                       <th style={{ padding: '8px 12px', textAlign: 'right' }}>{t('admin.users.col.traces')}</th>
                       <th style={{ padding: '8px 12px', textAlign: 'right' }}>{t('admin.users.col.distance')}</th>
                       <th style={{ padding: '8px 12px' }}>{t('admin.users.col.sports')}</th>
@@ -956,15 +872,6 @@ export default function AdminPage() {
                   </thead>
                   <tbody>
                     {adminUsers.map(u => {
-                      // Sync-health chip: red reconnect/expired > amber failures > green OK.
-                      const s = u.strava;
-                      let chip: { label: string; bg: string; color: string } | null = null;
-                      if (s) {
-                        if (s.reconnect_required) chip = { label: t('admin.users.sync.reconnect'), bg: '#fef2f2', color: '#dc2626' };
-                        else if (s.token_expired) chip = { label: t('admin.users.sync.tokenExpired'), bg: '#fef2f2', color: '#dc2626' };
-                        else if (s.sync_failures > 0) chip = { label: t('admin.users.sync.failures', { n: s.sync_failures }), bg: '#fffbeb', color: '#d97706' };
-                        else chip = { label: t('admin.users.sync.ok'), bg: '#f0fdf4', color: '#16a34a' };
-                      }
                       const km = Math.round(u.activities.total_distance_m / 1000);
                       const sportsSummary = Object.entries(u.activities.by_sport)
                         .sort((a, b) => b[1].count - a[1].count)
@@ -987,30 +894,6 @@ export default function AdminPage() {
                             }}>
                               {u.is_admin ? t('admin.users.role.admin') : t('admin.users.role.user')}
                             </span>
-                          </td>
-                          <td style={{ padding: '8px 12px' }}>
-                            {s?.athlete_id ? (
-                              <a
-                                href={`https://www.strava.com/athletes/${s.athlete_id}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={t('admin.users.strava.viewProfile')}
-                                style={{ color: '#fc4c02', textDecoration: 'none', fontWeight: 600 }}
-                              >
-                                {s.athlete_name || s.athlete_id} ↗
-                              </a>
-                            ) : (
-                              <span style={{ color: '#9ca3af' }}>{t('admin.users.strava.none')}</span>
-                            )}
-                          </td>
-                          <td style={{ padding: '8px 12px' }}>
-                            {chip ? (
-                              <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: chip.bg, color: chip.color }}>
-                                {chip.label}
-                              </span>
-                            ) : (
-                              <span style={{ color: '#cbd5e1' }}>—</span>
-                            )}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
                             {fmt(u.activities.total)}
@@ -1041,71 +924,6 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Strava Sync Status */}
-        {syncStatus && (
-          <div style={{ marginTop: 24 }}>
-            <Card title={t('admin.card.stravaSync')}>
-              <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Stat label={t('admin.stat.connected')} value={syncStatus.total_connected} />
-                <Stat label={t('admin.stat.delay30d')} value={syncStatus.stale_30d} color={syncStatus.stale_30d > 0 ? '#d97706' : undefined} />
-                <Stat label={t('admin.stat.tokenExpired')} value={syncStatus.token_expired} color={syncStatus.token_expired > 0 ? '#dc2626' : undefined} />
-                <Stat label={t('admin.disabledPlural')} value={syncStatus.disabled} color={syncStatus.disabled > 0 ? '#dc2626' : undefined} />
-                <button
-                  onClick={triggerResync}
-                  disabled={resyncLoading}
-                  style={{
-                    padding: '8px 16px', borderRadius: 8, border: 'none',
-                    background: '#2d6a4f', color: '#fff', cursor: 'pointer',
-                    fontSize: 13, fontWeight: 600, opacity: resyncLoading ? 0.5 : 1,
-                    marginLeft: 'auto',
-                  }}
-                >
-                  {resyncLoading ? t('admin.launching') : t('admin.resyncNow')}
-                </button>
-              </div>
-              {syncStatus.users.length > 0 && (
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#6b7280' }}>{t('admin.col.athlete')}</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#6b7280' }}>{t('admin.col.lastSync')}</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#6b7280' }}>{t('admin.col.delay')}</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#6b7280' }}>{t('admin.col.failures')}</th>
-                        <th style={{ padding: '8px 12px', fontWeight: 600, color: '#6b7280' }}>{t('admin.col.status')}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {syncStatus.users.map((u, i) => (
-                        <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                          <td style={{ padding: '8px 12px' }}>{u.athlete_name}</td>
-                          <td style={{ padding: '8px 12px', color: '#6b7280' }}>
-                            {u.last_synced_at
-                              ? new Date(u.last_synced_at).toLocaleDateString(_fmtLocale, { day: 'numeric', month: 'short', year: 'numeric' })
-                              : t('admin.never')}
-                          </td>
-                          <td style={{ padding: '8px 12px', color: (u.delay_days ?? 999) > 30 ? '#d97706' : '#6b7280' }}>
-                            {u.delay_days !== null ? `${u.delay_days}j` : '—'}
-                          </td>
-                          <td style={{ padding: '8px 12px' }}>{u.sync_failures}</td>
-                          <td style={{ padding: '8px 12px' }}>
-                            {u.disabled ? (
-                              <span style={{ background: '#fef2f2', color: '#dc2626', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t('admin.disabled')}</span>
-                            ) : u.token_expired ? (
-                              <span style={{ background: '#fef2f2', color: '#dc2626', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{t('admin.tokenExpired')}</span>
-                            ) : (
-                              <span style={{ background: '#f0fdf4', color: '#16a34a', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>OK</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </Card>
-          </div>
-        )}
       </div>
     </div>
   );

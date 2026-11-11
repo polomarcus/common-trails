@@ -8,7 +8,6 @@ export interface LayerToggles {
   myTraces: boolean;
   myCells: boolean;
   hillshade: boolean;
-  photos: boolean;
 }
 
 export interface WaymarkedToggles {
@@ -47,7 +46,6 @@ export function useLayerToggles(): LayerToggleState {
     myTraces: true,
     myCells: false,
     hillshade: false,
-    photos: false,
   });
 
   const [waymarked, setWaymarked] = useState<WaymarkedToggles>({ hiking: false, cycling: false, mtb: false });

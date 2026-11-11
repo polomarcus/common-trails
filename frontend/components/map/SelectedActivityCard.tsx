@@ -8,7 +8,6 @@ import { useT } from '@/lib/i18n';
 import { formatDist, fmtElev, fmtDate } from '@/lib/format';
 import type { ActivityItem } from '@/lib/map-utils';
 import ElevationProfile from '@/components/ElevationProfile';
-import ActivityPhotoStrip from '@/components/map/ActivityPhotoStrip';
 
 interface SelectedActivityCardProps {
   activity: ActivityItem;
@@ -162,14 +161,6 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
           {t('map.activity.undated')}
         </div>
       )}
-
-      {/* Photo thumbnails (Strava import phase 4) */}
-      {activity.total_photo_count && activity.total_photo_count > 0 ? (
-        <ActivityPhotoStrip
-          activityId={activity.id}
-          totalPhotoCount={activity.total_photo_count}
-        />
-      ) : null}
 
       {/* Elevation profile */}
       {activity.coords.some((c) => c.length > 2 && c[2] !== 0) && (
