@@ -73,7 +73,8 @@ SHARE_PREFIX = "shares"
 VERSION_RE = re.compile(r"^r\d{1,18}-[0-9a-f]{16}$")
 TILE_LAYER = "activities"
 # Columns whose change alters the file — MUST match the trigger list in
-# alembic 0070 (pinned by test_my_heatmap_files::test_hook_columns_match_trigger).
+# alembic 0069, minus total_photo_count — dropped with its column by 0070 in a
+# later deploy (pinned by test_my_heatmap_files::test_hook_columns_match_trigger).
 # geometry_geojson is checked separately, only when the display cache is NULL
 # (the file then derives its geometry from it) — every writer that changes the
 # geometry also rewrites display_geojson, and comparing two large TOASTed

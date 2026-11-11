@@ -192,14 +192,18 @@ def _user_id_of(client, headers) -> str:
 
 
 def test_hook_columns_match_trigger():
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0070_drop_strava_api_leftovers.py"
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0069_my_heatmap_shares.py"
     tree = ast.parse(path.read_text())
     cols = next(
         ast.literal_eval(n.value)
         for n in tree.body
         if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_DISPLAYED_COLUMNS"
     )
-    assert tuple(cols) == mhf.DISPLAYED_COLUMNS
+    # ``total_photo_count`` is no longer read by the code (Strava photos are
+    # gone) but the column — and the trigger watching it — are only dropped by
+    # the NEXT migration (0070), shipped in a separate deploy so the previous
+    # revision never runs against a schema missing a column it still maps.
+    assert tuple(c for c in cols if c != "total_photo_count") == mhf.DISPLAYED_COLUMNS
 
 
 def test_trigger_bumps_on_raw_sql_writes(users):
