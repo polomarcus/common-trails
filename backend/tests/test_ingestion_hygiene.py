@@ -219,14 +219,13 @@ class TestDedupIndexMigration:
         assert "file_hash IS NOT NULL" in idxdef  # partial: Strava rows excluded
 
 
-# ── 3. raw mode skips the vestigial spatial pre-sort ─────────────────────────
+# ── 3. the per-member drain reads each member once ───────────────────────────
 
 
-class TestRawModeSkipsSpatialPresort:
-    """The pre-sort probe loads EVERY member's bytes from storage a second
-    time, purely to warm an OSM segment cache that does not exist under the
-    raw-trace pivot. DB-free: same seam style as
-    test_drain_spatial_locality_and_cache."""
+class TestNoSpatialPresort:
+    """The old pre-sort probe loaded EVERY member's bytes from storage a second
+    time, purely to warm the removed OSM matcher's segment cache. DB-free: same
+    seam style as test_drain_iteration_order."""
 
     def _run_drain(self, monkeypatch) -> int:
         """Run the REAL drain_pending over 2 fake claimed members; return how
@@ -248,7 +247,6 @@ class TestRawModeSkipsSpatialPresort:
         monkeypatch.setattr(drain_mod, "_claim_batch", lambda db, lim: rows)
         monkeypatch.setattr(drain_mod, "_finish", lambda *a, **k: None)
         monkeypatch.setattr(drain_mod, "_apply_drain_statement_timeout", lambda: None)
-        monkeypatch.setattr(drain_mod, "_recompute_heat_agg_batched", lambda w: None)
         monkeypatch.setattr(drain_mod, "_ping_pmtiles_rebuild", lambda i, s: None)
         monkeypatch.setattr(
             drain_mod, "_ingest_member_bytes",
@@ -260,14 +258,9 @@ class TestRawModeSkipsSpatialPresort:
         assert summary["imported"] == 2, summary
         return len(loads)
 
-    def test_raw_mode_loads_each_member_once(self, monkeypatch):
-        monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-        # FAILS pre-fix: the probe double-read → 4 loads for 2 members.
+    def test_each_member_is_loaded_once(self, monkeypatch):
+        # No spatial pre-sort probe: one storage read per member, not two.
         assert self._run_drain(monkeypatch) == 2
-
-    def test_matched_mode_still_presorts(self, monkeypatch, matched_mode):
-        # Legacy matched mode keeps the locality sort: probe + ingest loads.
-        assert self._run_drain(monkeypatch) == 4
 
 
 # ── 4. husk guard: no-geometry member → skipped, never a row ─────────────────
@@ -288,7 +281,6 @@ class TestHuskGuard:
                 resolved_sport="road",
                 contribute_heatmap=True,
                 source="manual_upload",
-                skip_heat_computation=True,
             )
             # FAILS pre-fix: ("imported", <uuid>, None) + a husk row.
             assert outcome == "skipped"
@@ -315,7 +307,6 @@ class TestHuskGuard:
                 resolved_sport="road",
                 contribute_heatmap=True,
                 source="manual_upload",
-                skip_heat_computation=True,
             )
             assert (outcome, reason) == ("imported", None)
             geom = db.execute(sa_text(

@@ -1,6 +1,6 @@
 """OIDC verification on /internal/* endpoints — rejection-path tests.
 
-The /internal/* family (heat-compute, artefact-rebuild) is reachable from
+The /internal/* family (my-heatmap rebuild, artefact-rebuild) is reachable from
 the public internet on Cloud Run. An attacker who finds the URL can trigger
 expensive artefact rebuilds (DoS surface) unless OIDC verification holds.
 
@@ -32,7 +32,7 @@ def prod_mode_client(client, monkeypatch) -> Iterator:
     # Some endpoints ship an audience env that's normally unset in CI.
     # Set placeholders so the "not configured" branch doesn't fire
     # unless we explicitly want it to.
-    monkeypatch.setenv("INTERNAL_HEAT_HANDLER_URL", "https://example.invalid/internal/ingest/heat")
+    monkeypatch.setenv("INTERNAL_MY_HEATMAP_HANDLER_URL", "https://example.invalid/internal/my-heatmap/rebuild")
     monkeypatch.setenv("INTERNAL_ARTEFACT_HANDLER_URL", "https://example.invalid/internal/artefacts/rebuild")
     monkeypatch.setenv("CLOUD_TASKS_INVOKER_SA", "common-trails-tasks@example.iam.gserviceaccount.com")
     yield client
@@ -42,7 +42,7 @@ def prod_mode_client(client, monkeypatch) -> Iterator:
 # Each entry is (method, path, body) — POSTs need a minimal body to get
 # past Pydantic validation so we exercise the dependency, not a 422.
 _INTERNAL_ENDPOINTS = [
-    ("POST", "/internal/ingest/heat", {"activity_id": "x", "user_id": "y"}),
+    ("POST", "/internal/my-heatmap/rebuild", {"user_id": "y"}),
     ("POST", "/internal/artefacts/rebuild", {}),
 ]
 

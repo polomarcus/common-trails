@@ -92,7 +92,6 @@ def test_ingest_activity_dual_writes_both_columns():
             "distance_m": 1234.5,
         },
         contribute_heatmap=False,  # don't poison the heatmap with test data
-        skip_heat_computation=True,
     )
     assert result["status"] == "created"
     activity_id = result["activity_id"]
@@ -147,7 +146,6 @@ def test_ingest_activity_handles_missing_geojson():
             "geometry_geojson": None,
         },
         contribute_heatmap=False,
-        skip_heat_computation=True,
     )
     assert result["status"] == "created"
 
@@ -179,7 +177,6 @@ def test_ingest_activity_handles_garbage_geojson():
             "geometry_geojson": "not even json",
         },
         contribute_heatmap=False,
-        skip_heat_computation=True,
     )
     assert result["status"] == "created"
 

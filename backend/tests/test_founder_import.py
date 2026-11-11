@@ -162,7 +162,6 @@ class TestFounderImport:
             consent_version="founder-2026-07-13",
             locale="fr",
             pace_seconds=0.0,
-            skip_heat_computation=True,
         )
 
         # 3 ingestible members (mtb GPX + road GPX + gravel FIT); Yoga skipped.
@@ -206,7 +205,7 @@ class TestFounderImport:
         import_founder_archive(
             bucket_key=key, user_id=uid,
             consent_text="ODbL", consent_version="v1",
-            pace_seconds=0.0, skip_heat_computation=True,
+            pace_seconds=0.0,
         )
         db = SessionLocal()
         try:
@@ -227,7 +226,7 @@ class TestFounderImport:
         kwargs = dict(
             bucket_key=key, user_id=uid,
             consent_text="ODbL", consent_version="v1",
-            pace_seconds=0.0, skip_heat_computation=True,
+            pace_seconds=0.0,
         )
         first = import_founder_archive(**kwargs)
         assert first["imported"] == 3, first
@@ -251,7 +250,7 @@ class TestFounderImport:
         summary = import_founder_archive(
             bucket_key=key, user_id=uid,
             consent_text="ODbL", consent_version="v1",
-            pace_seconds=0.0, dry_run=True, skip_heat_computation=True,
+            pace_seconds=0.0, dry_run=True,
         )
         assert summary["dry_run"] is True
         assert summary["imported"] == 0, summary
@@ -268,5 +267,5 @@ class TestFounderImport:
             import_founder_archive(
                 bucket_key=f"founder-import/{uid}.zip",  # never staged
                 user_id=uid, consent_text="ODbL", consent_version="v1",
-                pace_seconds=0.0, skip_heat_computation=True,
+                pace_seconds=0.0,
             )

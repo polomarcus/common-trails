@@ -6,7 +6,6 @@ from app.services.ingest import (
     get_dfci_geojson,
     store_dfci_edges,
 )
-from app.services.routing_profiles import TRAIL_SCORES, compute_trail_score
 
 pytestmark = pytest.mark.slow
 
@@ -152,18 +151,3 @@ class TestDFCIApi:
         assert resp.status_code == 200
         assert resp.json()["seeded"] == 1
         assert get_dfci_edge_count() == 1
-
-
-class TestDFCITrailScore:
-    """Test DFCI trail scoring integration."""
-
-    def test_dfci_in_trail_scores(self):
-        assert "DFCI" in TRAIL_SCORES
-        assert TRAIL_SCORES["DFCI"] == 1.0
-
-    def test_compute_trail_score_dfci(self):
-        score = compute_trail_score("DFCI")
-        assert score == 1.0
-
-    def test_dfci_higher_than_gr(self):
-        assert TRAIL_SCORES["DFCI"] >= TRAIL_SCORES["GR"]

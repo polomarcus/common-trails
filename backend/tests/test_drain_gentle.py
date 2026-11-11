@@ -1,31 +1,24 @@
 """perf(drain): one archive ingestion must never DoS the site (2026-07-20 incident).
 
 A single 2,813-activity archive drain pegged the shared db-f1-micro for ~7 h
-(per-activity heat_edges_agg recompute × dozens of repeats on the same OSM
-ways + no statement budget) until Cloud Run returned 429 — site DOWN.
+until Cloud Run returned 429 — site DOWN. (The heavy per-activity work of that
+era — the matched pipeline — is gone; the DB-gentleness knobs remain.)
 
-These tests drive the REAL handlers (drain_pending_archives / drain_pending /
-ingest_activity / the /imports/files endpoint) — only the geometric heavy
-lifting (``_update_heat_edges``) is stubbed where the test needs deterministic
-touched-way sets. Pinned contracts:
+Pinned contracts:
 
-  (a) a multi-activity archive drain calls ``recompute_heat_agg_for_ways``
-      ONCE with the deduplicated union of touched ways — never per-activity;
-  (b) the small interactive ``/imports/files`` path KEEPS the per-activity
-      incremental ``_maintain_heat_agg`` (near-live map updates);
-  (c) an archive FAILURE mid-way still recomputes the partial set (the
-      heat_edges rows of already-ingested members are committed — the
-      aggregate must not drift);
-  (d) the drain applies a Postgres ``statement_timeout`` to its DB
+  (0) an archive drain only writes ``activities`` + ``activity_cells`` — no
+      statement ever reaches a matched-pipeline table;
+  (a) the drain applies a Postgres ``statement_timeout`` to its DB
       connections (env ``DRAIN_STATEMENT_TIMEOUT_MS``);
-  (e) ``/readyz`` still answers 200 on a healthy DB after the sync-def +
+  (b) inter-member pacing: adaptive by default, fixed when pinned;
+  (c) ``/readyz`` still answers 200 on a healthy DB after the sync-def +
       short-statement-timeout hardening.
 """
 import io
 import zipfile
 import zlib
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import gpxpy
 import gpxpy.gpx
@@ -33,7 +26,6 @@ import pytest
 from sqlalchemy import text as sa_text
 
 from app.jobs import ingest_pending_archives as drain_mod
-from app.services import ingest as ingest_service
 
 _T0 = datetime(2024, 1, 1, 7, 0, tzinfo=UTC)
 
@@ -124,203 +116,40 @@ def _init_put_complete(client, auth_headers, payload: bytes) -> dict:
     return body
 
 
-def _fake_update_heat_edges(way_sets: list[set[int]]):
-    """A ``_update_heat_edges`` stand-in that feeds deterministic touched-way
-    sets into the ``collect_touched_ways`` collector the REAL ``ingest_activity``
-    threads through (or fails the test if the collector wasn't passed)."""
-    remaining = list(way_sets)
-
-    def fake(user_id, sport, geojson_str, activity_date=None, activity_id=None,
-             collect_touched_ways=None):
-        assert collect_touched_ways is not None, (
-            "drain path must pass collect_touched_ways down to _update_heat_edges"
-        )
-        collect_touched_ways.update(remaining.pop(0) if remaining else set())
-        return 1, set()
-
-    return fake
-
-
-class TestArchiveDrainBatchesAggRecompute:
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_one_recompute_with_deduplicated_union(
-        self, client, auth_headers, _no_engine_mutation
+class TestArchiveDrainIsLight:
+    def test_archive_drain_writes_activities_only(
+        self, client, auth_headers, _no_engine_mutation,
     ):
-        """(a) 2-activity archive → recompute_heat_agg_for_ways called ONCE
-        with the deduplicated, sorted union of both activities' ways."""
-        from app.db.models import PendingArchive
-        from app.db.session import SessionLocal
+        """(0) The REAL whole-archive drain imports both members and its SQL
+        never names a table of the removed matched pipeline."""
+        import re
 
-        body = _init_put_complete(client, auth_headers, _archive_zip())
+        from sqlalchemy import event
+        from sqlalchemy.engine import Engine
 
-        recompute_spy = MagicMock(return_value=(0, 3))
-        maintain_spy = MagicMock()
-        # Overlapping way sets: 202 touched by BOTH activities → must dedup.
-        fake_uhe = _fake_update_heat_edges([{101, 202}, {202, 303}])
-
-        with (
-            patch.object(ingest_service, "_update_heat_edges", fake_uhe),
-            patch.object(ingest_service, "_maintain_heat_agg", maintain_spy),
-            patch("app.jobs.rebuild_heat_agg.recompute_heat_agg_for_ways", recompute_spy),
-        ):
-            summary = drain_mod.drain_pending_archives(
-                limit=5, pace_seconds=0.0, skip_heat_computation=False,
-            )
-
-        assert summary["archives"] == 1, summary
-        assert summary["imported"] == 2, summary
-        assert summary["failed"] == 0, summary
-
-        # ONE batched recompute — not per-activity — with the dedup'd union.
-        assert recompute_spy.call_count == 1, recompute_spy.call_args_list
-        _db_arg, ways_arg = recompute_spy.call_args[0]
-        assert ways_arg == [101, 202, 303]
-        # The per-activity incremental hook never fired during the drain.
-        maintain_spy.assert_not_called()
-        # The drain armed the statement budget.
-        _no_engine_mutation.assert_called()
-
-        db = SessionLocal()
-        try:
-            assert db.get(PendingArchive, body["archive_id"]).status == "done"
-        finally:
-            db.close()
-
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_recompute_chunked_over_500_ways(
-        self, client, auth_headers, _no_engine_mutation
-    ):
-        """A huge union is recomputed in <=500-way chunks (still one batch,
-        never one giant statement)."""
         _init_put_complete(client, auth_headers, _archive_zip())
+        statements: list[str] = []
 
-        recompute_spy = MagicMock(return_value=(0, 1))
-        big = set(range(1, 1101))  # 1100 ways → 3 chunks of <=500
-        fake_uhe = _fake_update_heat_edges([big, set()])
+        def _record(_conn, _cursor, statement, _params, _context, _executemany):
+            statements.append(statement)
 
-        with (
-            patch.object(ingest_service, "_update_heat_edges", fake_uhe),
-            patch("app.jobs.rebuild_heat_agg.recompute_heat_agg_for_ways", recompute_spy),
-        ):
-            drain_mod.drain_pending_archives(
-                limit=5, pace_seconds=0.0, skip_heat_computation=False,
-            )
-
-        assert recompute_spy.call_count == 3
-        seen: list[int] = []
-        for call in recompute_spy.call_args_list:
-            chunk = call[0][1]
-            assert len(chunk) <= drain_mod.HEAT_AGG_WAYS_PER_CHUNK
-            seen.extend(chunk)
-        assert seen == sorted(big)
-
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_archive_failure_midway_still_recomputes_partial_set(
-        self, client, auth_headers, monkeypatch, _no_engine_mutation
-    ):
-        """(c) member 1 ingests, then the drain blows up mid-run → the archive
-        is marked failed AND the ways touched so far are still recomputed (the
-        heat_edges rows exist — the aggregate must not drift).
-
-        Post spatial-ordering (2026-07-20) ingest happens in a SECOND pass, so
-        the explosion is injected via the inter-member pacing sleep (which lives
-        OUTSIDE the per-member error isolation) — it reaches the archive-level
-        handler after the first member has already committed."""
-        from app.db.models import PendingArchive
-        from app.db.session import SessionLocal
-
-        body = _init_put_complete(client, auth_headers, _archive_zip())
-
-        def exploding_sleep(_seconds):
-            raise RuntimeError("drain exploded between members")
-
-        monkeypatch.setattr(drain_mod.time, "sleep", exploding_sleep)
-
-        recompute_spy = MagicMock(return_value=(0, 2))
-        fake_uhe = _fake_update_heat_edges([{7, 8}])
-
-        with (
-            patch.object(ingest_service, "_update_heat_edges", fake_uhe),
-            patch("app.jobs.rebuild_heat_agg.recompute_heat_agg_for_ways", recompute_spy),
-        ):
-            summary = drain_mod.drain_pending_archives(
-                limit=5, pace_seconds=0.01, skip_heat_computation=False,
-            )
-
-        assert summary["archives_failed"] == 1, summary
-        assert recompute_spy.call_count == 1
-        assert recompute_spy.call_args[0][1] == [7, 8]
-
-        db = SessionLocal()
+        event.listen(Engine, "before_cursor_execute", _record)
         try:
-            arch = db.get(PendingArchive, body["archive_id"])
-            assert arch.status == "failed"
-            assert arch.imported == 1
+            summary = drain_mod.drain_pending_archives(limit=5, pace_seconds=0.0)
         finally:
-            db.close()
+            event.remove(Engine, "before_cursor_execute", _record)
 
-
-class TestPerMemberQueueDrainBatchesToo:
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_drain_pending_batches_once_per_run(
-        self, client, auth_headers, _no_engine_mutation
-    ):
-        """The legacy per-member queue drain also defers to ONE end-of-batch
-        recompute."""
-        # Enqueue via the REAL small-zip endpoint (per-member queue, 0059).
-        resp = client.post(
-            "/imports/strava-archive",
-            headers=auth_headers,
-            files={"file": ("export.zip", _archive_zip(), "application/zip")},
-            data={
-                "sport": "road",
-                "consent": "true",
-                "consent_version": "v1",
-                "consent_text": "I consent",
-            },
+        assert summary["archives"] == 1 and summary["archives_failed"] == 0, summary
+        assert summary["imported"] == 2 and summary["failed"] == 0, summary
+        _no_engine_mutation.assert_called_once()
+        matched = re.compile(
+            r"\b(heat_edges\w*|heat_edge_contributors|heat_cells|heat_cell_contributors|"
+            r"osm_road_edges|osm_ways|edge_version_state|trail_edges)\b"
         )
-        assert resp.status_code == 202, resp.text
-
-        recompute_spy = MagicMock(return_value=(0, 2))
-        maintain_spy = MagicMock()
-        fake_uhe = _fake_update_heat_edges([{11, 22}, {22, 33}])
-
-        with (
-            patch.object(ingest_service, "_update_heat_edges", fake_uhe),
-            patch.object(ingest_service, "_maintain_heat_agg", maintain_spy),
-            patch("app.jobs.rebuild_heat_agg.recompute_heat_agg_for_ways", recompute_spy),
-        ):
-            summary = drain_mod.drain_pending(
-                limit=50, pace_seconds=0.0, skip_heat_computation=False,
-            )
-
-        assert summary["imported"] == 2, summary
-        assert recompute_spy.call_count == 1
-        assert recompute_spy.call_args[0][1] == [11, 22, 33]
-        maintain_spy.assert_not_called()
-
-
-class TestInteractivePathKeepsIncremental:
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_imports_files_calls_maintain_heat_agg_per_activity(
-        self, client, auth_headers
-    ):
-        """(b) the small interactive /imports/files path is UNCHANGED: the
-        per-activity incremental ``_maintain_heat_agg`` fires for each
-        ingested activity (near-live map updates)."""
-        maintain_spy = MagicMock()
-        with patch.object(ingest_service, "_maintain_heat_agg", maintain_spy):
-            resp = client.post(
-                "/imports/files",
-                headers=auth_headers,
-                files={"file": ("batch.zip", _archive_zip(), "application/zip")},
-                data={"sport": "road", "contribute_heatmap": "true",
-                      "consent_version": "v-drain-seed", "consent_text": "ODbL ok", "locale": "fr"},
-            )
-        assert resp.status_code == 202, resp.text
-        assert resp.json()["imported"] == 2, resp.json()
-        # One incremental call per activity — the interactive contract.
-        assert maintain_spy.call_count == 2, maintain_spy.call_args_list
+        assert [s for s in statements if matched.search(s)] == []
+        inserted = {m.group(1) for s in statements
+                    if (m := re.match(r"\s*INSERT INTO (\w+)", s, re.I))}
+        assert {"activities", "activity_cells"} <= inserted
 
 
 class TestStatementTimeout:

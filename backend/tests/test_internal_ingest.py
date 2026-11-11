@@ -3,8 +3,7 @@
 * ``/gpx/upload`` and ``/imports/files`` (prod path, TEST_MODE off) call
   ``cloud_tasks.request_community_rebuild`` — the debounced ``artefact-rebuild``
   Cloud Task — and never create a task for ``/internal/ingest/heat``.
-* ``/internal/ingest/heat`` survives ONE release as a 200 no-op that still
-  requests the rebuild, so tasks already queued during the deploy drain cleanly.
+* ``/internal/ingest/heat`` (kept one release as a 200 no-op) is removed.
 """
 import zlib
 from datetime import UTC, datetime, timedelta
@@ -165,9 +164,9 @@ class TestRequestCommunityRebuild:
 
 
 class TestRetiredInternalIngestHeat:
-    def test_still_answers_200_and_requests_a_rebuild(self, client, rebuild_requests):
-        """A heat-compute task queued before the deploy must drain with a 200
-        (TEST_MODE skips OIDC) and still get its trace onto the map."""
+    def test_route_is_gone(self, client, rebuild_requests):
+        """The no-op kept for one release has been removed with the queue's
+        last producer: the path no longer exists and requests nothing."""
         resp = client.post(
             "/internal/ingest/heat",
             json={
@@ -175,16 +174,5 @@ class TestRetiredInternalIngestHeat:
                 "user_id": "00000000-0000-0000-0000-000000000000",
             },
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.json() == {
-            "activity_id": "00000000-0000-0000-0000-000000000000",
-            "status": "ok",
-            "edges_indexed": 0,
-            "cells_indexed": 0,
-        }
-        assert rebuild_requests == ["rebuild"]
-
-    def test_validates_payload(self, client):
-        resp = client.post("/internal/ingest/heat", json={"activity_id": "abc"})
-        # Missing user_id → 422 Unprocessable (Cloud Tasks gives up on 4xx).
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 405), resp.text
+        assert rebuild_requests == []

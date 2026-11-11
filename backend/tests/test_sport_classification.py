@@ -243,7 +243,6 @@ def _drain(filename: str, raw: bytes, csv_sport, fallback_sport=None):
         fallback_sport=fallback_sport,
         contribute_heatmap=True,
         source="manual_upload",
-        skip_heat_computation=True,
     )
 
 

@@ -1,27 +1,18 @@
-"""GOLDEN (raw-mode) — the archive drain in the config PROD ACTUALLY RUNS.
+"""GOLDEN — the archive drain, as prod runs it.
 
-Prod is ``HEATMAP_DISPLAY_SOURCE=raw``: the community map renders precise GPS
-traces straight from ``activities``, so the drain does NO OSM map-matching and
-writes NO ``heat_edges`` (``ingest.py`` gates ``_update_heat_edges`` on
-``not raw_display_enabled()``). The whole contribution loop
-— upload → drain → ``activities`` — is therefore testable with **zero OSM
-substrate**, unlike the legacy matched golden (``test_archive_drain_golden.py``),
-which needs the occitanie PBF in ``osm_road_edges`` and so SKIPs everywhere the
-substrate is absent (CI, and any dev box that hasn't run the ~30-min import).
+The community map renders precise GPS traces straight from ``activities``, so
+the whole contribution loop — upload → drain → ``activities`` — needs no
+substrate and runs in the normal suite AND in CI.
 
-This runs the REAL ``init → PUT → complete → drain_pending_archives`` flow in raw
-mode and pins the drain contract that **PR B (batch ingest) must preserve**:
+This runs the REAL ``init → PUT → complete → drain_pending_archives`` flow and
+pins the drain contract:
 
   * every in-scope member → exactly one ``activities`` row, ``source=manual_upload``,
     the per-member CSV sport;
   * a byte-identical duplicate member is DEDUPED (one row, not two);
   * an out-of-scope (Yoga) member is SKIPPED, never ingested;
-  * NO ``heat_edges`` are written (raw mode) — the matched path stays dark;
+  * each imported activity gets its private ``activity_cells``;
   * throughput (``slow``): a 500-member archive drains at a sane per-member cost.
-
-No ``@pytest.mark.golden`` gate: raw mode needs no substrate, so this runs in the
-normal suite AND in CI — real coverage for the drain PR B changes, which the
-matched golden could never give (always skipped without the PBF).
 """
 import io
 import time
@@ -31,13 +22,6 @@ import gpxpy
 import gpxpy.gpx
 import pytest
 from sqlalchemy import text as sa_text
-
-
-@pytest.fixture(autouse=True)
-def _raw_mode(monkeypatch):
-    """Drive the drain through the raw path prod runs (no OSM, no heat_edges).
-    ``raw_display_enabled()`` reads the env live, so this flips the real gate."""
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
 
 
 @pytest.fixture(autouse=True)
@@ -96,11 +80,6 @@ def _user_id(client, auth_headers) -> str:
     return client.get("/auth/me", headers=auth_headers).json()["user_id"]
 
 
-def _user_id_hash(user_id: str) -> int:
-    import hashlib
-    return int(hashlib.sha256(str(user_id).encode()).hexdigest()[:8], 16)
-
-
 def _upload_and_complete(client, auth_headers, zip_bytes: bytes) -> str:
     resp = client.post(
         "/imports/strava-archive/init",
@@ -136,7 +115,6 @@ def test_raw_drain_writes_activities_dedupes_and_skips_no_osm(client, auth_heade
     from app.jobs.ingest_pending_archives import drain_pending_archives
 
     uid = _user_id(client, auth_headers)
-    uid_hash = _user_id_hash(uid)
 
     # 10 distinct in-scope rides (5 mtb + 5 road), + 1 byte-identical duplicate
     # of mtb_0 (must dedupe), + 1 out-of-scope Yoga (must skip).
@@ -183,11 +161,11 @@ def test_raw_drain_writes_activities_dedupes_and_skips_no_osm(client, auth_heade
         arch = db.get(PendingArchive, archive_id)
         assert arch.status == "done" and arch.imported == 10
 
-        # Raw mode: the matched path stayed dark — no heat_edges for this user.
-        contribs = db.execute(sa_text(
-            "SELECT count(*) FROM heat_edge_contributors WHERE user_id_hash = :h"
-        ), {"h": uid_hash}).scalar()
-        assert contribs == 0, "raw mode must write NO heat_edges (matched path is dead)"
+        # Every imported activity is indexed in the private activity_cells.
+        with_cells = db.execute(sa_text(
+            "SELECT count(DISTINCT activity_id) FROM activity_cells WHERE user_id = :u"
+        ), {"u": uid}).scalar()
+        assert with_cells == 10
     finally:
         db.close()
 

@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 # Force test mode before importing anything
 os.environ["TEST_MODE"] = "true"
-os.environ["DEM_PROVIDER"] = "none"  # no HTTP calls in tests — DEM tests monkeypatch back
-os.environ["OVERPASS_ENABLED"] = "false"  # no HTTP calls in tests — overpass tests monkeypatch back
 os.environ["DFCI_ENABLED"] = "false"  # no Overpass calls for DFCI in tests
 os.environ["DFCI_HERAULT_ENABLED"] = "false"  # no API calls for DFCI Hérault in tests
 os.environ["SKIP_BACKGROUND_LOAD"] = "true"  # skip entire _background_data_load in TestClient lifespan
@@ -38,51 +36,6 @@ def _reset_rate_limiter_and_cookies(client):
     client.cookies.clear()
     yield
     limiter.enabled = False
-
-
-@pytest.fixture
-def matched_mode(monkeypatch):
-    """LEGACY PIPELINE — removed with slice D of the matched-pipeline deletion.
-
-    Raw is the default display source (``raw_display_enabled()``), like prod.
-    A test that still exercises the old matched pipeline (map-matching,
-    ``heat_edges``, live MVT tiles, K-anonymity read models) must select it
-    explicitly through this fixture; it is deleted together with the code it
-    covers. ``raw_display_enabled()`` reads the env on every call, so this
-    switches the real gate. Do NOT use it in a new test.
-    """
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-
-
-# Hérault/Gard corridor the local golden GPX fixtures live in. ONE shared bbox
-# so every OSM-gated golden uses the SAME skip predicate (agent-C audit: today
-# the convention is ad-hoc per-test bbox isolation).
-HERAULT_BBOX = (43.40, 3.30, 44.30, 4.30)  # lat0, lon0, lat1, lon1
-
-
-def osm_present_in_bbox(bbox: tuple[float, float, float, float] = HERAULT_BBOX,
-                        min_edges: int = 1000) -> bool:
-    """True when osm_road_edges has a real OSM import covering ``bbox`` — the
-    single gate for all ``@pytest.mark.golden`` ingestion tests.
-
-    CI has no PBF → returns False → those tests skip. Local runs with the
-    occitanie import → returns True → they run for real. Opens its own
-    short-lived session so it's callable at module-collection time.
-    """
-    from sqlalchemy import text as _sa_text
-
-    from app.db.session import SessionLocal
-    db = SessionLocal()
-    try:
-        n = db.execute(_sa_text(
-            "SELECT count(*) FROM osm_road_edges WHERE geometry && "
-            "ST_MakeEnvelope(:lon0,:lat0,:lon1,:lat1,4326)"
-        ), {"lat0": bbox[0], "lon0": bbox[1], "lat1": bbox[2], "lon1": bbox[3]}).scalar() or 0
-        return n > min_edges
-    except Exception:
-        return False
-    finally:
-        db.close()
 
 
 @pytest.fixture

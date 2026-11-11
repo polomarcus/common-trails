@@ -28,7 +28,6 @@ def _db_available() -> bool:
         db = SessionLocal()
         try:
             db.execute(sa_text("SELECT 1 FROM heatmap_metrics LIMIT 1"))
-            db.execute(sa_text("SELECT 1 FROM heat_edges_agg LIMIT 1"))
             return True
         finally:
             db.close()
@@ -84,9 +83,8 @@ class TestCaptureSnapshot:
             assert persisted is not None
             assert persisted[6] == source
             assert persisted[7] is not None  # captured_at defaulted to now()
-            # agg_ways matches a live count of the small agg table.
-            live_ways = db.execute(sa_text("SELECT COUNT(*) FROM heat_edges_agg")).scalar()
-            assert persisted[1] == live_ways
+            # The matched-era columns are written as 0 until the schema drops them.
+            assert persisted[0] == 0 and persisted[1] == 0
         finally:
             db.execute(sa_text("DELETE FROM heatmap_metrics WHERE source = :s"), {"s": source})
             db.commit()

@@ -65,7 +65,6 @@ def _ingest(user_id: str, lon: float, activity_date) -> str:
             "distance_m": 2000.0, "file_hash": uuid.uuid4().hex, "activity_date": activity_date,
         },
         contribute_heatmap=True,
-        skip_heat_computation=True,
     )
     assert res["status"] == "created", res
     return res["activity_id"]
@@ -185,7 +184,7 @@ def test_drain_member_uses_csv_date_and_flags_undated():
     uid = f"undated-drain-{uuid.uuid4().hex[:8]}"
     try:
         common = {"user_id": uid, "resolved_sport": "road", "contribute_heatmap": True,
-                  "source": "manual_upload", "skip_heat_computation": True}
+                  "source": "manual_upload"}
         o1, aid1, note1 = drain_mod._ingest_member_bytes(
             filename="activities/1.gpx", raw=_untimed_gpx(_LON), fallback_date=_DATE, **common)
         o2, aid2, note2 = drain_mod._ingest_member_bytes(
