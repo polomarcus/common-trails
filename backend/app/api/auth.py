@@ -8,7 +8,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -23,6 +23,7 @@ from app.db.models import MagicLinkToken, User
 from app.db.session import get_db
 from app.rate_limit import _get_real_ip, limiter
 from app.services.email import (
+    notify_admin_new_account,
     render_email_change_email,
     render_magic_link_email,
     send_email,
@@ -222,6 +223,27 @@ def _default_post_login_path(db: Session, user_id: str) -> str:
         db.rollback()
         return "/strava"
     return "/map" if has_traces else "/strava"
+
+
+def _is_first_login(db: Session, user_id: str) -> bool:
+    """True when the link just consumed is this account's FIRST successful
+    login — i.e. a real person confirmed a new address. The account row itself
+    is created at /auth/email/request (any typed address, bots included), so
+    "created" is not the event worth telling the admin about; "confirmed" is.
+    Best-effort: any DB error reads as "not first" (no notification)."""
+    try:
+        consumed = db.execute(
+            sa_text(
+                "SELECT COUNT(*) FROM magic_link_tokens "
+                "WHERE user_id = :uid AND consumed_at IS NOT NULL"
+            ),
+            {"uid": user_id},
+        ).scalar()
+    except Exception:
+        logger.warning("first-login lookup failed user=%s", user_id, exc_info=True)
+        db.rollback()
+        return False
+    return consumed == 1
 
 
 def _safe_redirect(raw: str | None) -> str | None:
@@ -557,6 +579,7 @@ async def verify_magic_link(
     body: MagicLinkVerifyRequest,
     db: Annotated[Session, Depends(get_db)],
     response: Response,
+    background_tasks: BackgroundTasks,
 ) -> MagicLinkVerifyResponse:
     """Passwordless login step 2 — consume the magic link, issue a session.
 
@@ -611,6 +634,10 @@ async def verify_magic_link(
 
     session_token = _create_token(user.id, user.email)
     _set_auth_cookie(response, session_token)
+    if _is_first_login(db, user.id):
+        # Sent AFTER the response (Resend round-trip): the login never waits
+        # for, or fails on, the admin's notification.
+        background_tasks.add_task(notify_admin_new_account, user.email)
     return MagicLinkVerifyResponse(
         user_id=user.id, email=user.email, redirect=_default_post_login_path(db, user.id),
     )
