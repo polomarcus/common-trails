@@ -431,7 +431,7 @@ def render_archive_failed_email(last_error: str | None, locale: str = "fr") -> t
 
 
 def render_resync_reminder_email() -> tuple[str, str]:
-    """Return ``(subject, html)`` for the ~6-monthly "re-sync your data" reminder.
+    """Return ``(subject, html)`` for the yearly "re-sync your data" reminder.
 
     Bilingual in ONE email — French first, English below (Paul's brief) — because
     the reminder is sent to the whole contributor base regardless of UI locale.

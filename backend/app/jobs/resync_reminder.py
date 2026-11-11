@@ -3,19 +3,20 @@
 The community heatmap is fed by MANUAL uploads ONLY — Strava-API activities stay
 personal (§5.4/§5.10). So a contributor's rides SINCE their last export never
 reach the map: they go stale silently. This job emails each contributor, at most
-every ~6 months, to re-export from Strava/Garmin and re-upload.
+once a year (Paul, 2026-11-11: every 6 months was too heavy), to re-export from Strava/Garmin and re-upload.
 
 Selection (all three must hold):
   * the user has ≥1 COMMUNITY-ELIGIBLE activity (the provenance SSOT —
     manual_upload + geometry + contribute_heatmap), i.e. they have contributed;
   * their most RECENT such upload (``MAX(activities.created_at)``) is older than
-    ``--stale-months`` (default 6) — they've gone stale, not a fresh uploader;
+    ``--stale-months`` (default 12) — they've gone stale, not a fresh uploader;
   * they were not reminded within the last ``--stale-months`` months
     (``users.last_resync_reminder_at`` NULL or older) — never double-send.
 
 Synthetic Strava addresses (``…@strava.local``) are excluded — they can't
 receive mail. On a successful send we stamp ``last_resync_reminder_at = now`` so
-a monthly schedule reminds each stale contributor at most every 6 months.
+a monthly schedule reminds each stale contributor at most once a year (the
+monthly run only checks who is due; it is not a monthly email).
 
 Run as a Cloud Run job on a monthly Cloud Scheduler. ``--dry-run`` lists the
 recipients without sending or stamping. Fail-soft per recipient: one bad send
@@ -37,6 +38,8 @@ log = logging.getLogger(__name__)
 # Approximate a month as 30 days — the cadence is deliberately coarse (a reminder
 # is not time-critical), and this keeps the SQL a plain interval arithmetic.
 _DAYS_PER_MONTH = 30
+# At most one reminder per contributor per year.
+DEFAULT_STALE_MONTHS = 12
 
 
 def _select_stale_contributors(db, stale_months: int) -> list[tuple[str, str]]:
@@ -66,7 +69,7 @@ def _select_stale_contributors(db, stale_months: int) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
-def send_resync_reminders(*, stale_months: int = 6, dry_run: bool = False,
+def send_resync_reminders(*, stale_months: int = DEFAULT_STALE_MONTHS, dry_run: bool = False,
                           limit: int | None = None) -> dict:
     """Send the reminder to every stale contributor due one. Returns a summary."""
     db = SessionLocal()
@@ -103,9 +106,9 @@ def send_resync_reminders(*, stale_months: int = 6, dry_run: bool = False,
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description="Send the 6-monthly re-sync reminder email")
-    parser.add_argument("--stale-months", type=int, default=6,
-                        help="Remind contributors with no upload in this many months (default 6).")
+    parser = argparse.ArgumentParser(description="Send the yearly re-sync reminder email")
+    parser.add_argument("--stale-months", type=int, default=DEFAULT_STALE_MONTHS,
+                        help="Remind contributors with no upload in this many months (default 12).")
     parser.add_argument("--limit", type=int, default=None,
                         help="Cap recipients this run (default: no cap).")
     parser.add_argument("--dry-run", action="store_true",
