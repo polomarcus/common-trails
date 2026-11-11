@@ -221,8 +221,10 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
         {/* RIGHT: Language toggle */}
         <LanguageToggle />
 
-        {/* RIGHT: Account / Login */}
-        <Link href={isLoggedIn ? '/strava' : '/'} style={{
+        {/* RIGHT: Account / Login. Signed in → /map (their own heatmap; with no
+            import yet the map shows an empty-state card linking to /strava),
+            never the import page (Paul, 2026-11-11). */}
+        <Link href={isLoggedIn ? '/map' : '/'} data-testid="topnav-account" style={{
           padding: '3px 10px',
           background: '#2d6a4f',
           color: '#fff',

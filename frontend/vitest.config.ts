@@ -11,6 +11,7 @@ export default defineConfig({
     // Only include tests that use vitest API (not legacy tsx-based tests)
     include: [
       'lib/__tests__/map-utils.test.ts',
+      'lib/__tests__/public-script-refs.test.ts',
       'lib/__tests__/map-close-activity-layers.test.tsx',
       'lib/__tests__/gpx-utils.test.ts',
       'lib/__tests__/format.test.ts',
@@ -48,6 +49,7 @@ export default defineConfig({
       'lib/__tests__/notification-toasts-auth.test.tsx',
       'lib/__tests__/selected-activity-sport.test.tsx',
       'lib/__tests__/selected-activity-undated.test.tsx',
+      'lib/__tests__/topnav-account-link.test.tsx',
     ],
     environment: 'node',
     globals: false,
