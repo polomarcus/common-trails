@@ -128,7 +128,8 @@ def _ingest_one(user_id: str, path: Path, sport: str, contribute: bool) -> tuple
     # cascade shape as `imports.py:167-173`, scoped down because the CLI
     # has no FIT or CSV inputs.
     sport_from_gpx = parsed.get("sport_from_gpx")
-    effective_sport = sport_from_gpx if sport_from_gpx in VALID_SPORTS else sport
+    # ``str()``: a generic type comes back as a ``strava_utils.DefaultSport`` marker.
+    effective_sport = str(sport_from_gpx) if sport_from_gpx in VALID_SPORTS else sport
 
     from app.services.provenance import COMMUNITY_SOURCE
     activity_data = {

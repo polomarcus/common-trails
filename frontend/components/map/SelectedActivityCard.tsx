@@ -16,18 +16,25 @@ interface SelectedActivityCardProps {
   /**
    * Called with the NEW sport optimistically (before the PATCH resolves) and
    * again with the OLD sport if it fails (rollback), so the page can keep its
-   * activity list + the "Ma heatmap" source in sync.
+   * activity list + the "Ma heatmap" source in sync. `sportIsDefault` is the
+   * flag to store with it: false once the rider chose, the previous value on
+   * a rollback.
    */
-  onSportChange?: (activityId: string, sport: string) => void;
+  onSportChange?: (activityId: string, sport: string, sportIsDefault: boolean) => void;
+  /** Called once the PATCH succeeded (the default-sport count may have changed). */
+  onSportSaved?: (activityId: string) => void;
 }
 
-function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: SelectedActivityCardProps) {
+function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange, onSportSaved }: SelectedActivityCardProps) {
   const t = useT();
   // Local copy for the optimistic update; re-synced when another activity is
   // selected or the parent pushes a new sport.
   const [sport, setSport] = useState(activity.sport);
   const [saving, setSaving] = useState(false);
   const [sportError, setSportError] = useState(false);
+  // The sport is only the import's generic default ("Ride" → Route): shown as
+  // a hint until the rider picks one. Kept locally so a failed PATCH restores it.
+  const [sportIsDefault, setSportIsDefault] = useState(activity.sport_is_default === true);
   // Guards against a slow PATCH resolving after the user selected another trace.
   const currentIdRef = useRef(activity.id);
   useEffect(() => {
@@ -35,6 +42,9 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
     setSport(activity.sport);
     setSportError(false);
   }, [activity.id, activity.sport]);
+  useEffect(() => {
+    setSportIsDefault(activity.sport_is_default === true);
+  }, [activity.id, activity.sport_is_default]);
 
   const sportColor = SPORT_COLORS[sport] ?? '#2d6a4f';
   // A legacy/aliased stored sport (e.g. "offroad") stays selectable as the
@@ -46,17 +56,23 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
   const handleSportChange = async (next: EditableSport) => {
     const id = activity.id;
     const prev = sport;
-    if (next === prev || saving) return;
+    const wasDefault = sportIsDefault;
+    // Same sport: nothing to do — unless it is only a default, in which case
+    // picking it CONFIRMS it (the PATCH clears the flag server-side).
+    if ((next === prev && !wasDefault) || saving) return;
     setSport(next);
+    setSportIsDefault(false);
     setSportError(false);
     setSaving(true);
-    onSportChange?.(id, next);
+    onSportChange?.(id, next, false);
     try {
       await updateActivitySport(id, next);
+      onSportSaved?.(id);
     } catch {
-      onSportChange?.(id, prev);
+      onSportChange?.(id, prev, wasDefault);
       if (currentIdRef.current === id) {
         setSport(prev);
+        setSportIsDefault(wasDefault);
         setSportError(true);
       }
     } finally {
@@ -91,15 +107,21 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
               <select
                 data-testid="activity-sport-select"
                 aria-label={t('map.activity.sportChange')}
-                value={sport}
+                // A default sport is shown as a question ("Route ?"), not as the
+                // selected option: a native select fires no change when the
+                // current option is re-picked, so "Route" could never be confirmed.
+                value={sportIsDefault ? '' : sport}
                 disabled={saving}
-                onChange={(e) => { void handleSportChange(e.target.value as EditableSport); }}
+                onChange={(e) => { if (e.target.value) void handleSportChange(e.target.value as EditableSport); }}
                 style={{
                   padding: '2px 6px', borderRadius: 10, fontSize: 11, fontWeight: 700,
                   background: sportColor, color: '#fff', border: 'none', cursor: saving ? 'wait' : 'pointer',
                   opacity: saving ? 0.7 : 1,
                 }}
               >
+                {sportIsDefault && (
+                  <option value="" disabled hidden>{t(`sport.${sport}`)} ?</option>
+                )}
                 {sportOptions.map((s) => (
                   <option key={s} value={s} disabled={!(EDITABLE_SPORTS as readonly string[]).includes(s)}>
                     {t(`sport.${s}`)}
@@ -107,6 +129,18 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
                 ))}
               </select>
             </label>
+            {sportIsDefault && (
+              <span
+                data-testid="activity-sport-default"
+                title={t('map.activity.sportDefaultHint')}
+                style={{
+                  padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                  background: '#fcf8e3', color: '#8a6d3b', cursor: 'help',
+                }}
+              >
+                {t('map.activity.sportDefault')}
+              </span>
+            )}
             {activity.provider === 'strava' && activity.provider_activity_id ? (
               <a
                 href={`https://www.strava.com/activities/${activity.provider_activity_id}`}

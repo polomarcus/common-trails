@@ -102,8 +102,10 @@ def _smoothed_elevation_gain(elevations: list[float | None]) -> float:
 # `STRAVA_CSV_TYPE_TO_SPORT` map was deleted to remove the drift that
 # let a "Gravel paradise" Ride classify as road on this path while the
 # CLI classified it as gravel.
+from app.services.strava_utils import GENERIC_ROAD as _GENERIC_ROAD  # noqa: E402
 from app.services.strava_utils import _norm_type  # noqa: E402
-from app.services.strava_utils import classify_sport as _classify_sport  # noqa: E402
+from app.services.strava_utils import classify_sport_marked as _classify_sport  # noqa: E402
+from app.services.strava_utils import is_generic_type as _is_generic_type  # noqa: E402
 from app.services.strava_utils import lookup_activity_type as _lookup_activity_type  # noqa: E402
 
 
@@ -115,6 +117,11 @@ def classify_sport_from_strava_csv_type(
     "Activity Name" for the gravel/mtb name refinement) to our sport
     enum, or None if the type is out-of-scope. Delegates to the SSOT
     `strava_utils.classify_sport`. Case-insensitive. Never raises.
+
+    A generic bike ride the name did not refine ("Ride" → road by default)
+    comes back as the ``strava_utils.GENERIC_ROAD`` marker — equal to
+    ``"road"``, but the ingest cascade reads it to flag the activity
+    ``sport_is_default``.
     """
     return _classify_sport(activity_type, activity_name)
 
@@ -584,11 +591,15 @@ def gpx_track_type_skip_or_sport(track_type: str | None) -> tuple[str | None, bo
         return None, False
     if key in _GPX_SKIP_NORM:
         return None, True
+    # A bare "e-bike ride" / "Vélo" type is road by default only: marked so
+    # the cascade can flag the activity ``sport_is_default``.
+    generic = _is_generic_type(track_type)
     if key in _GPX_TYPE_NORM:
-        return _GPX_TYPE_NORM[key], False
+        mapped = _GPX_TYPE_NORM[key]
+        return (_GENERIC_ROAD if generic and mapped == "road" else mapped), False
     sport, known = _lookup_activity_type(track_type)
     if known:
-        return sport, sport is None
+        return (_GENERIC_ROAD if generic and sport == "road" else sport), sport is None
     return None, False
 
 
