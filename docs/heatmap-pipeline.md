@@ -135,7 +135,13 @@ matview to build, refresh, or pre-warm anymore.
 Migration `0055_drop_heat_edges_display_matview.py` drops the view + its
 indexes.
 
-### Stage 4: MVT Tile Generation
+### Stage 4: ~~MVT Tile Generation~~ — live endpoint REMOVED (Nov 2026)
+
+> The live `GET /heatmap/tiles/{sport}/{z}/{x}/{y}.mvt` endpoint, its LRU cache
+> and the `TILE_GEN_CONCURRENCY` cap were deleted together with
+> `/heatmap/stats`, `/heatmap/export`, `/heatmap/trails`, `/heatmap/display-url`
+> and `/me/unexplored` (zero prod traffic, no caller). The static PMTiles is
+> the only tile source. What follows is kept as design history.
 
 #### Why MVT tiles at all
 The browser can't load millions of heat_edges as GeoJSON — hundreds of MB would freeze MapLibre. **Vector tiles (MVT)** chop the world into 256-px tiles per zoom; the browser fetches only the few tiles in view, each a tiny pre-projected binary MapLibre renders on the GPU. That's what makes "millions of community edges" pannable. Two ways we produce them:
@@ -280,8 +286,8 @@ heat_edges (PostGIS) → GeoJSON export → tippecanoe → heatmap-display.pmtil
 | CDN cost | Range requests (cheap) | Per-file requests (expensive) |
 | Latency | 5-15ms (CDN) | 5-10ms (disk) or 50-800ms (PostGIS) |
 
-### MVT fallback
-The API still serves `GET /heatmap/tiles/{sport}/{z}/{x}/{y}.mvt` as a fallback for:
+### ~~MVT fallback~~ — REMOVED (Nov 2026)
+There is no API tile fallback any more. Historically the API served `GET /heatmap/tiles/{sport}/{z}/{x}/{y}.mvt` as a fallback for:
 - Time filtering (`?days=30`) — PMTiles doesn't support dynamic filters
 - Development (before PMTiles is built)
 
@@ -613,7 +619,10 @@ MapLibre request
 
 No FastAPI, no PostGIS, no backend involved. Pure static file serving.
 
-### MVT API fallback (days filter only)
+### ~~MVT API fallback (days filter only)~~ — REMOVED (Nov 2026)
+
+The endpoint below no longer exists (kept as history).
+
 ```
 GET /heatmap/tiles/{sport}/{z}/{x}/{y}.mvt?days=30
   → FastAPI → PostGIS query → gzip → response

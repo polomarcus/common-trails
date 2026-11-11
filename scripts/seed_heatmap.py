@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Seed the local heatmap with K test users to meet K-anonymity threshold.
+"""Seed the local community heatmap with a few test users.
 
-Each user uploads one or more GPX files with contribute_heatmap=true.
-After K users have contributed overlapping cells, those cells become
-visible in the heatmap API (user_count >= K = 5 by default).
+Each user uploads one or more GPX files with contribute_heatmap=true. The
+traces land in ``activities``; rebuild the static PMTiles (``make pmtiles``)
+to see them on the map.
 
 Usage:
     # Basic — seed with default fixtures (Montpellier VTT, 5 users)
@@ -18,7 +18,7 @@ Usage:
     # Seed multiple GPX fixtures (different sports)
     python3 scripts/seed_heatmap.py --all-fixtures
 
-After running, open http://localhost:3787/map/ and enable the Heatmap layer.
+After running, rebuild the PMTiles and open http://localhost:3787/map/.
 """
 import argparse
 import json
@@ -185,28 +185,18 @@ def main() -> None:
         except Exception as e:
             print(f"ERROR — {e}")
 
-    # Summary
+    # Summary — community totals (the map itself is the static PMTiles: run
+    # `make pmtiles` to rebuild it with the traces just uploaded).
     print()
     try:
-        sports_to_check = list({s for _, s in seeds})
-        total_visible = 0
-        for sport in sports_to_check:
-            resp = _json_request(f"{args.api}/heatmap/stats?sport={sport}&zoom=14")
-            visible = len(resp.get("cells", []))
-            k = resp.get("k_anonymity", 5)
-            total_visible += visible
-            icon = "✓" if visible > 0 else "·"
-            print(f"  {icon} Heatmap [{sport:7s}] — {visible} visible cells (K={k})")
-        print()
-        if total_visible > 0:
-            print(f"✓ {total_visible} heatmap cells seeded successfully!")
-            print(f"  → Open http://localhost:3787/map/ and enable the Heatmap layer")
-        else:
-            print(f"⚠ No cells visible yet.")
-            print(f"  Cells only appear when user_count >= K ({k}).")
-            print(f"  Try increasing --users above {k}.")
+        resp = _json_request(f"{args.api}/heatmap/summary")
+        print(
+            f"  ✓ Community: {resp.get('total_contributors', 0)} contributors, "
+            f"{resp.get('total_activities', 0)} traces, {resp.get('total_km', 0)} km"
+        )
+        print("  → Rebuild the PMTiles (make pmtiles), then open http://localhost:3787/map/")
     except Exception as e:
-        print(f"Could not query heatmap stats: {e}")
+        print(f"Could not query heatmap summary: {e}")
 
 
 if __name__ == "__main__":
