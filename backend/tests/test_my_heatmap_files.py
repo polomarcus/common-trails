@@ -729,7 +729,11 @@ def test_deploy_asserts_private_bucket():
     block = s[s.index("# ── 0b. Assert the PRIVATE") :]
     block = block[: block.index("# ── Deploy one Cloud Run service")]
     assert '--member="serviceAccount:${API_SA}" --role="roles/storage.objectAdmin"' in block
-    assert block.count("--member=") == 1
+    # (The same step also binds the JOBS SA on the rebuild queue and on the
+    # tasks-invoker SA — never on the bucket.)
+    assert block.count("storage buckets add-iam-policy-binding") == 1
+    assert block.count("--member=") == 3
+    assert block.count('--member="serviceAccount:${JOBS_SA}"') == 2
     assert "(allUsers|allAuthenticatedUsers)" in block and "ABORT" in block
     # Wiring: flag OFF by default, bucket + handler on the services.
     assert 'MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED:-false}"' in s
