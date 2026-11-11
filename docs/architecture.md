@@ -16,7 +16,7 @@ Une seule image Docker (`backend/`, export statique Next.js intégré dans
 | Job `build-pmtiles` | 8Gi | Construit et publie la heatmap commune (`backend/app/jobs/build_pmtiles.py`) |
 | Job `ingest-pending-archives` | 8Gi | Draine les archives uploadées (`backend/app/jobs/ingest_pending_archives.py`) |
 | Jobs `import-strava`, `resync-strava`, `strava-subscribe` | 512Mi | Synchro Strava (données **personnelles** uniquement) |
-| Job `resync-reminder` | 512Mi | Email de rappel mensuel aux contributeurs inactifs |
+| Job `resync-reminder` | 512Mi | Email de rappel aux contributeurs inactifs : vérifié chaque mois, au plus un par an et par contributeur |
 | Cloud SQL `common-trails-prod` | db-f1-micro | Postgres 17 + PostGIS |
 | Bucket `common-trails-heatmap-prod` | — | PMTiles, pointeur, raster, GeoJSONL ; servi derrière CDN sur `https://tiles.chemins-communs.fr` |
 | Bucket uploads (`UPLOADS_BUCKET`) | — | Archives `.zip` envoyées par URL signée |

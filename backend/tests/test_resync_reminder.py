@@ -1,4 +1,4 @@
-"""Real execute-and-assert tests for the 6-monthly re-sync reminder job
+"""Real execute-and-assert tests for the yearly re-sync reminder job
 (``app.jobs.resync_reminder``).
 
 Drives the REAL selection query + ``send_resync_reminders`` against the seeded
@@ -192,3 +192,37 @@ def test_reminder_email_is_bilingual():
     assert "Strava" in html and "Garmin" in html   # export links
     assert "chemins-communs.fr/strava" in html     # CTA
     assert "http://" not in html.replace("https://", "")  # no non-https assets
+
+
+def test_default_cadence_is_once_a_year(monkeypatch):
+    """Paul, 2026-11-11: a reminder every 6 months was too heavy — the DEFAULT
+    run (what the scheduled job executes, no flag) reminds at most once a year:
+    a contributor stale for 7 months, or reminded 7 months ago, is left alone."""
+    sent: list[str] = []
+    monkeypatch.setattr(resync_reminder, "send_email",
+                        lambda to, subject, html: sent.append(to) or True)
+    assert resync_reminder.DEFAULT_STALE_MONTHS == 12
+    db = SessionLocal()
+    uids = []
+    try:
+        seven_months = _mk_user(db, f"m7-{uuid.uuid4().hex[:8]}@example.com", reminded_days_ago=None)
+        reminded_7mo = _mk_user(db, f"r7-{uuid.uuid4().hex[:8]}@example.com", reminded_days_ago=210)
+        over_a_year = _mk_user(db, f"y1-{uuid.uuid4().hex[:8]}@example.com", reminded_days_ago=None)
+        uids = [seven_months, reminded_7mo, over_a_year]
+        _mk_activity(db, seven_months, uploaded_days_ago=210)
+        _mk_activity(db, reminded_7mo, uploaded_days_ago=500)
+        _mk_activity(db, over_a_year, uploaded_days_ago=400)
+        db.commit()
+        emails = {
+            u: db.execute(sa_text("SELECT email FROM users WHERE id = :i"), {"i": u}).scalar()
+            for u in uids
+        }
+
+        resync_reminder.send_resync_reminders()  # defaults, like the prod job
+
+        assert emails[over_a_year] in sent
+        assert emails[seven_months] not in sent
+        assert emails[reminded_7mo] not in sent
+    finally:
+        _cleanup(db, uids)
+        db.close()
