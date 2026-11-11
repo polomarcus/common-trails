@@ -212,13 +212,16 @@ export default function StravaPage() {
               border: '1px solid rgba(46,204,113,0.2)',
               borderRadius: 12, padding: '16px', marginBottom: 20,
             }}>
-              <p style={{ color: '#fff', fontSize: 15, fontWeight: 700, margin: '0 0 2px' }}>
-                {t('strava.signupToContribute')}
-              </p>
-              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
-                {t('strava.signupToContributeSub')}
-              </p>
-              <EmailLoginForm variant="dark" />
+              <EmailLoginForm variant="dark" intro={
+                <>
+                  <p style={{ color: '#fff', fontSize: 15, fontWeight: 700, margin: '0 0 2px' }}>
+                    {t('strava.signupToContribute')}
+                  </p>
+                  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
+                    {t('strava.signupToContributeSub')}
+                  </p>
+                </>
+              } />
             </div>
           )}
 
