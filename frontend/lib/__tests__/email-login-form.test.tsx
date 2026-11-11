@@ -25,7 +25,11 @@ describe('EmailLoginForm', () => {
     document.body.appendChild(container);
     await act(async () => {
       root = createRoot(container);
-      root.render(<I18nProvider><EmailLoginForm /></I18nProvider>);
+      root.render(
+        <I18nProvider>
+          <EmailLoginForm intro={<p data-testid="intro">Créer un compte ou se connecter</p>} />
+        </I18nProvider>,
+      );
     });
   });
   afterEach(() => {
@@ -48,6 +52,17 @@ describe('EmailLoginForm', () => {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     });
   }
+
+  // Non-régression (Paul, 2026-11-11) : une fois le lien envoyé, le titre et le
+  // pitch de la carte restaient affichés au-dessus de la confirmation.
+  it('the host intro shows above the form and disappears once the link is sent', async () => {
+    expect(container.querySelector('[data-testid="intro"]')).not.toBeNull();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }));
+    await submit('rider@example.com');
+    expect(container.querySelector('[data-testid="email-login-sent"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="intro"]')).toBeNull();
+    expect(container.textContent).not.toContain('Créer un compte ou se connecter');
+  });
 
   it('sent state shows the address, the 15 min validity and the spam hint', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }));
