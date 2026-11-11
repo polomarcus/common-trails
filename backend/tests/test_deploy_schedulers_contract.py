@@ -46,6 +46,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 _TASKS_INVOKER = "serviceAccount:common-trails-tasks-invoker@common-trails.iam.gserviceaccount.com"
+_JOBS_SA = "serviceAccount:common-trails-jobs@common-trails.iam.gserviceaccount.com"
 _SCHEDULED_JOBS = (
     "common-trails-ingest-pending-archives-prod",
     "common-trails-build-pmtiles-prod",
@@ -74,6 +75,8 @@ def gcloud_calls(tmp_path_factory) -> list[list[str]]:
         "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
         "DEPLOY_YES": "1",
         "STRAVA_WEBHOOK_SUBSCRIPTION_ID": "349136",
+        # As in prod (deploy-gcp.yml): the per-user "Ma heatmap" file is ON.
+        "MY_HEATMAP_FILES_ENABLED": "true",
     }
     proc = subprocess.run(
         ["bash", str(_DEPLOY_SH), "test-tag"],
@@ -125,7 +128,35 @@ def test_no_project_level_or_broader_grant(gcloud_calls):
                 assert _flag(c, "role") == "roles/storage.objectAdmin"
                 assert _flag(c, "member") == "serviceAccount:common-trails-api@common-trails.iam.gserviceaccount.com"
                 continue
+            if c[:3] == ["tasks", "queues", "add-iam-policy-binding"]:
+                # Jobs SA may enqueue on the artefact-rebuild queue ONLY.
+                assert c[3] == "common-trails-artefact-rebuild-prod"
+                assert _flag(c, "role") == "roles/cloudtasks.enqueuer"
+                assert _flag(c, "member") == _JOBS_SA
+                continue
+            if c[:3] == ["iam", "service-accounts", "add-iam-policy-binding"]:
+                # Jobs SA may act as the tasks-invoker SA ONLY (task OIDC token).
+                assert c[3] == _TASKS_INVOKER.removeprefix("serviceAccount:")
+                assert _flag(c, "role") == "roles/iam.serviceAccountUser"
+                assert _flag(c, "member") == _JOBS_SA
+                continue
             assert _flag(c, "role") == "roles/run.invoker"
+
+
+def test_jobs_sa_can_enqueue_my_heatmap_rebuilds(gcloud_calls):
+    """2026-11-11: `backfill --enqueue` (and the drain's post-import rebuild)
+    run as the JOBS SA, which had neither cloudtasks.tasks.create on the queue
+    nor actAs on the tasks-invoker SA → every enqueue 403'd (6/6 failed). The
+    deploy must assert both resource-scoped bindings."""
+    queue = [c for c in gcloud_calls if c[:3] == ["tasks", "queues", "add-iam-policy-binding"]]
+    assert queue and queue[0][3] == "common-trails-artefact-rebuild-prod"
+    assert _flag(queue[0], "member") == _JOBS_SA
+    assert _flag(queue[0], "role") == "roles/cloudtasks.enqueuer"
+    assert _flag(queue[0], "location") == "europe-west1"
+    act_as = [c for c in gcloud_calls if c[:3] == ["iam", "service-accounts", "add-iam-policy-binding"]]
+    assert act_as and act_as[0][3] == _TASKS_INVOKER.removeprefix("serviceAccount:")
+    assert _flag(act_as[0], "member") == _JOBS_SA
+    assert _flag(act_as[0], "role") == "roles/iam.serviceAccountUser"
 
 
 def test_iam_bindings_run_after_jobs_are_updated(gcloud_calls):
