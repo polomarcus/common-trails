@@ -1,9 +1,6 @@
-"""Tests for DFCI import and storage."""
-import os
-
+"""Tests for DFCI storage and display."""
 import pytest
 
-from app.cli.import_dfci import _load_cache, _parse_ways, _save_cache
 from app.services.ingest import (
     get_dfci_edge_count,
     get_dfci_geojson,
@@ -12,114 +9,6 @@ from app.services.ingest import (
 from app.services.routing_profiles import TRAIL_SCORES, compute_trail_score
 
 pytestmark = pytest.mark.slow
-
-
-class TestDFCIParsing:
-    """Test Overpass response parsing."""
-
-    def test_parse_ways_basic(self):
-        data = {
-            "elements": [
-                {"type": "node", "id": 1, "lon": 3.5, "lat": 43.5},
-                {"type": "node", "id": 2, "lon": 3.6, "lat": 43.6},
-                {"type": "node", "id": 3, "lon": 3.7, "lat": 43.7},
-                {
-                    "type": "way",
-                    "id": 100,
-                    "nodes": [1, 2, 3],
-                    "tags": {
-                        "ref:FR:DFCI": "A1",
-                        "highway": "track",
-                        "surface": "gravel",
-                    },
-                },
-            ]
-        }
-        edges = _parse_ways(data)
-        assert len(edges) == 1
-        edge = edges[0]
-        assert edge["trail_type"] == "DFCI"
-        assert edge["trail_network"] is True
-        assert edge["surface"] == "gravel"
-        assert edge["highway"] == "track"
-        assert edge["ref"] == "A1"
-        assert edge["geometry"]["type"] == "LineString"
-        assert len(edge["geometry"]["coordinates"]) == 3
-        assert edge["geometry"]["coordinates"][0] == [3.5, 43.5]
-
-    def test_parse_ways_missing_nodes(self):
-        data = {
-            "elements": [
-                {"type": "node", "id": 1, "lon": 3.5, "lat": 43.5},
-                {
-                    "type": "way",
-                    "id": 100,
-                    "nodes": [1, 999],  # node 999 missing
-                    "tags": {"ref:FR:DFCI": "B2"},
-                },
-            ]
-        }
-        edges = _parse_ways(data)
-        # Way has only 1 resolved node → too few for LineString → skipped
-        assert len(edges) == 0
-
-    def test_parse_ways_default_tags(self):
-        data = {
-            "elements": [
-                {"type": "node", "id": 1, "lon": 3.5, "lat": 43.5},
-                {"type": "node", "id": 2, "lon": 3.6, "lat": 43.6},
-                {
-                    "type": "way",
-                    "id": 100,
-                    "nodes": [1, 2],
-                    "tags": {"ref:FR:DFCI": "C3"},
-                },
-            ]
-        }
-        edges = _parse_ways(data)
-        assert len(edges) == 1
-        assert edges[0]["surface"] == "unknown"
-        assert edges[0]["highway"] == "track"
-
-    def test_parse_ways_ref_fallback(self):
-        """Ways with ref~DFCI but no ref:FR:DFCI should use ref as fallback."""
-        data = {
-            "elements": [
-                {"type": "node", "id": 1, "lon": 3.5, "lat": 43.5},
-                {"type": "node", "id": 2, "lon": 3.6, "lat": 43.6},
-                {
-                    "type": "way",
-                    "id": 100,
-                    "nodes": [1, 2],
-                    "tags": {"ref": "DFCI E1", "highway": "track"},
-                },
-            ]
-        }
-        edges = _parse_ways(data)
-        assert len(edges) == 1
-        assert edges[0]["ref"] == "DFCI E1"
-
-    def test_parse_ways_ref_fr_dfci_preferred(self):
-        """ref:FR:DFCI takes priority over ref when both present."""
-        data = {
-            "elements": [
-                {"type": "node", "id": 1, "lon": 3.5, "lat": 43.5},
-                {"type": "node", "id": 2, "lon": 3.6, "lat": 43.6},
-                {
-                    "type": "way",
-                    "id": 100,
-                    "nodes": [1, 2],
-                    "tags": {"ref:FR:DFCI": "E1", "ref": "DFCI E1"},
-                },
-            ]
-        }
-        edges = _parse_ways(data)
-        assert len(edges) == 1
-        assert edges[0]["ref"] == "E1"
-
-    def test_parse_empty_response(self):
-        assert _parse_ways({}) == []
-        assert _parse_ways({"elements": []}) == []
 
 
 @pytest.fixture(autouse=True)
@@ -209,47 +98,6 @@ class TestDFCIStore:
         assert feat["geometry"]["type"] == "LineString"
         assert feat["properties"]["trail_type"] == "DFCI"
         assert feat["properties"]["ref"] == "D4"
-
-
-class TestDFCICache:
-    """Test local JSON cache for DFCI edges."""
-
-    def test_save_and_load_cache(self, monkeypatch, tmp_path):
-        cache_file = str(tmp_path / "dfci_edges.json")
-        monkeypatch.setattr("app.cli.import_dfci._CACHE_WRITE_FILE", cache_file)
-        monkeypatch.setattr("app.cli.import_dfci._CACHE_READ_PATHS", [cache_file])
-
-        edges = [
-            {
-                "geometry": {"type": "LineString", "coordinates": [[3.5, 43.5], [3.6, 43.6]]},
-                "surface": "gravel", "highway": "track", "ref": "A1",
-                "user_count": 0, "pass_count": 0, "trail_network": True, "trail_type": "DFCI",
-            },
-        ]
-        _save_cache(edges)
-        assert os.path.exists(cache_file)
-
-        loaded = _load_cache()
-        assert loaded is not None
-        assert len(loaded) == 1
-        assert loaded[0]["ref"] == "A1"
-        assert loaded[0]["geometry"]["coordinates"] == [[3.5, 43.5], [3.6, 43.6]]
-
-    def test_load_cache_missing_file(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("app.cli.import_dfci._CACHE_READ_PATHS", [str(tmp_path / "nope.json")])
-        assert _load_cache() is None
-
-    def test_load_cache_corrupt_file(self, monkeypatch, tmp_path):
-        cache_file = tmp_path / "bad.json"
-        cache_file.write_text("NOT JSON")
-        monkeypatch.setattr("app.cli.import_dfci._CACHE_READ_PATHS", [str(cache_file)])
-        assert _load_cache() is None
-
-    def test_load_cache_empty_list(self, monkeypatch, tmp_path):
-        cache_file = tmp_path / "empty.json"
-        cache_file.write_text("[]")
-        monkeypatch.setattr("app.cli.import_dfci._CACHE_READ_PATHS", [str(cache_file)])
-        assert _load_cache() is None
 
 
 class TestDFCIApi:

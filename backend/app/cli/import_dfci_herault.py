@@ -4,7 +4,7 @@ Source: https://www.herault-data.fr/explore/dataset/pistes-dfci-herault/
 Licence Ouverte v2.0 (Etalab) — compatible ODbL.
 
 4 238 DFCI tracks with GeoJSON geometry, ref, and operational status.
-Complements the Overpass-based DFCI import (import_dfci.py) with
+Complements the national IGN DFCI import (import_dfci_ign.py) with
 authoritative departmental data.
 
 These tracks are stored in-memory as trail edges (same format as heat_edges)
