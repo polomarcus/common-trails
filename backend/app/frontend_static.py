@@ -125,7 +125,11 @@ def register_frontend(app: FastAPI, frontend_dir: Path) -> None:
             clean = request.url.path.strip("/")
             if "/" in clean and "text/html" in accept:
                 nested = frontend_dir / f"{clean}.html"
-                if nested.is_file() and _inside(frontend_dir, nested):
+                try:
+                    is_page = nested.is_file() and _inside(frontend_dir, nested)
+                except OSError:  # e.g. a 300-char segment → ENAMETOOLONG
+                    is_page = False
+                if is_page:
                     return html_response(nested)
         return await call_next(request)
 
