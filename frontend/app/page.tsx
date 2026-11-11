@@ -15,7 +15,7 @@ import { fetchCommunityStats, getPmtilesUrl } from '@/lib/cdn-cache';
 import { type CommunityStats, formatStatValue } from '@/lib/community-stats';
 import {
   communityTrailsSourceSpec, communityTrailsHeatLayerSpec, communityTrailsLineLayerSpec,
-  applyCommunityHeatSportFilter, LINE_CRISP_MINZOOM, COMMUNITY_TRAILS_SOURCE,
+  applyCommunityHeatSportFilter, LINE_CRISP_MINZOOM, COMMUNITY_TRAILS_SOURCE, HERO_HEATMAP,
   HEAT_RAMP_STOPS, HEAT_RAMP_CSS,
 } from '@/lib/community-heatmap-layers';
 
@@ -396,10 +396,17 @@ export default function HomePage() {
         // areas, so the continuous line draws the corridors from regional zoom.
         // Inserted below the DFCI layers so the red/white DFCI tracks keep
         // rendering on top, like before.
-        m.addLayer(communityTrailsHeatLayerSpec({ visible: true, minzoom: 6, opacityMult: 0.9 }),
+        // Lightened 2026-11-11 (Paul: "l'accueil est bien chargé"): the /map
+        // readability retune made the lines thicker and more opaque at the
+        // hero's regional zoom, drowning the title and CTAs. The hero keeps its
+        // own, lighter look — see HERO_HEATMAP in community-heatmap-layers.ts.
+        m.addLayer(communityTrailsHeatLayerSpec({ visible: true, minzoom: 6, opacityMult: HERO_HEATMAP.heatOpacity }),
           'dfci-trails-casing');
         m.addLayer(
-          communityTrailsLineLayerSpec({ visible: true, minzoom: LINE_CRISP_MINZOOM, opacityMult: 0.9 }),
+          communityTrailsLineLayerSpec({
+            visible: true, minzoom: LINE_CRISP_MINZOOM,
+            opacityMult: HERO_HEATMAP.lineOpacity, widthMult: HERO_HEATMAP.lineWidth,
+          }),
           'dfci-trails-casing');
         layersReady.current = true;
         setHeatLegendVisible(true);
