@@ -122,6 +122,14 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
     expect(container.querySelector('[data-testid="toggle-my-traces"]')).not.toBeNull();
   });
 
+  it('waymarked trails (GR, GT, VTT) can be switched off without unfolding "Plus de calques"', async () => {
+    // Harness keeps showMoreLayers=false: the toggles must still be there.
+    await act(async () => { root = createRoot(container); root.render(<Harness />); });
+    for (const key of ['hiking', 'cycling', 'mtb']) {
+      expect(checkbox(container, `toggle-waymarked-${key}`)).toBeTruthy();
+    }
+  });
+
   it('logged out after mount: still no "Ma heatmap" toggle, community toggle present', async () => {
     await act(async () => { root = createRoot(container); root.render(<Harness />); });
     expect(container.querySelector('[data-testid="toggle-my-traces"]')).toBeNull();
