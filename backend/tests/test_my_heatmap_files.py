@@ -691,7 +691,11 @@ def test_deploy_asserts_private_bucket():
     assert block.count('--member="serviceAccount:${JOBS_SA}"') == 2
     assert "(allUsers|allAuthenticatedUsers)" in block and "ABORT" in block
     # Wiring: flag OFF by default, bucket + handler on the services.
-    assert 'MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED:-false}"' in s
+    # ON by default (a manual deploy must not switch the live feature off),
+    # one default only, and the env-file reuses that resolved value.
+    assert 'MY_HEATMAP_FILES_ENABLED="${MY_HEATMAP_FILES_ENABLED:-true}"' in s
+    assert 'MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED}"' in s
+    assert "MY_HEATMAP_FILES_ENABLED:-false" not in s
     assert 'MY_HEATMAP_BUCKET: "${MY_HEATMAP_BUCKET_NAME}"' in s
     assert 'INTERNAL_MY_HEATMAP_HANDLER_URL: "${WORKER_RUN_URL}/internal/my-heatmap/rebuild"' in s
 

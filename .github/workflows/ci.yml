@@ -180,6 +180,10 @@ jobs:
         env:
           TEST_MODE: "true"
           JWT_SECRET: "ci-test-secret"
+          # "Ma heatmap" private file ON, stored in a directory inside the
+          # backend container (my-heatmap-private-file.spec.ts). E2E job only.
+          MY_HEATMAP_FILES_ENABLED: "true"
+          MY_HEATMAP_LOCAL_DIR: "/tmp/my-heatmap"
           DOCKER_BUILDKIT: "1"
           COMPOSE_DOCKER_CLI_BUILD: "1"
 
@@ -266,9 +270,25 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright deps
+        # `--with-deps` runs an `apt-get install` of system libraries/fonts. On
+        # 2026-11-11 the runners' apt mirror (azure.archive.ubuntu.com) stopped
+        # resolving for hours and EVERY PR's E2E died here, before a single
+        # test ran. Retry it once, then fall back to the browser alone: the
+        # ubuntu-24.04 image already ships the libraries Chromium needs (the
+        # apt step mostly adds fonts), so the suite still runs.
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          # 2 × 150 s at most: the job has a 20 min budget and the fallback must
+          # still have time to run when apt HANGS instead of failing fast.
+          for attempt in 1 2; do
+            if timeout 150 npx playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::playwright install --with-deps failed (attempt $attempt)"
+            sleep 15
+          done
+          echo "::warning::system deps could not be installed (apt mirror unreachable?) — installing the browser only"
+          npx playwright install chromium
         working-directory: e2e
 
       - name: Run Playwright tests (shard ${{ matrix.shard }}/2)
@@ -294,6 +314,10 @@ jobs:
           # spec stops at upload completion when this is unset, so a local
           # run never drains someone's dev queue).
           E2E_ARCHIVE_DRAIN_CMD: "docker compose -f ../docker-compose.backend.yml exec -T backend python -m app.jobs.ingest_pending_archives --pace 0"
+          # my-heatmap-private-file.spec.ts builds ONE user's private PMTiles
+          # with the real CLI (in TEST_MODE nothing schedules it), then loads
+          # /map. The spec appends `--user-id <id>`. Unset locally → skipped.
+          E2E_MY_HEATMAP_BUILD_CMD: "docker compose -f ../docker-compose.backend.yml exec -T backend python -m app.cli.my_heatmap_files backfill"
 
       - name: Dump backend logs on failure
         if: failure()

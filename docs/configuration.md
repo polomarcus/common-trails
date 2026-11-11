@@ -42,7 +42,7 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `HEATMAP_PUBLIC_BASE_URL` | `https://storage.googleapis.com/<bucket>` | — | `https://tiles.chemins-communs.fr` | Base des URLs publiées (pointeur, raster, emails) |
 | `HEATMAP_DEV_PMTILES_URL` | — | `http://localhost:3787/heatmap-display.pmtiles` | — | Redirection d'export en dev |
 | `HEATMAP_EXPORT_ISOLATED` | activé (sauf sous pytest) | — | — | Export raw dans un process enfant (`build_pmtiles._run_raw_export`) |
-| `MY_HEATMAP_FILES_ENABLED` | `false` | — | `false` (flag) | Fichier PMTiles privé par utilisateur pour « Ma heatmap » ([doc](ma-heatmap-fichier-prive.md)) ; coupé → `/me/activities` |
+| `MY_HEATMAP_FILES_ENABLED` | `false` | — | `true` (défaut du script de déploiement) | Fichier PMTiles privé par utilisateur pour « Ma heatmap » ([doc](ma-heatmap-fichier-prive.md)) ; coupé → `/me/activities` |
 | `MY_HEATMAP_FILES_USERS` | vide (= tous) | — | vide | Liste blanche d'ids (`,` ou `;`) pour un déploiement progressif |
 | `MY_HEATMAP_BUCKET` | vide | — | `common-trails-my-heatmap-prod` | Bucket **privé** des fichiers ; refusé s'il égale un bucket public de heatmap |
 | `MY_HEATMAP_LOCAL_DIR` | vide | à définir pour tester | — | Stockage disque (dev/tests uniquement) |
