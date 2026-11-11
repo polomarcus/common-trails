@@ -285,6 +285,10 @@ class Activity(Base):
     #   "strava_api"    — pulled via Strava OAuth API (NOT community-eligible)
     source = Column(String(50), nullable=True)
     sport = Column(String(50), nullable=False, default="road")
+    # True when ``sport`` is only a GENERIC default (Strava "Ride" with no finer
+    # signal → road): the rider is asked to classify it. Cleared as soon as the
+    # owner sets or confirms the sport (migration 0071).
+    sport_is_default = Column(Boolean, nullable=False, default=False, server_default="false")
     name = Column(String(255), nullable=True)
     # Legacy: GeoJSON LineString stored as TEXT. Kept until all readers
     # migrate to the binary `geometry` column (added in 0036). Writers

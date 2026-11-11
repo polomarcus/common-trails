@@ -26,11 +26,17 @@ max-span / bbox / version) and ``display_geojson`` are pure functions of the
 geometry, never of the sport. The legacy ``heat_cells`` layer has no
 per-activity attribution (same limitation as deletion — see
 ``activity_deletion``). ``/me/stats`` is computed live in SQL (no cache).
+
+``sport_is_default`` (migration 0071): TRUE when the sport is only the generic
+default of an import ("Ride" → road with no finer signal). ANY owner action on
+the sport — a change, or a re-PATCH of the same sport ("yes, it is road") —
+clears it: the rider has now said what the activity is.
 """
 
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity
@@ -67,7 +73,17 @@ def change_activities_sport(
     rows = db.query(Activity).filter(Activity.user_id == user_id, Activity.id.in_(activity_ids)).all()
     found_ids = [a.id for a in rows]
     changed = [a for a in rows if a.sport != sport]
+    # The owner has now stated the sport of every row found — changed or
+    # confirmed: none of them is a "default" any more.
+    confirmed = [a for a in rows if a.sport_is_default and a.sport == sport]
+    for act in rows:
+        if act.sport_is_default:
+            act.sport_is_default = False
+    if confirmed:
+        _refresh_my_heatmap_file(db, user_id)
     if not changed:
+        if confirmed:
+            db.commit()
         return found_ids, []
 
     matched_mode = not raw_display_enabled()
@@ -122,3 +138,107 @@ def change_activities_sport(
             logger.warning("build-pmtiles trigger failed after sport change", exc_info=True)
 
     return found_ids, changed_ids
+
+
+def _refresh_my_heatmap_file(db: Session, user_id: str) -> None:
+    """A flag-only change (sport confirmed, not changed) is invisible to the
+    "Ma heatmap" staleness trigger — ``sport_is_default`` is deliberately NOT
+    a watched column, so a mass backfill never rebuilds every file. But the
+    file's summary carries the flag: bump THIS user's file by hand (same gated
+    statement as the trigger) and schedule its rebuild. Staged on ``db``; the
+    caller commits."""
+    from app.services import my_heatmap_files
+
+    db.execute(
+        sa_text(
+            """
+            INSERT INTO my_heatmap_files (user_id, data_rev, dirty_at)
+            SELECT :u, 1, now()
+             WHERE COALESCE((SELECT enabled FROM my_heatmap_config WHERE id = 1), false)
+            ON CONFLICT (user_id) DO UPDATE
+               SET data_rev = my_heatmap_files.data_rev + 1, dirty_at = now()
+            """
+        ),
+        {"u": user_id},
+    )
+    my_heatmap_files.mark_dirty(db, user_id)
+
+
+# ── Default-sport activities ("Ride" → road with no finer signal) ───────────
+
+_DEFAULT_SPORT_CHUNK = 200
+
+
+def count_default_sport(db: Session, user_id: str) -> int:
+    return int(
+        db.execute(
+            sa_text("SELECT COUNT(*) FROM activities WHERE user_id = :u AND sport_is_default"),
+            {"u": user_id},
+        ).scalar()
+        or 0
+    )
+
+
+def list_default_sport(db: Session, user_id: str, limit: int) -> list[dict]:
+    """The user's default-sport activities, newest first — no geometry read."""
+    rows = db.execute(
+        sa_text(
+            """
+            SELECT id, name, sport, distance_m, activity_date, created_at
+              FROM activities
+             WHERE user_id = :u AND sport_is_default
+             ORDER BY COALESCE(activity_date, created_at) DESC NULLS LAST, id DESC
+             LIMIT :lim
+            """
+        ),
+        {"u": user_id, "lim": limit},
+    ).fetchall()
+    return [
+        {
+            "id": str(r[0]),
+            "name": r[1] or "",
+            "sport": r[2],
+            "distance_m": r[3],
+            "activity_date": (r[4] or r[5]).isoformat() if (r[4] or r[5]) else None,
+        }
+        for r in rows
+    ]
+
+
+def resolve_default_sport(db: Session, user_id: str, sport: str) -> tuple[int, list[str]]:
+    """Apply ``sport`` to EVERY default-sport activity of ``user_id`` and clear
+    their flag. Returns ``(matched, changed_ids)``.
+
+    ``sport`` equal to the current one (in practice ``road``: "ce sont bien des
+    sorties route") is a pure confirmation — one UPDATE of the flag, nothing
+    re-written. A different sport goes through ``change_activities_sport`` in
+    bounded chunks (it loads full rows; a rider can have thousands).
+    """
+    ids = [
+        str(r[0])
+        for r in db.execute(
+            sa_text(
+                "SELECT id FROM activities WHERE user_id = :u AND sport_is_default "
+                "AND sport <> :s ORDER BY id"
+            ),
+            {"u": user_id, "s": sport},
+        ).fetchall()
+    ]
+    matched = 0
+    changed: list[str] = []
+    for i in range(0, len(ids), _DEFAULT_SPORT_CHUNK):
+        found, done = change_activities_sport(db, user_id, ids[i : i + _DEFAULT_SPORT_CHUNK], sport)
+        matched += len(found)
+        changed.extend(done)
+        db.expunge_all()  # bound memory: full rows (geometry) were loaded
+    confirmed = db.execute(
+        sa_text(
+            "UPDATE activities SET sport_is_default = false "
+            "WHERE user_id = :u AND sport_is_default AND sport = :s"
+        ),
+        {"u": user_id, "s": sport},
+    ).rowcount
+    if confirmed:
+        _refresh_my_heatmap_file(db, user_id)
+    db.commit()
+    return matched + int(confirmed or 0), changed

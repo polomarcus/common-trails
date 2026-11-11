@@ -15,13 +15,18 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
-from app.services.activity_sport import change_activities_sport
+from app.services.activity_sport import (
+    change_activities_sport,
+    count_default_sport,
+    list_default_sport,
+    resolve_default_sport,
+)
 from app.services.display_geometry import (  # noqa: F401 — re-exported (tests)
     DISPLAY_GAP_BREAK_M,
     _split_at_gaps,
@@ -50,6 +55,9 @@ def _feature_properties(act: dict) -> dict:
         "id": act["id"],
         "name": act.get("name") or "",
         "sport": act.get("sport", "road"),
+        # Road only by default (generic "Ride"): the UI asks the rider to
+        # classify it. See activities.sport_is_default (0071).
+        "sport_is_default": bool(act.get("sport_is_default", False)),
         "distance_m": act.get("distance_m"),
         "elevation_gain_m": act.get("elevation_gain_m"),
         "activity_date": act.get("activity_date"),
@@ -134,7 +142,7 @@ STREAM_CHUNK_BYTES = 256 * 1024
 # Bump whenever the /me/activities OUTPUT FORMAT changes for unchanged rows
 # (new property, different geometry derivation, …): it is part of the ETag,
 # so a deploy that changes the format invalidates every client's cached copy.
-ME_ACTIVITIES_FORMAT_VERSION = "1"
+ME_ACTIVITIES_FORMAT_VERSION = "2"
 # Belt and braces for a forgotten bump: Cloud Run sets K_REVISION per deploy,
 # so every deploy also invalidates cached copies (one refetch per client).
 _DEPLOY_REVISION = os.environ.get("K_REVISION", "")
@@ -334,6 +342,38 @@ async def me_contribution_status(
     return ContributionStatus(contributed=count > 0, count=count, last_contribution_at=last)
 
 
+class DefaultSportActivity(BaseModel):
+    id: str
+    name: str
+    sport: str
+    distance_m: float | None = None
+    activity_date: str | None = None
+
+
+class DefaultSportStatus(BaseModel):
+    count: int
+    activities: list[DefaultSportActivity]
+
+
+@router.get("/me/activities/default-sport", response_model=DefaultSportStatus)
+def me_activities_default_sport(
+    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = Query(50, ge=0, le=500),
+) -> DefaultSportStatus:
+    """The user's activities whose sport is only a generic default.
+
+    A Strava export's "Ride" says nothing about road / gravel / MTB: such a
+    ride is imported as ``road`` and flagged. ``count`` is the total;
+    ``activities`` the ``limit`` most recent (name, date, distance — no
+    geometry). Declared BEFORE ``/me/activities/{activity_id}`` so
+    ``default-sport`` is never captured as an id.
+    """
+    count = count_default_sport(db, current_user.user_id)
+    items = list_default_sport(db, current_user.user_id, limit) if count and limit else []
+    return DefaultSportStatus(count=count, activities=[DefaultSportActivity(**a) for a in items])
+
+
 @router.get("/me/activities/{activity_id}")
 async def me_activity_by_id(
     activity_id: str,
@@ -382,15 +422,28 @@ class SportUpdate(BaseModel):
 
 
 class BulkSportUpdate(BaseModel):
-    activity_ids: list[str] = Field(min_length=1, max_length=BULK_SPORT_MAX_IDS)
+    """Either an explicit id list (≤500), or ``from_default: true`` = "every
+    activity of mine whose sport is still the generic default" (no id list, no
+    cap — the server resolves the set). Exactly one of the two."""
+
+    activity_ids: list[str] | None = Field(default=None, min_length=1, max_length=BULK_SPORT_MAX_IDS)
+    from_default: bool = False
     sport: EditableSport
+
+    @model_validator(mode="after")
+    def _one_target(self) -> "BulkSportUpdate":
+        if bool(self.activity_ids) == self.from_default:
+            raise ValueError("provide either activity_ids or from_default=true")
+        return self
 
 
 class BulkSportResult(BaseModel):
     sport: str
-    matched: int  # owned activities found among the ids
+    matched: int  # owned activities found among the ids (or default-sport ones)
     updated: int  # of which the sport actually changed
     updated_ids: list[str]
+    # Default-sport activities left for this user after the call.
+    default_sport_count: int = 0
 
 
 def _valid_uuids(ids: list[str]) -> list[str]:
@@ -416,11 +469,25 @@ def bulk_update_me_activities_sport(
     ``matched``) — no existence leak, and one stale id doesn't fail the batch.
     Declared BEFORE ``/me/activities/{activity_id}`` so ``sport`` is never
     captured as an id.
+
+    Every activity targeted gets ``sport_is_default = false`` — also when its
+    sport is unchanged (the rider CONFIRMED it). ``{"from_default": true,
+    "sport": "gravel"}`` re-classifies all the default-sport activities at
+    once; ``{"from_default": true, "sport": "road"}`` confirms them as road.
     """
-    ids = _valid_uuids(list(dict.fromkeys(body.activity_ids)))
-    found, changed = change_activities_sport(db, current_user.user_id, ids, body.sport)
+    user_id = current_user.user_id
+    if body.from_default:
+        matched, changed = resolve_default_sport(db, user_id, body.sport)
+    else:
+        ids = _valid_uuids(list(dict.fromkeys(body.activity_ids or [])))
+        found, changed = change_activities_sport(db, user_id, ids, body.sport)
+        matched = len(found)
     return BulkSportResult(
-        sport=body.sport, matched=len(found), updated=len(changed), updated_ids=changed
+        sport=body.sport,
+        matched=matched,
+        updated=len(changed),
+        updated_ids=changed,
+        default_sport_count=count_default_sport(db, user_id),
     )
 
 

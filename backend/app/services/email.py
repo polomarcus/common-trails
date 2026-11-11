@@ -162,6 +162,7 @@ def render_archive_done_email(
     contribute_heatmap: bool = True,
     skipped_no_sport: int = 0,
     imported_undated: int = 0,
+    imported_default_sport: int = 0,
 ) -> tuple[str, str]:
     """Return ``(subject, html)`` for the "your archive finished draining" email.
 
@@ -195,8 +196,13 @@ def render_archive_done_email(
     the public map (``provenance.community_eligible_conditions``), and the
     email says so on its own line rather than promising them to the
     community heatmap.
+
+    ``imported_default_sport`` (part of ``imported``): bike rides the archive
+    only calls "Ride" — imported as road BY DEFAULT (``sport_is_default``).
+    One line invites the rider to re-classify them from the map.
     """
     map_url = "https://chemins-communs.fr/map"
+    default_sport = max(0, min(imported_default_sport, imported))
     no_sport = max(0, min(skipped_no_sport, skipped))
     other_skipped = skipped - no_sport
     undated = max(0, min(imported_undated, imported))
@@ -229,6 +235,12 @@ def render_archive_done_email(
             lines.append(
                 f"<strong>{undated}</strong> with no date (planned routes?) — "
                 "visible in My heatmap only, not on the public map"
+            )
+        if default_sport:
+            lines.append(
+                f"<strong>{default_sport}</strong> bike ride{'s' if default_sport != 1 else ''} "
+                "filed under Road by default (the archive does not say road, gravel or MTB) — "
+                "you can re-classify them from the map"
             )
         if no_sport:
             lines.append(
@@ -271,6 +283,13 @@ def render_archive_done_email(
                 "(itinéraires planifiés ?) : visible"
                 f"{'s' if undated > 1 else ''} dans Ma heatmap uniquement, "
                 "pas sur la carte publique"
+            )
+        if default_sport:
+            plural = "s" if default_sport > 1 else ""
+            lines.append(
+                f"<strong>{default_sport}</strong> sortie{plural} vélo classée{plural} « Route » par défaut "
+                "(l'archive ne précise pas route, gravel ou VTT) — "
+                "tu peux les reclasser depuis la carte"
             )
         if no_sport:
             lines.append(

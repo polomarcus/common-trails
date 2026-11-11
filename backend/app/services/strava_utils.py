@@ -137,6 +137,38 @@ _STRAVA_SPORT_MAP: dict[str, str | None] = {
 # running — name-keyword refinement is cycling-only.
 _NAME_REFINABLE: frozenset[str] = frozenset({"road"})
 
+# Types that say "a bike ride" and nothing more: they land on "road" only
+# because road is the reading of a generic ride, not because the source said
+# so. An activity whose sport rests on one of these alone is flagged
+# ``sport_is_default`` so the rider can be asked to classify it. "Road Ride" /
+# "Vélo de route" / "Velomobile" DO say road — they are not generic.
+_GENERIC_TYPES: frozenset[str] = frozenset({"ride", "ebikeride", "velo", "veloelectrique", "vae"})
+
+
+class DefaultSport(str):
+    """A sport string that is only a GENERIC DEFAULT (see ``_GENERIC_TYPES``).
+
+    It IS the plain sport everywhere (``DefaultSport("road") == "road"``, valid
+    in ``VALID_SPORTS``, JSON-serialises as ``"road"``), so every existing
+    consumer of a classified sport keeps working unchanged; the subclass only
+    carries "nobody actually said road" through the cascade, where
+    ``resolve_sport_cascade_with_default`` reads it back.
+    """
+
+    __slots__ = ()
+
+
+GENERIC_ROAD = DefaultSport("road")
+
+def is_default_sport(sport: object) -> bool:
+    return isinstance(sport, DefaultSport)
+
+
+def is_generic_type(activity_type: str | None) -> bool:
+    """True when the type is a bare "bike ride" (Strava "Ride", "E-Bike Ride",
+    FR "Vélo"…) carrying no road/gravel/mtb information."""
+    return bool(activity_type) and _norm_type(activity_type) in _GENERIC_TYPES
+
 
 def _norm_type(activity_type: str) -> str:
     """Normalize a Strava Activity Type to the map key form.
@@ -194,8 +226,50 @@ def resolve_sport_cascade(*candidates: str | None) -> str | None:
     if first == "road":
         for later in valid[1:]:
             if later in _SPECIFIC_CYCLING:
-                return later
-    return first
+                return str(later)
+    # ``str()``: never leak a ``DefaultSport`` marker to the storage layer.
+    return str(first)
+
+
+def resolve_sport_cascade_with_default(*candidates: str | None) -> tuple[str | None, bool]:
+    """``resolve_sport_cascade`` + whether the result is only a generic default.
+
+    ``is_default`` is True when the cascade ends on ``road`` and EVERY valid
+    candidate was a generic marker (``DefaultSport``: a bare Strava "Ride", a
+    FIT recorded on the generic Bike profile…). Any plain candidate — a
+    specific type ("Road Ride", FIT ``sub_sport=road``, GPX ``road_cycling``),
+    a name-refined sport, or the sport the user EXPLICITLY picked — makes it a
+    real classification, not a default.
+    """
+    from app.config import VALID_SPORTS
+
+    sport = resolve_sport_cascade(*candidates)
+    if sport != "road":
+        return sport, False
+    valid = [c for c in candidates if c in VALID_SPORTS]
+    return "road", all(is_default_sport(c) for c in valid)
+
+
+def classify_sport_with_default(
+    activity_type: str | None,
+    activity_name: str | None = None,
+) -> tuple[str | None, bool]:
+    """``classify_sport`` + ``is_default``: True when the sport is ``road``
+    ONLY because the type is a generic bike ride (``_GENERIC_TYPES``) that the
+    activity name did not refine. Skipped / unknown types → ``(None, False)``.
+    """
+    sport = classify_sport(activity_type, activity_name)
+    return sport, sport == "road" and is_generic_type(activity_type)
+
+
+def classify_sport_marked(
+    activity_type: str | None,
+    activity_name: str | None = None,
+) -> str | None:
+    """``classify_sport`` whose generic-default result is the ``GENERIC_ROAD``
+    marker — the form fed to ``resolve_sport_cascade_with_default``."""
+    sport, is_default = classify_sport_with_default(activity_type, activity_name)
+    return GENERIC_ROAD if is_default else sport
 
 
 def classify_sport(
