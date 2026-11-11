@@ -9,7 +9,7 @@ from app.services import cloud_tasks
 
 @pytest.fixture
 def _clean_env(monkeypatch):
-    for k in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT", "CLOUD_TASKS_QUEUE",
+    for k in ("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT",
               "CLOUD_TASKS_LOCATION", "CLOUD_TASKS_ARTEFACT_QUEUE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("CLOUD_TASKS_LOCATION", "europe-west1")

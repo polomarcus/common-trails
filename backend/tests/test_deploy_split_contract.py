@@ -70,8 +70,23 @@ pytestmark = pytest.mark.skipif(
 
 # The HEAVY Cloud Tasks handlers that MUST run on the 2Gi worker.
 _HEAVY_HANDLER_ENVS = (
-    "INTERNAL_HEAT_HANDLER_URL",
     "INTERNAL_ARTEFACT_HANDLER_URL",
+    "INTERNAL_MY_HEATMAP_HANDLER_URL",
+)
+
+# Env of the removed matched pipeline: no code reads these any more, so the
+# authoritative service env-file must not carry them (a var that "does
+# nothing" is how the next reader gets misled).
+_RETIRED_ENVS = (
+    "HEATMAP_DISPLAY_SOURCE",
+    "HEATMAP_KEEP_GRID_FALLBACK",
+    "HEATMAP_GRID_FALLBACK_MIN_UC",
+    "OVERPASS_ENABLED",
+    "CLOUD_TASKS_QUEUE",
+    "INTERNAL_HEAT_HANDLER_URL",
+    "OSM_TILE_CACHE_MAX",
+    "OSM_GRID_CACHE_MAX",
+    "OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY",
 )
 
 # The live web .run.app URL is an OIDC + custom-domain anchor: it must not
@@ -124,7 +139,7 @@ def test_worker_url_derived_from_same_project_number(deploy_sh: str):
 
 @pytest.mark.parametrize("env_key", _HEAVY_HANDLER_ENVS)
 def test_heavy_handlers_point_at_worker(deploy_sh: str, env_key: str):
-    """Heat / artefact handler URLs must target WORKER_RUN_URL —
+    """Artefact / my-heatmap handler URLs must target WORKER_RUN_URL —
     Cloud Tasks binds the OIDC audience to this value, so it decides which
     service (and which memory tier) runs the heavy work."""
     value = _env_value(deploy_sh, env_key)
@@ -160,6 +175,14 @@ def test_both_services_deployed_with_correct_memory(deploy_sh: str):
     ), "WORKER service must be deployed at 2Gi"
 
 
+@pytest.mark.parametrize("env_key", _RETIRED_ENVS)
+def test_retired_matched_env_is_not_deployed(deploy_sh: str, env_key: str):
+    """Neither the services' env-file (``KEY: "…"``) nor a job's
+    ``--update-env-vars`` list (``KEY=…``) sets a retired variable."""
+    assert not re.search(rf'^{env_key}:\s*"', deploy_sh, re.MULTILINE), env_key
+    assert not re.search(rf'(?<![A-Z0-9_]){env_key}=', deploy_sh), env_key
+
+
 def test_deploy_sets_every_env_the_handlers_verify(deploy_sh: str):
     """Cross-file pin: every `audience_env=` a /internal handler verifies
     against MUST be set by the deploy script. This is the guard against a
@@ -174,7 +197,7 @@ def test_deploy_sets_every_env_the_handlers_verify(deploy_sh: str):
     # async export pipeline was removed (exports are pre-computed artifacts
     # only), so it no longer verifies any audience env.
     assert _HEAVY_HANDLER_ENVS[0] in verified_envs, (
-        "sanity: heat handler should verify INTERNAL_HEAT_HANDLER_URL"
+        "sanity: artefact handler should verify INTERNAL_ARTEFACT_HANDLER_URL"
     )
 
     deploy_keys = set(re.findall(r'^([A-Z0-9_]+):\s*"', deploy_sh, re.MULTILINE))

@@ -13,25 +13,19 @@ curl -s localhost:8787/healthz # → {"status":"ok"}
 
 Open **http://localhost:3787** (demo account seeded automatically).
 
-### Legacy only: OSM PBF for the matched-pipeline golden tests
-
-Only needed for the **legacy matched** pipeline tests (map-matching to OSM). The current raw-trace heatmap does not use OSM. Without an `osm_road_edges` substrate those goldens **skip** (they don't fail — see Trap #3). The import CLI (`app.cli.import_osm_roads`, `make import-osm-roads-local`) was removed with the matched pipeline: the goldens only run against a dev DB that still holds the substrate, and they leave with the matched ingest code.
-
 ## 2. Running tests — which tier, which command
 
 | Tier | What it covers | Command | Needs |
 |---|---|---|---|
 | **Backend unit / fast** | pure logic, handlers (the `not slow` subset CI runs) | `make test` | clean test DB (auto) |
-| **Backend golden + slow** | legacy matched ingestion → heatmap quality (continuity, per-point `osm_way_id`, `pass_count`, K gate, corpus aggregate) | `make test-golden` | **`make up` + the PBF imported** |
+| **Backend slow** | the `slow`-marked tests (throughput, DFCI store) | `make test-slow` | clean test DB (auto) |
 | **Frontend unit** | Vitest: components + `lib/` modules (jsdom) | `cd frontend && npm run test` | node 22 |
 | **E2E** | real browser: home, /map layers, import, auth, i18n | `cd e2e && npx playwright test` | `make up` + a fresh `frontend` build |
 
-- **`make test`** uses `.env.test` (a clean DB, `TEST_MODE=true`) and runs `-m "not slow"`. The golden tests **skip** here by design (no PBF).
-- **`make test-golden`** runs `-m "golden or slow"` against the **dev** stack with `data/` mounted, and prints skip reasons (`-ra`). **If it reports everything skipped → the PBF isn't imported** (Trap #3), not a pass.
-- Run one file directly against the dev DB + data:
+- **`make test`** uses `.env.test` (a clean DB, `TEST_MODE=true`) and runs `-m "not slow"`.
+- Run one file directly against the dev DB:
   ```bash
-  docker compose run --rm --no-deps -v "$PWD/data:/app/data:ro" \
-      backend pytest -ra tests/test_gpx_golden_corpus_aggregate.py
+  docker compose run --rm --no-deps backend pytest -ra tests/test_archive_import_e2e.py
   ```
 
 ## 3. Rebuild the heatmap + see it
@@ -47,7 +41,7 @@ docker compose exec -T backend cat /tmp/heatmap-display.pmtiles > frontend/publi
 # then hard-reload the browser (Cmd-Shift-R)
 ```
 
-Write the host file **in place** (`cat … >`), never `docker compose cp` — see Trap #2. `make pmtiles` does the same two steps (it still passes `--min-uc ${HEATMAP_K_ANONYMITY}`, which only the legacy matched path reads).
+Write the host file **in place** (`cat … >`), never `docker compose cp` — see Trap #2. `make pmtiles` does the same two steps (it still passes `--min-uc ${HEATMAP_K_ANONYMITY}`, which is only stamped into `stats.json`).
 
 ## 4. Lint before pushing
 
@@ -62,8 +56,6 @@ cd frontend && npx tsc --noEmit                     # TypeScript
 |---|---|---|---|
 | 1 | **Frontend serves a snapshot of `out/`** (not bind-mounted) | code/pmtiles change doesn't show | `docker compose up --build frontend -d` — `restart` keeps the OLD build |
 | 2 | **PMTiles is a static binary** (bind-mounted by inode) | heatmap changes invisible after a data/code change, or after `docker compose cp` | rebuild it (§3) and write the host file in place (`cat … >`); the binary is NOT auto-refreshed |
-| 3 | **Legacy golden tests skip without the PBF** | `make test`/`make test-golden` green but 0 ingestion goldens ran | read the `-ra` skip lines — a skip is **not** a pass (the import CLI is gone, see §1) |
-| 4 | **Stale planner stats right after a bulk reload** (legacy matched) | a normally-160ms tile query hangs for *minutes* after a bulk reload of heat_edges | `ANALYZE heat_edges` yourself |
-| 5 | **PostGIS volume upgrade** | weird PG init errors | `docker compose down -v` to drop the old PG data volume |
+| 3 | **PostGIS volume upgrade** | weird PG init errors | `docker compose down -v` to drop the old PG data volume |
 
 See also: [`development.md`](development.md), [`configuration.md`](configuration.md), [`ci.md`](ci.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md).

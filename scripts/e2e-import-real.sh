@@ -55,8 +55,7 @@ sleep 2  # postgis init restarts the server once
 set +e
 docker run --name "$P-run" --network "$P-net" --memory "$MEM" --memory-swap "$MEM" \
   -e DATABASE_URL=postgresql://postgres:postgres@db:5432/common_trails \
-  -e TEST_MODE=true -e JWT_SECRET=local-import-real -e SKIP_DEM_ENRICHMENT=true \
-  -e DEM_PROVIDER=none -e OVERPASS_ENABLED=false -e HEATMAP_K_ANONYMITY=1 \
+  -e TEST_MODE=true -e JWT_SECRET=local-import-real -e HEATMAP_K_ANONYMITY=1 \
   -e ARCHIVE_INTAKE_DIR=/tmp/intake -e UPLOADS_BUCKET= -e PYTHONDONTWRITEBYTECODE=1 \
   -e REDROP="${REDROP:-0}" \
   -e MAX_ARCHIVE_BYTES="${MAX_ARCHIVE_BYTES:-2147483648}" \

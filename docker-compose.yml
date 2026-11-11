@@ -44,12 +44,7 @@ services:
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-10080}
       HEATMAP_K_ANONYMITY: ${HEATMAP_K_ANONYMITY:-1}
       TEST_MODE: ${TEST_MODE:-true}
-      # Heatmap display source — raw like prod (the legacy `matched` pipeline is
-      # being removed; overridable only until that code is gone).
-      HEATMAP_DISPLAY_SOURCE: ${HEATMAP_DISPLAY_SOURCE:-raw}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
-      SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
-      SKIP_OSM_ENRICHMENT: ${SKIP_OSM_ENRICHMENT:-true}
       ENABLE_GARMIN_INTEGRATION: ${ENABLE_GARMIN_INTEGRATION:-true}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3787}
       # Heatmap export (PRD #391). In prod set HEATMAP_GCS_BUCKET to the
@@ -62,8 +57,6 @@ services:
       GARMIN_CLIENT_ID: ${GARMIN_CLIENT_ID:-}
       GARMIN_CLIENT_SECRET: ${GARMIN_CLIENT_SECRET:-}
       GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-http://localhost:8787/integrations/garmin/callback}
-      DEM_PROVIDER: ${DEM_PROVIDER:-open-meteo}
-      OVERPASS_ENABLED: ${OVERPASS_ENABLED:-false}
       RATELIMIT_ENABLED: ${RATELIMIT_ENABLED:-false}
       SENTRY_DSN: ${SENTRY_DSN:-}
       PYTHONHASHSEED: "0"
