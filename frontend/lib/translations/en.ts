@@ -725,7 +725,6 @@ const en: Translations = {
   'admin.users.col.lastActivity': 'Last activity',
   'admin.users.role.admin': 'Admin',
   'admin.users.role.user': 'Member',
-  'admin.users.skipped': '{n} skipped',
 
   // ── Admin: heatmap monitoring (freshness + evolution) ─────────────────────────
   'admin.mon.freshness': 'Freshness & health',
@@ -741,7 +740,7 @@ const en: Translations = {
   'admin.mon.series.heatEdges': 'Segments (heat_edges)',
   'admin.mon.series.activities': 'Activities',
   'admin.mon.series.networkKm': 'Network (km)',
-  'admin.mon.empty': 'No history yet — the first point appears after the next rebuild or the daily cron.',
+  'admin.mon.empty': 'No history yet — the first point appears after the next heatmap rebuild.',
   'admin.mon.snapshots': '{n} snapshot(s)',
   'admin.mon.latest': 'current: {value}',
 
@@ -865,9 +864,6 @@ const en: Translations = {
   'strava.sportConfirmTitle': 'These traces are:',
   'notif.markRead': 'Mark as read',
   'notif.markAllRead': 'Mark all as read',
-  'notif.activitySynced.title': 'Ride synced',
-  'notif.activitySynced.body': 'Your ride « {name} » is synced to your personal view ✓',
-  'notif.activitySynced.bodyNoName': 'Your ride is synced to your personal view ✓',
 
   // ── MAP i18n consolidation (fix/map-i18n-consolidation) ──────────────────────
   // Toolbar

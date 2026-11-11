@@ -45,7 +45,6 @@ export interface MyHeatmapSummaryEntry {
   undated: boolean;
   provider: string;
   provider_activity_id: string | null;
-  total_photo_count: number;
   bbox: [number, number, number, number];
   center: [number, number];
   start: [number, number];
@@ -149,7 +148,6 @@ export function summaryToActivityItems(summary: MyHeatmapSummary, defaultName: s
     coords: [],
     provider: a.provider ?? 'file',
     provider_activity_id: a.provider_activity_id ?? null,
-    total_photo_count: a.total_photo_count ?? 0,
     undated: a.undated === true,
   }));
 }

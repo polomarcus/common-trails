@@ -139,7 +139,7 @@ describe('bottom-anchored /map panels sit above the banner', () => {
     const activity = {
       id: 'a1', name: 'Sortie', sport: 'road', distance_m: 1000, elevation_gain_m: 10,
       center: [3, 43], bbox: [3, 43, 3.1, 43.1], activity_date: null, created_at: null,
-      coords: [[3, 43], [3.1, 43.1]], provider: 'file', provider_activity_id: null, total_photo_count: 0,
+      coords: [[3, 43], [3.1, 43.1]], provider: 'file', provider_activity_id: null,
     } as unknown as ActivityItem;
     await act(async () => {
       root = createRoot(container);
