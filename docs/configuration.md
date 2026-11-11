@@ -24,18 +24,15 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `RATELIMIT_ENABLED` | `true` | `false` | — → `true` | Rate limiting (slowapi) |
 | `UPLOAD_RATE_LIMIT` | `200/hour` | — | — | Limite `/imports/files` |
 | `SENTRY_DSN` | vide | vide | secret | Observabilité backend |
-| `OVERPASS_ENABLED` | `true` | `false` | `false` | Appels Overpass (hérité matched) |
 
 ## Heatmap
 
 | Variable | Défaut code | Dev (compose) | Prod | Rôle |
 |---|---|---|---|---|
-| `HEATMAP_DISPLAY_SOURCE` | `raw` | `raw` | `raw` | Source de la heatmap (`raw_trace_display.raw_display_enabled`) |
-| `HEATMAP_MIN_USERS` | `1` | — | `1` | Plancher d'utilisateurs distincts par cellule (mode raw) |
+| `HEATMAP_MIN_USERS` | `1` | — | `1` | Plancher d'utilisateurs distincts par cellule |
 | `TRACE_MASK_METERS` | `200` | — | `200` | Extrémités masquées (`trace_privacy.mask_meters`) |
 | `HEATMAP_RAW_BBOX` | vide | — | `-12;34;32;62` | Écarte les traces entièrement hors région (corrompues) |
-| `HEATMAP_K_ANONYMITY` | `2` | `1` | `1` | **Hérité** : plancher du pipeline matched (`make pmtiles`, `/internal/artefacts/rebuild`) |
-| `HEATMAP_KEEP_GRID_FALLBACK`, `HEATMAP_GRID_FALLBACK_MIN_UC` | — | — | `true`, vide | Hérité matched (lignes de désir) |
+| `HEATMAP_K_ANONYMITY` | `2` | `1` | `1` | **Hérité** : ne filtre plus le rendu. Valeur `k_anonymity` annoncée par `/export` et champ `min_uc` de `stats.json` (`make pmtiles`, `/internal/artefacts/rebuild`) |
 | `HEATMAP_RASTER_PYRAMID` | `false` | — | `true` | Publie la pyramide raster XYZ (calque) |
 | `HEATMAP_GCS_BUCKET` | vide (pas d'upload) | vide | `common-trails-heatmap-prod` | Bucket de publication PMTiles / pointeur |
 | `HEATMAP_ARTEFACTS_BUCKET` | vide | — | `common-trails-heatmap-prod` | Upload du rebuild worker ; doit égaler `HEATMAP_GCS_BUCKET` |
@@ -62,8 +59,8 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `BUILD_PMTILES_JOB_NAME` | — | — | `common-trails-build-pmtiles-prod` | Job de build déclenché après import |
 | `BUILD_PMTILES_DEBOUNCE_S` | `600` | — | — | Anti-rafale du déclencheur `/imports/files` (par instance) |
 | `DRAIN_PMTILES_REPING_S` | `1800` | — | — | Intervalle min. entre deux pings de build dans un même drain |
-| `CLOUD_TASKS_LOCATION`, `CLOUD_TASKS_QUEUE`, `CLOUD_TASKS_INVOKER_SA` | vide | — | `europe-west1`, `common-trails-heat-compute-prod`, SA invoker | Vides → calcul en ligne (pas de Cloud Tasks) |
-| `INTERNAL_HEAT_HANDLER_URL`, `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | URL `.run.app` du **worker** | Audience OIDC des tâches lourdes |
+| `CLOUD_TASKS_LOCATION`, `CLOUD_TASKS_INVOKER_SA` | vide | — | `europe-west1`, SA invoker | Vides → rien n'est mis en file (pas de Cloud Tasks) |
+| `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | URL `.run.app` du **worker** | Audience OIDC du rebuild de la carte |
 | `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks |
 
 Les URLs `.run.app` doivent correspondre octet pour octet à l'audience OIDC

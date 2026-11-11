@@ -25,12 +25,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
       TEST_MODE: ${TEST_MODE:-false}
       RATELIMIT_ENABLED: ${RATELIMIT_ENABLED:-false}
-      SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
       HEATMAP_K_ANONYMITY: ${HEATMAP_K_ANONYMITY:-1}
       CI: ${CI:-}
-      # Heatmap display source — raw like prod (the legacy `matched` pipeline is
-      # being removed; overridable only until that code is gone).
-      HEATMAP_DISPLAY_SOURCE: ${HEATMAP_DISPLAY_SOURCE:-raw}
       # Per-user "Ma heatmap" PMTiles file (docs/ma-heatmap-fichier-prive.md).
       # OFF by default — identical to before for a local stack. CI turns it on
       # with a LOCAL directory store so the E2E suite plays the real prod path

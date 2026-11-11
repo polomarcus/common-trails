@@ -22,7 +22,6 @@ from app.api.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
 from app.services.activity_sport import (
-    TooManyDefaultSportActivities,
     change_activities_sport,
     count_default_sport,
     list_default_sport,
@@ -397,8 +396,8 @@ async def me_activity_by_id(
 
 # ── Sport correction (single + bulk) ─────────────────────────────────────────
 # A wrong sport at import pollutes the wrong community layer; the owner can fix
-# it. See app.services.activity_sport for what a change touches (heat partition
-# re-write in matched mode, debounced PMTiles rebuild).
+# it. See app.services.activity_sport for what a change touches (debounced
+# PMTiles rebuild).
 
 # Bulk cap — one request re-classifies at most this many activities. The grain
 # is an explicit id list: activities carry no import-batch id (the archive
@@ -478,16 +477,7 @@ def bulk_update_me_activities_sport(
     """
     user_id = current_user.user_id
     if body.from_default:
-        try:
-            matched, changed = resolve_default_sport(db, user_id, body.sport)
-        except TooManyDefaultSportActivities as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"{exc.count} activities to re-classify at once is too many here: "
-                    f"send them as activity_ids, at most {BULK_SPORT_MAX_IDS} per request"
-                ),
-            ) from exc
+        matched, changed = resolve_default_sport(db, user_id, body.sport)
     else:
         ids = _valid_uuids(list(dict.fromkeys(body.activity_ids or [])))
         found, changed = change_activities_sport(db, user_id, ids, body.sport)
@@ -529,19 +519,12 @@ async def delete_me_activity(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
-    """Delete one of the user's activities + its community heat contributions (GDPR).
-
-    Per-activity heat attribution exists (``heat_edge_contributors`` PK
-    includes ``activity_id`` since migration 0052), so this removes the
-    activity's contributor rows, recounts the touched ``heat_edges``
-    (deleting edges left with zero contributors), and incrementally
-    refreshes ``heat_edges_agg`` — see
+    """Delete one of the user's activities (GDPR) — the row and its private
+    ``activity_cells``; see
     ``app.services.activity_deletion.delete_user_activity``.
 
-    Not done per-deletion (deliberate): no PMTiles/artefact rebuild — the
-    static rendered heatmap reflects the deletion at the next scheduled
-    rebuild. The legacy ``heat_cells`` layer has no per-activity
-    attribution and is only cleaned by a full rebuild / account deletion.
+    The deletion also requests the community PMTiles rebuild, so the trace
+    leaves the public map.
 
     Returns 404 when the activity doesn't exist OR belongs to another
     user — same opacity as the ``/me/activities/{id}`` GET.

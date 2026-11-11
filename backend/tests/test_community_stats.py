@@ -9,15 +9,13 @@ tests drive the REAL functions (``compute_community_stats``,
 
 - ``traces`` == ``COUNT(*)`` activities (exact delta from N inserted rows),
 - ``contributors`` == ``COUNT(DISTINCT user_id)`` activities (exact delta),
-- ``km`` == unique network km from ``heat_edges_agg`` — deduped by
-  ``osm_way_id`` (a way mapped under gravel+mtb counts ONCE) and filtered by
-  ``user_count >= min_uc``,
+- ``km`` == the build's lattice ``network_m_override`` when given, else the
+  community-eligible ridden distance,
 - ``publish_stats_json`` writes ``stats.json`` with the documented keys.
 
-Non-destructive on the shared local DB: synthetic user_ids / osm_way_ids and
-a ``finally`` that deletes exactly what it inserted — no TRUNCATE (concurrent
-sessions rebuild heat_edges; see MEMORY). Needs the PostGIS DB (ST_Length +
-the ``heat_edges_agg`` table from migration 0057); skips cleanly if absent.
+Non-destructive on the shared local DB: synthetic user_ids and a ``finally``
+that deletes exactly what it inserted — no TRUNCATE. Needs the PostGIS DB;
+skips cleanly if absent.
 """
 import json
 import uuid
@@ -33,7 +31,6 @@ def _db_available() -> bool:
     try:
         db = SessionLocal()
         try:
-            db.execute(sa_text("SELECT 1 FROM heat_edges_agg LIMIT 1"))
             db.execute(sa_text("SELECT 1 FROM activities LIMIT 1"))
             return True
         finally:
@@ -44,25 +41,8 @@ def _db_available() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not _db_available(),
-    reason="needs the PostGIS DB with migration 0057 (heat_edges_agg + activities)",
+    reason="needs the PostGIS DB (activities)",
 )
-
-# Synthetic ids well above the real OSM way-id space (~1.5e10) so they can
-# never collide with imported ways.
-_WAY_BASE = 9_999_200_000
-
-
-def _insert_agg(db, way_id: int, sport: str, wkt: str, uc: int) -> None:
-    db.execute(
-        sa_text(
-            """
-            INSERT INTO heat_edges_agg (osm_way_id, sport, geometry, user_count)
-            VALUES (:wid, :sport, ST_GeomFromText(:wkt, 4326), :uc)
-            """
-        ),
-        {"wid": way_id, "sport": sport, "wkt": wkt, "uc": uc},
-    )
-
 
 # A trivial-but-valid LineString so ``geometry_geojson IS NOT NULL`` holds for
 # community-eligible rows (the stats queries never parse it — only test NULLity).
@@ -100,15 +80,6 @@ def _insert_activity(
             "dated": dated,
         },
     )
-
-
-def _length_km(db, wkt: str) -> float:
-    return float(
-        db.execute(
-            sa_text("SELECT ST_Length(ST_GeomFromText(:w, 4326)::geography)"),
-            {"w": wkt},
-        ).scalar()
-    ) / 1000.0
 
 
 def test_traces_and_contributors_exact_delta():
@@ -183,24 +154,12 @@ def test_only_community_eligible_activities_are_counted():
 
 
 def test_km_fallback_excludes_non_community_activities():
-    """NON-REGRESSION: the km ACTIVITIES-DISTANCE fallback (taken when
-    heat_edges_agg is empty) is gated to community-eligible rows too — a big
-    strava_api ride must not inflate 'km de chemins'.
-
-    Skips unless heat_edges_agg is empty at min_uc (otherwise the primary
-    network branch is used and there is no fallback to exercise)."""
+    """NON-REGRESSION: the km ACTIVITIES-DISTANCE fallback (taken without a
+    lattice override) is gated to community-eligible rows too — a big
+    strava_api ride must not inflate 'km de chemins'."""
     db = SessionLocal()
     ids = [str(uuid.uuid4()) for _ in range(2)]
     try:
-        # Only meaningful when the network branch yields 0 (fallback path).
-        primary = float(db.execute(sa_text(
-            "SELECT COALESCE(SUM(ST_Length(geometry::geography)),0) FROM ("
-            "  SELECT DISTINCT ON (osm_way_id) geometry FROM heat_edges_agg"
-            "  WHERE user_count >= 1 ORDER BY osm_way_id) w"
-        )).scalar() or 0.0)
-        if primary > 0:
-            pytest.skip("heat_edges_agg non-empty → primary network km branch, no fallback")
-
         base = compute_community_stats(db, min_uc=1)["km"]
         # A 50 km strava_api ride (excluded) + a 10 km eligible ride (counted).
         _insert_activity(db, ids[0], str(uuid.uuid4()), 50_000.0, source="strava_api")
@@ -215,51 +174,6 @@ def test_km_fallback_excludes_non_community_activities():
         db.execute(
             sa_text("DELETE FROM activities WHERE id IN (:a, :b)"),
             {"a": ids[0], "b": ids[1]},
-        )
-        db.commit()
-        db.close()
-
-
-@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-def test_km_network_dedup_and_min_uc_filter():
-    """km = unique network km: dedupe by osm_way_id, filter user_count>=min_uc."""
-    db = SessionLocal()
-    w_sentinel, w1, w2 = _WAY_BASE + 1, _WAY_BASE + 2, _WAY_BASE + 3
-    wkt0 = "LINESTRING(3.00 43.70, 3.05 43.70)"   # ~4 km
-    wkt1 = "LINESTRING(3.00 43.50, 3.10 43.50)"   # ~8 km
-    wkt2 = "LINESTRING(3.00 43.60, 3.20 43.60)"   # ~16 km
-    try:
-        # Sentinel guarantees heat_edges_agg is non-empty, so both the
-        # baseline and post-seed reads use the NETWORK branch (not the
-        # activities-distance fallback) — the delta is then attributable
-        # purely to the rows we add.
-        _insert_agg(db, w_sentinel, "road", wkt0, uc=5)
-        db.commit()
-
-        base1 = compute_community_stats(db, min_uc=1)["km"]
-        base3 = compute_community_stats(db, min_uc=3)["km"]
-
-        _insert_agg(db, w1, "gravel", wkt1, uc=3)
-        _insert_agg(db, w1, "mtb", wkt1, uc=3)   # SAME way, 2nd sport → must dedupe
-        _insert_agg(db, w2, "gravel", wkt2, uc=1)
-        db.commit()
-
-        a1 = compute_community_stats(db, min_uc=1)["km"]
-        a3 = compute_community_stats(db, min_uc=3)["km"]
-
-        len1 = _length_km(db, wkt1)
-        len2 = _length_km(db, wkt2)
-
-        # min_uc=1: w1 (deduped → counted ONCE despite 2 sport rows) + w2.
-        # Had the dedup failed, this delta would be ~len1+len1+len2 and blow
-        # the ±1 rounding tolerance.
-        assert abs((a1 - base1) - round(len1 + len2)) <= 1
-        # min_uc=3: w1 (uc=3) counted once; w2 (uc=1) filtered out.
-        assert abs((a3 - base3) - round(len1)) <= 1
-    finally:
-        db.execute(
-            sa_text("DELETE FROM heat_edges_agg WHERE osm_way_id IN (:a, :b, :c)"),
-            {"a": w_sentinel, "b": w1, "c": w2},
         )
         db.commit()
         db.close()
@@ -296,50 +210,31 @@ def test_publish_stats_json_writes_expected_keys(tmp_path, monkeypatch):
         db.close()
 
 
-# ── RAW-pivot km: heat_edges_agg is DROPPED in prod → the km "de chemins" must
-#    come from the lattice network estimate (build path) or the ridden-distance
-#    fallback (live endpoint), NEVER from the (gone) agg table. ─────────────────
+# ── km "de chemins": the lattice network estimate (build path) or the
+#    ridden-distance fallback (live endpoint). ─────────────────────────────────
 
-def test_km_raw_mode_uses_lattice_override_not_agg(monkeypatch):
-    """RAW mode: km = the lattice ``network_m_override`` from export_raw_geojson,
-    and heat_edges_agg is NOT summed even when it exists locally.
-
-    Fails on the pre-pivot code (which always summed heat_edges_agg and had no
-    override param); passes on the fix."""
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
+def test_km_uses_lattice_override():
+    """km = the lattice ``network_m_override`` from export_raw_geojson."""
     db = SessionLocal()
-    w = _WAY_BASE + 21
     try:
-        # A fat agg row the OLD code would have summed into km (~72 km). In raw
-        # mode it must be IGNORED in favour of the override.
-        _insert_agg(db, w, "road", "LINESTRING(3.00 43.70, 3.90 43.70)", uc=5)
-        db.commit()
         stats = compute_community_stats(db, min_uc=1, network_m_override=1_234_567.0)
         assert stats["km"] == round(1_234_567 / 1000)  # 1235, from the override
     finally:
-        db.execute(sa_text("DELETE FROM heat_edges_agg WHERE osm_way_id = :w"), {"w": w})
-        db.commit()
         db.close()
 
 
-def test_km_raw_mode_without_override_uses_ridden_distance(monkeypatch):
-    """RAW mode + no override (the live /heatmap/summary path): km drops
-    to community-eligible ridden distance, never the heat_edges_agg sum."""
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
+def test_km_without_override_uses_ridden_distance():
+    """No override (the live /heatmap/summary path): km is the
+    community-eligible ridden distance."""
     db = SessionLocal()
-    w = _WAY_BASE + 22
     a = str(uuid.uuid4())
     try:
-        # ~72 km agg row present — must be ignored in raw mode.
-        _insert_agg(db, w, "road", "LINESTRING(3.00 43.70, 3.90 43.70)", uc=5)
         base = compute_community_stats(db, min_uc=1)["km"]
         _insert_activity(db, a, str(uuid.uuid4()), 10_000.0)  # +10 km eligible ridden
         db.commit()
         after = compute_community_stats(db, min_uc=1)["km"]
-        # Only the ridden distance moves km; the 72 km agg row is not summed.
         assert after - base == 10
     finally:
         db.execute(sa_text("DELETE FROM activities WHERE id = :a"), {"a": a})
-        db.execute(sa_text("DELETE FROM heat_edges_agg WHERE osm_way_id = :w"), {"w": w})
         db.commit()
         db.close()

@@ -80,7 +80,6 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(drain_mod, "_apply_drain_statement_timeout", lambda: None)
     monkeypatch.setattr(drain_mod, "_reap_stuck_archives", lambda db: [])
-    monkeypatch.setattr(drain_mod, "_recompute_heat_agg_batched", lambda w: None)
     monkeypatch.setattr(drain_mod, "_finish_archive", lambda *a, **k: None)
     monkeypatch.setattr(drain_mod, "_ingest_member_bytes", fake_ingest)
     monkeypatch.setattr(drain_mod, "_claim_archives", lambda db, limit: state["archives"][:limit])

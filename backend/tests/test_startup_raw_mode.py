@@ -1,9 +1,8 @@
-"""Non-regression for two raw-mode startup bugs surfaced 2026-08-05 after the
-prod heat_edges DROP:
+"""Non-regression for two startup bugs surfaced 2026-08-05:
 
-B. `load_persisted_activities` ran `SELECT COUNT(*) FROM heat_edges` at startup —
-   the table is DROPPED under the raw pivot → the query raised. Under raw the
-   whole matched-era heat_edges rebuild is dead; the function must skip it.
+B. `load_persisted_activities` ran `SELECT COUNT(*) FROM heat_edges` at startup
+   and raised once the table was dropped. It now only counts activities (and
+   bootstraps the bundled fixture on an EMPTY database).
 C. `_prewarm_caches` did `await heatmap_summary()`, but `heatmap_summary` is a
    SYNC def returning a JSONResponse → `await <JSONResponse>` raised TypeError,
    so the summary cache never pre-warmed. It must run in the threadpool.
@@ -12,20 +11,20 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 
-def test_load_persisted_activities_raw_skips_heat_edges():
-    """B: under raw display, load_persisted_activities returns after the activity
-    count and NEVER queries heat_edges (which is dropped in prod)."""
+def test_load_persisted_activities_only_counts_activities():
+    """B: with activities present, load_persisted_activities returns their count
+    and runs NO other statement (no legacy heat table is ever read)."""
     from app.services import ingest
 
     fake_db = MagicMock()
     fake_db.query.return_value.count.return_value = 7  # act_count = 7 (non-zero)
-    # Any db.execute(...) here would be the heat_edges COUNT → fail loudly.
     fake_db.execute.side_effect = AssertionError(
-        "load_persisted_activities must not query heat_edges under raw mode"
+        "load_persisted_activities must not run any raw SQL"
     )
 
     with patch("app.db.session.SessionLocal", return_value=fake_db), \
-         patch("app.services.raw_trace_display.raw_display_enabled", return_value=True):
+         patch.object(ingest, "_load_fixture_to_db",
+                      side_effect=AssertionError("fixture must not load on a non-empty DB")):
         n = ingest.load_persisted_activities()
 
     assert n == 7

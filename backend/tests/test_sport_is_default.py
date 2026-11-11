@@ -159,7 +159,6 @@ def _drain(user_id, name, csv_sport, raw=None, fallback_sport=None, stats=None):
         fallback_sport=fallback_sport,
         contribute_heatmap=False,
         source="manual_upload",
-        skip_heat_computation=True,
         stats=stats,
     )
 
@@ -318,15 +317,7 @@ def test_bulk_ids_clear_the_flag(client, auth_headers):
     assert (_flag(a), _flag(b), _flag(c)) == (False, False, True)
 
 
-@pytest.fixture(params=["raw", "matched"])
-def display_mode(request, monkeypatch):
-    """Both display modes: raw (prod — one statement) and matched (legacy —
-    per-activity heat re-write through the id-list path)."""
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", request.param)
-    return request.param
-
-
-def test_bulk_from_default_reclassifies_all(client, auth_headers, display_mode):
+def test_bulk_from_default_reclassifies_all(client, auth_headers):
     uid = _user_id(client, auth_headers)
     ids = _seed(uid, 4)
     (other,) = _seed(uid, 1, default=False)  # a road ride the rider already confirmed
@@ -354,7 +345,7 @@ def test_bulk_from_default_reclassifies_all(client, auth_headers, display_mode):
     assert _flag(theirs) is True  # someone else's stays untouched
 
 
-def test_bulk_from_default_confirm_road_only_clears_the_flag(client, auth_headers, display_mode):
+def test_bulk_from_default_confirm_road_only_clears_the_flag(client, auth_headers):
     uid = _user_id(client, auth_headers)
     ids = _seed(uid, 3)
     r = client.patch(
@@ -430,7 +421,6 @@ def test_bulk_from_default_large_set_is_one_statement_in_raw_mode(
 
     from app.services.run_jobs import reset_build_pmtiles_debounce
 
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
     monkeypatch.setenv("BUILD_PMTILES_DEBOUNCE_S", "0")
     reset_build_pmtiles_debounce()
     _seed_many(many_user, 1200)
@@ -478,30 +468,6 @@ def test_bulk_from_default_large_set_is_one_statement_in_raw_mode(
     finally:
         db.close()
     assert _status(client, auth_headers)["count"] == 0
-
-
-def test_bulk_from_default_too_many_in_matched_mode_is_refused_untouched(
-    client, auth_headers, many_user, monkeypatch
-):
-    """Matched mode re-writes heat per activity: beyond the id-list ceiling the
-    call is refused BEFORE anything is written — never a half-done set."""
-    from app.services.activity_sport import DEFAULT_SPORT_MATCHED_MAX
-
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-    _seed_many(many_user, DEFAULT_SPORT_MATCHED_MAX + 1)
-    r = client.patch(
-        "/me/activities/sport", headers=auth_headers, json={"from_default": True, "sport": "gravel"}
-    )
-    assert r.status_code == 422, r.text
-    assert "activity_ids" in r.json()["detail"]
-    assert _user_rows(many_user) == [("road", True)]
-    # Confirming them as road changes no sport → no heat re-write → allowed.
-    r = client.patch(
-        "/me/activities/sport", headers=auth_headers, json={"from_default": True, "sport": "road"}
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["default_sport_count"] == 0
-    assert _user_rows(many_user) == [("road", False)]
 
 
 @pytest.mark.parametrize(

@@ -1,14 +1,9 @@
 """Tests for DELETE /me/activities/{id} — GDPR per-activity deletion.
 
-Drives the REAL endpoint via TestClient (no inline mirrors). Heat-layer
-assertions hit the real DB: per-activity attribution exists since
-migration 0052 (heat_edge_contributors PK includes activity_id), so a
-deletion must remove the activity's contributor rows, recount the
-touched heat_edges, and drop edges left with zero contributors — while
-leaving other users' contributions intact.
-
-Uses per-run unique coordinates (grid-fallback territory, far from any
-OSM import) so assertions are deterministic on a shared local DB.
+Drives the REAL endpoint via TestClient (no inline mirrors) and checks the
+real DB: a deletion removes the activity row AND its private ``activity_cells``
+(FK cascade), leaves other users' activities intact, and requests the
+community map rebuild so the trace leaves the public PMTiles.
 """
 import uuid
 import zlib
@@ -16,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 
 import gpxpy
 import gpxpy.gpx
-import pytest
 from sqlalchemy import text as sa_text
 
 from app.db.session import SessionLocal
@@ -47,8 +41,8 @@ def _make_gpx_bytes(name: str, lon0: float, lat0: float, n_points: int = 8) -> b
 
 
 def _unique_start() -> tuple[float, float]:
-    """Per-run unique (lon, lat) in the Atlantic — no OSM coverage, so the
-    heat edges are grid-fallback and owned exclusively by this test run."""
+    """Per-run unique (lon, lat) in the Atlantic, so nothing else in a shared
+    local DB collides with this run's activities."""
     jitter = (uuid.uuid4().int % 100_000) * 1e-5  # 0 .. 1.0 degree
     return (-30.0 + jitter, 20.0 + jitter / 2)
 
@@ -57,9 +51,9 @@ def _upload(client, headers, name: str, lon0: float, lat0: float,
             contribute: bool = True) -> str:
     gpx_bytes = _make_gpx_bytes(name, lon0, lat0)
     data = {"sport": "gravel", "contribute_heatmap": "true" if contribute else "false"}
-    # Contributing to the community layer now REQUIRES a consent row
-    # (no-consent ⇒ ingested personal, no heat) — send it so these
-    # deletion tests still seed real heat_edge_contributors.
+    # Contributing to the community layer REQUIRES a consent row
+    # (no-consent ⇒ ingested personal) — send it so these deletion tests
+    # delete real community-eligible activities.
     if contribute:
         data.update({"consent_version": "v-del-seed", "consent_text": "ODbL ok", "locale": "fr"})
     resp = client.post(
@@ -83,26 +77,20 @@ def _register_second_user(client) -> dict[str, str]:
     return {"Authorization": f"Bearer {reg.json()['access_token']}"}
 
 
-def _contrib_count(db, activity_id: str) -> int:
-    return db.execute(
-        sa_text("SELECT COUNT(*) FROM heat_edge_contributors WHERE activity_id = :a"),
-        {"a": activity_id},
-    ).scalar() or 0
-
-
-def _contrib_edge_keys(db, activity_id: str) -> list[str]:
-    return [r[0] for r in db.execute(
-        sa_text("SELECT edge_key FROM heat_edge_contributors WHERE activity_id = :a"),
-        {"a": activity_id},
-    )]
-
-
-def _edges(db, edge_keys: list[str]) -> list[tuple[str, int, int]]:
-    return [tuple(r) for r in db.execute(
-        sa_text("SELECT edge_key, user_count, pass_count FROM heat_edges "
-                "WHERE edge_key = ANY(:keys)"),
-        {"keys": edge_keys},
-    )]
+def _row_counts(activity_id: str) -> tuple[int, int]:
+    """``(activities rows, activity_cells rows)`` for one activity id."""
+    db = SessionLocal()
+    try:
+        acts = db.execute(
+            sa_text("SELECT COUNT(*) FROM activities WHERE id = :a"), {"a": activity_id},
+        ).scalar() or 0
+        cells = db.execute(
+            sa_text("SELECT COUNT(*) FROM activity_cells WHERE activity_id = :a"),
+            {"a": activity_id},
+        ).scalar() or 0
+        return int(acts), int(cells)
+    finally:
+        db.close()
 
 
 class TestDeleteActivity:
@@ -118,10 +106,11 @@ class TestDeleteActivity:
         resp = client.delete("/me/activities/not-a-uuid", headers=auth_headers)
         assert resp.status_code == 404
 
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_404_when_not_owner_and_row_survives(self, client, auth_headers):
         lon0, lat0 = _unique_start()
         activity_id = _upload(client, auth_headers, "Owner Only Del", lon0, lat0)
+        before = _row_counts(activity_id)
+        assert before[0] == 1 and before[1] > 0
 
         headers2 = _register_second_user(client)
         resp = client.delete(f"/me/activities/{activity_id}", headers=headers2)
@@ -130,37 +119,20 @@ class TestDeleteActivity:
         # The owner still sees it — nothing was deleted.
         still = client.get(f"/me/activities/{activity_id}", headers=auth_headers)
         assert still.status_code == 200
-        db = SessionLocal()
-        try:
-            assert _contrib_count(db, activity_id) > 0
-        finally:
-            db.close()
+        assert _row_counts(activity_id) == before
 
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_delete_own_removes_row_and_heat_contributions(self, client, auth_headers):
+    def test_delete_own_removes_row_and_private_cells(self, client, auth_headers):
         lon0, lat0 = _unique_start()
         activity_id = _upload(client, auth_headers, "Delete Me", lon0, lat0)
-
-        db = SessionLocal()
-        try:
-            edge_keys = _contrib_edge_keys(db, activity_id)
-            assert edge_keys, "upload with contribute_heatmap=true wrote no contributors"
-            assert len(_edges(db, edge_keys)) == len(set(edge_keys))
-        finally:
-            db.close()
+        acts, cells = _row_counts(activity_id)
+        assert acts == 1 and cells > 0, "upload must index private activity_cells"
 
         resp = client.delete(f"/me/activities/{activity_id}", headers=auth_headers)
         assert resp.status_code == 204
 
         assert client.get(f"/me/activities/{activity_id}", headers=auth_headers).status_code == 404
-
-        db = SessionLocal()
-        try:
-            assert _contrib_count(db, activity_id) == 0
-            # Sole contributor on unique coords → every touched edge is gone.
-            assert _edges(db, edge_keys) == []
-        finally:
-            db.close()
+        # Row gone AND its activity_cells cascaded with it.
+        assert _row_counts(activity_id) == (0, 0)
 
     def test_second_delete_is_404(self, client, auth_headers):
         lon0, lat0 = _unique_start()
@@ -198,40 +170,24 @@ class TestDeleteActivity:
         assert resp.status_code == 404
         fake.assert_not_called()
 
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_delete_preserves_other_users_contributions(self, client, auth_headers):
-        """User A + B ride the same (unique) track; deleting A's activity
-        must keep the shared edges alive with B's counts recounted."""
+        """User A + B ride the same (unique) track; deleting A's activity must
+        leave B's activity — and B's private cells — untouched."""
         lon0, lat0 = _unique_start()
         a_id = _upload(client, auth_headers, "Shared Track A", lon0, lat0)
 
         headers2 = _register_second_user(client)
         b_id = _upload(client, headers2, "Shared Track B", lon0, lat0)
-
-        db = SessionLocal()
-        try:
-            a_keys = set(_contrib_edge_keys(db, a_id))
-            b_keys = set(_contrib_edge_keys(db, b_id))
-            shared = sorted(a_keys & b_keys)
-            assert shared, "identical tracks produced no shared edge_keys"
-            for _, uc, pc in _edges(db, shared):
-                assert uc == 2 and pc == 2
-        finally:
-            db.close()
+        assert a_id != b_id
+        b_before = _row_counts(b_id)
+        assert b_before[0] == 1 and b_before[1] > 0
 
         resp = client.delete(f"/me/activities/{a_id}", headers=auth_headers)
         assert resp.status_code == 204
 
-        db = SessionLocal()
-        try:
-            assert _contrib_count(db, a_id) == 0
-            assert _contrib_count(db, b_id) == len(b_keys)
-            rows = _edges(db, shared)
-            assert len(rows) == len(shared), "shared edges must survive B's contribution"
-            for _, uc, pc in rows:
-                assert uc == 1 and pc == 1
-        finally:
-            db.close()
+        assert _row_counts(a_id) == (0, 0)
+        assert _row_counts(b_id) == b_before
+        assert client.get(f"/me/activities/{b_id}", headers=headers2).status_code == 200
 
     def test_delete_without_heat_contribution(self, client, auth_headers):
         lon0, lat0 = _unique_start()

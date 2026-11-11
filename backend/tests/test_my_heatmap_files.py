@@ -284,15 +284,14 @@ def test_import_gpx_upload_schedules(mhf_env, client, auth_headers, users):
     assert _rev(uid) >= 1
 
 
-def test_import_single_and_bulk_ingest_schedule(mhf_env, users):
-    """Strava API / webhook (``ingest_activity``) and archive / API batch
-    (``ingest_activities_bulk``) ingest paths."""
-    from app.services.ingest import ingest_activities_bulk, ingest_activity
+def test_import_single_ingest_schedules(mhf_env, users):
+    """The ``ingest_activity`` path (uploads, archive drain)."""
+    from app.services.ingest import ingest_activity
 
     db = SessionLocal()
     try:
-        u1, u2 = _mk_user(db), _mk_user(db)
-        users += [u1, u2]
+        u1 = _mk_user(db)
+        users.append(u1)
         db.commit()
     finally:
         db.close()
@@ -309,29 +308,9 @@ def test_import_single_and_bulk_ingest_schedule(mhf_env, users):
             "activity_date": _DATE,
         },
         contribute_heatmap=False,
-        skip_heat_computation=True,
     )
     assert res["status"] == "created"
     assert _scheduled(mhf_env, u1)
-
-    out = ingest_activities_bulk(
-        u2,
-        [
-            {
-                "provider": "strava",
-                "provider_activity_id": f"mhf-b-{i}-{uuid.uuid4().hex[:6]}",
-                "sport": "gravel",
-                "geometry_geojson": _line(*_start()),
-                "distance_m": 900,
-                "activity_date": _DATE + timedelta(hours=i),
-            }
-            for i in range(3)
-        ],
-        contribute_heatmap=False,
-        source="strava_api",
-    )
-    assert out.get("created", out.get("ingested", 0)) or _rev(u2) >= 1
-    assert _scheduled(mhf_env, u2)
 
 
 def test_duplicate_promotion_schedules(mhf_env, users):
@@ -351,7 +330,7 @@ def test_duplicate_promotion_schedules(mhf_env, users):
         {"provider": "strava", "provider_activity_id": f"mhf-p-{uuid.uuid4().hex[:8]}",
          "source": "strava_api", "sport": "mtb", "geometry_geojson": geo,
          "distance_m": 5000, "activity_date": _DATE},
-        contribute_heatmap=False, skip_heat_computation=True,
+        contribute_heatmap=False,
     )
     assert first["status"] == "created"
     mhf_env.clear()
@@ -362,7 +341,7 @@ def test_duplicate_promotion_schedules(mhf_env, users):
          "sport": "mtb", "geometry_geojson": _line(lon, lat, n=41, step=0.0005),
          "distance_m": 5020, "file_hash": f"mhf-{uuid.uuid4().hex}",
          "activity_date": _DATE + timedelta(seconds=30)},
-        contribute_heatmap=False, skip_heat_computation=True,
+        contribute_heatmap=False,
     )
     assert second["status"] == "promoted", second
     assert _scheduled(mhf_env, uid)

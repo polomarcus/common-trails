@@ -32,9 +32,8 @@
 #   JOB ENV IS NOW ASSERTED TOO (audit gap #6, 2026-07-20). The env-vars-file
 #   above only reaches the two SERVICES; a Cloud Run JOB runs the same api image
 #   but carries its OWN env, set out-of-band, which DRIFTS. Tonight the drain job
-#   common-trails-ingest-pending-archives-prod ran with OVERPASS_ENABLED
-#   ABSENT→true (live Overpass calls to foreign tiles = massive slowdown) while
-#   the services correctly had OVERPASS_ENABLED=false; earlier a hand-typed
+#   common-trails-ingest-pending-archives-prod ran with a load-bearing var
+#   ABSENT while the services correctly carried it; earlier a hand-typed
 #   `--set-env-vars` had wiped its UPLOADS_BUCKET/BUILD_PMTILES_JOB_NAME. So the
 #   JOBS loop below now DECLARATIVELY asserts the load-bearing env on the jobs
 #   that need it via `--update-env-vars` (NEVER `--set-env-vars` — that replaces
@@ -44,7 +43,7 @@
 #   MICROSERVICE SPLIT (2026-07-13): this script now deploys TWO Cloud Run
 #   services from the SAME image with the SAME authoritative env — a light
 #   512Mi public WEB and a scale-to-zero 2Gi WORKER that owns the heavy Cloud
-#   Tasks /internal handlers (heat compute, PMTiles rebuild).
+#   Tasks /internal handlers (PMTiles rebuild, per-user heatmap files).
 #   See the "MICROSERVICE SPLIT" topology block below + docs/prod-deploy.md §8.
 #
 # USAGE
@@ -75,8 +74,8 @@ ENV="prod"
 #     so the domain mapping + its .run.app URL are UNCHANGED.
 #
 #   • WORKER (common-trails-worker-prod) — scale-to-zero, 2Gi. Owns the HEAVY
-#     Cloud Tasks handlers: POST /internal/ingest/heat, /internal/artefacts/
-#     rebuild (PMTiles build). Cloud Tasks
+#     Cloud Tasks handlers: POST /internal/artefacts/rebuild (PMTiles build),
+#     /internal/my-heatmap/rebuild. Cloud Tasks
 #     POSTs to the WORKER's URL (INTERNAL_*_HANDLER_URL below), so the 2Gi
 #     memory + heavy CPU live off the user-facing service.
 #
@@ -114,8 +113,7 @@ PUBLIC_URL="https://chemins-communs.fr"
 # url is the SAME pattern for the new service name; it resolves the moment the
 # worker service exists (first deploy). ⚠️ If Cloud Run ever reassigns EITHER
 # url, re-capture it from `describe` (docs/prod-deploy.md §1) AND re-issue the
-# OIDC-token creators (the heat/artefact Cloud Tasks queues target the WORKER
-# url).
+# OIDC-token creators (the artefact Cloud Tasks queue targets the WORKER url).
 PROJECT_NUMBER="301616827398"
 RUN_URL="https://${WEB_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"           # WEB (public)
 WORKER_RUN_URL="https://${WORKER_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app" # WORKER (heavy /internal/*)
@@ -162,7 +160,7 @@ IMAGE="${REPO}/api:${IMAGE_TAG}"
 # listed EXPLICITLY here. Add new jobs to this list the moment they're created.
 # ── MATCHED-ERA JOBS REMOVED (raw-trace pivot, 2026-07-29) ───────────────────
 # The community heatmap is now built from RAW GPS traces read straight out of
-# `activities` (HEATMAP_DISPLAY_SOURCE=raw); the OSM substrate (osm_road_edges /
+# `activities`; the OSM substrate (osm_road_edges /
 # osm_ways / heat_edges_agg) was DROPPED. Seven jobs that ONLY ever operated on
 # that now-dead substrate were removed from this sync list — they are permanently
 # defunct and re-syncing their images every deploy was pure waste:
@@ -194,30 +192,21 @@ trap 'rm -f "$ENV_FILE"' EXIT
 # +INGEST_ARCHIVES_JOB_NAME for the event-driven archive-drain trigger;
 # +BUILD_PMTILES_JOB_NAME for the event-driven post-drain heatmap rebuild;
 # +MAX_ARCHIVE_BYTES to admit real GB-scale Strava archives;
-# +HEATMAP_KEEP_GRID_FALLBACK +HEATMAP_GRID_FALLBACK_MIN_UC for the
-# desire-lines display policy, 2026-07-20.) Do not
+# −HEATMAP_DISPLAY_SOURCE −HEATMAP_KEEP_GRID_FALLBACK −HEATMAP_GRID_FALLBACK_MIN_UC
+# −OVERPASS_ENABLED −CLOUD_TASKS_QUEUE −INTERNAL_HEAT_HANDLER_URL when the
+# matched pipeline's code was deleted: nothing reads them any more.) Do not
 # add/remove without re-verifying against live.
 cat >"$ENV_FILE" <<YAML
 TEST_MODE: "false"
-# K-anonymity: single-user beta → ~99.9% of edges are user_count=1, so K=2 would
-# blank the public heatmap. Live is 1. Flip to 2 once there are >=2 contributors
-# (CLAUDE.md prod doctrine). See feedback_min_uc_1_for_beta.
+# Legacy K floor. No longer filters the render (HEATMAP_MIN_USERS does): it is
+# the value /export advertises as k_anonymity and the one stamped as min_uc in
+# stats.json by /internal/artefacts/rebuild. Live is 1.
 HEATMAP_K_ANONYMITY: "1"
-# Desire lines (Paul 2026-07-20: "j'ai pas envie de perdre les lignes de
-# désir"): keep grid-fallback (off-OSM) edges on BOTH display paths (static
-# PMTiles + live MVT — SSOT heat_aggregation.resolve_grid_fallback_display).
-# MIN_UC empty = follow HEATMAP_K_ANONYMITY (1 in the beta → solo
-# singletracks show; auto-tightens to 2 when K flips). The 60 m grid length
-# cap stays hardwired for GPS-jump noise.
-HEATMAP_KEEP_GRID_FALLBACK: "true"
-HEATMAP_GRID_FALLBACK_MIN_UC: ""
-# ── RAW-TRACE display pivot (2026-07-29) ─────────────────────────────────────
-# The community heatmap renders precise RAW GPS traces (manual_upload only)
-# instead of the OSM-matched aggregate. Privacy = endpoint masking + a
-# distinct-user floor, NOT K-anonymity. build_pmtiles reads 'activities'
-# directly in raw mode (heat_edges untouched → dormant until the substrate
-# drop). See docs/raw-trace-cutover-runbook.md + the 'heatmap' skill.
-#   • DISPLAY_SOURCE=raw   — select the raw path (default 'matched').
+# ── RAW-TRACE display ────────────────────────────────────────────────────────
+# The community heatmap renders precise RAW GPS traces (manual_upload only),
+# read by build_pmtiles straight from 'activities'. Privacy = endpoint masking
+# + a distinct-user floor. See docs/raw-trace-cutover-runbook.md + the
+# 'heatmap' skill.
 #   • MIN_USERS=1          — show every trace incl. solo (K=1 beta; flip to 2
 #                            at ~50 users — the "K=2 later" promise in one var).
 #   • TRACE_MASK_METERS=200— trim home/work off both physical ends.
@@ -225,7 +214,6 @@ HEATMAP_GRID_FALLBACK_MIN_UC: ""
 #                            had two 8-point mid-Atlantic GPS spikes raw would
 #                            draw verbatim; the embedded-spike median guard runs
 #                            always-on). Widen/append if riding outside Europe.
-HEATMAP_DISPLAY_SOURCE: "raw"
 HEATMAP_MIN_USERS: "1"
 TRACE_MASK_METERS: "200"
 HEATMAP_RAW_BBOX: "-12;34;32;62"
@@ -243,24 +231,18 @@ FRONTEND_URL: "${PUBLIC_URL}"
 # Cloud Run Job dispatch (run_jobs.py reads GCP_PROJECT/GCP_REGION).
 GCP_PROJECT: "${PROJECT}"
 GCP_REGION: "${REGION}"
-# Overpass stays off in prod (rate-limited, slow); OVERPASS_ENABLED=false is
-# what the live revision uses (overpass.py / graph_tiles.py / ingest.py all
-# honour it — a tile miss falls back to grid-snap, no 5-15 s round-trip).
-OVERPASS_ENABLED: "false"
 # ── Cloud Tasks queues + their /internal handler URLs (the wiring that got
 #    DROPPED twice by hand-typed deploys). Queue names match the
 #    google_cloud_tasks_queue resources; handler URLs are OIDC-audience-bound
 #    to the .run.app origin — see the RUN_URL / WORKER_RUN_URL note above.
 #    ── MICROSERVICE SPLIT ── the HEAVY handlers point at WORKER_RUN_URL:
 #    Cloud Tasks signs 'audience = <this url>' and POSTs to it → the WORKER
-#    (2Gi) does the heat compute / PMTiles build, and
+#    (2Gi) does the PMTiles build, and
 #    the WORKER verifies the same audience against this same env var. The web
 #    (512Mi) only ENQUEUES (reads these vars to set the audience), never runs
 #    the heavy work.
 CLOUD_TASKS_LOCATION: "${REGION}"
-CLOUD_TASKS_QUEUE: "common-trails-heat-compute-${ENV}"
 CLOUD_TASKS_INVOKER_SA: "${TASKS_INVOKER_SA}"
-INTERNAL_HEAT_HANDLER_URL: "${WORKER_RUN_URL}/internal/ingest/heat"
 CLOUD_TASKS_ARTEFACT_QUEUE: "common-trails-artefact-rebuild-${ENV}"
 INTERNAL_ARTEFACT_HANDLER_URL: "${WORKER_RUN_URL}/internal/artefacts/rebuild"
 # Per-user private "Ma heatmap" rebuilds reuse the artefact-rebuild queue (no
@@ -540,7 +522,7 @@ deploy_service() {  # $1 = service name, $2 = memory (e.g. 512Mi | 2Gi), $3 = hu
 
 # ── 1. Deploy the WEB (public, light 512Mi) service ──────────────────────────
 # 512Mi is safe because every heavy in-request path is deferred off the web:
-# heat compute + PMTiles rebuild both run on the
+# the PMTiles rebuild runs on the
 # WORKER via Cloud Tasks; large archive uploads go direct-to-GCS (signed URL,
 # #455) + the cold-start ingest-pending-archives JOB. See the PR audit for the
 # residual inline export-build path (a future worker candidate).
@@ -574,34 +556,12 @@ MY_HEATMAP_JOB_ENV=",GCP_PROJECT=${PROJECT},MY_HEATMAP_FILES_ENABLED=${MY_HEATMA
 [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]] || MY_HEATMAP_JOB_ENV=""
 job_env_for() {
   case "$1" in
-    # The archive-drain worker: runs OSM matching + fires the post-drain PMTiles
-    # rebuild. It needs Overpass OFF (else foreign-tile Overpass calls crawl —
-    # the 2026-07-20 incident), the uploads bucket to stream the .zip from, GCP
+    # The archive-drain worker: ingests the archive + fires the post-drain PMTiles
+    # rebuild. It needs the uploads bucket to stream the .zip from, GCP
     # project/region for the jobs:run dispatch, the 2 GB archive cap, and the
     # build-pmtiles job name to ping. (DATABASE_URL etc. stay secrets, untouched.)
-    #
-    # OSM-cache sizing for the 8 Gi drain job (2026-07-20 perf): the code
-    # defaults (50 tiles / 200 grids / 10k segs) are tuned for the 512 Mi web
-    # service; on 8 Gi they thrash because the archive hops between regions
-    # (Montpellier ↔ Spain) and every miss reloads 17k–65k segments from the DB
-    # (~1–2 min/activity). We spatial-order the archive now AND size the caches up:
-    #   • OSM_TILE_CACHE_MAX=800   — segment cache. ~34 KB/tile France-average,
-    #       ~4 MB/tile dense-urban WORST case → 800 tiles ≤ 3.2 GB worst, ~0.5 GB
-    #       realistic (a metro is ~200–400 z14 tiles).
-    #   • OSM_GRID_CACHE_MAX=150   — grid cache. Each entry is an INDEX over the
-    #       already-cached segment objects (~8 MB for a big multi-tile grid, NOT
-    #       the 50 MB in the code comment — that counts the shared segments) →
-    #       ≤ 1.2 GB worst.
-    #   • OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000 — let big multi-tile grids
-    #       cache their (cheap) index instead of rebuilding every call.
-    # Worst-case budget: 3.2 (segs) + 1.2 (grids) + 2.0 (a MAX_ARCHIVE_BYTES .zip
-    # in tmpfs) + ~1.0 (python/ingest) ≈ 7.4 GB < 8 GiB. Comfortable at the
-    # realistic hit rate.
     "common-trails-ingest-pending-archives-${ENV}")
-      # + the RAW-display env (2026-07-29 pivot): the drain runs ingest_activity,
-      # which under raw MUST skip the matched OSM-match + heat_edges write (the
-      # substrate is dropped). Without this the drain path would still run
-      # wasteful matched work. Same values as the service env-file.
+      # + the raw-display knobs (same values as the service env-file).
       # + EMAIL_FROM: the drain sends the "your traces are on the map" email
       # (render_archive_done_email). Without it, EMAIL_FROM defaults to Resend's
       # onboarding@resend.dev test sender (not our verified domain). The
@@ -611,20 +571,15 @@ job_env_for() {
       # on the job, it fell back to storage.googleapis.com (blocked by ad-blockers
       # / Firefox — the very reason tiles.* exists). Same value as the services.
       # + MY_HEATMAP_JOB_ENV: per-user "Ma heatmap" rebuild wiring (empty when the flag is OFF).
-      echo "OVERPASS_ENABLED=false${MY_HEATMAP_JOB_ENV},UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},OSM_TILE_CACHE_MAX=800,OSM_GRID_CACHE_MAX=150,OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000,HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL}" ;;
-    # Every other job that does OSM matching / ingestion must ALSO keep Overpass
-    # off (same foreign-tile slowdown if it ran with OVERPASS_ENABLED absent→true).
-    "common-trails-rebuild-heatmap-${ENV}"|"common-trails-group-edges-osm-${ENV}")
-      echo "OVERPASS_ENABLED=false" ;;
+      echo "UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV}${MY_HEATMAP_JOB_ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL}" ;;
     # The re-sync reminder emailer: EMAIL_FROM so the reminder is sent from our
     # verified domain (not Resend's onboarding sender). RESEND_API_KEY is a
-    # SECRET (job_secrets_for). No OSM work → Overpass irrelevant, kept off.
+    # SECRET (job_secrets_for).
     "common-trails-resync-reminder-${ENV}")
-      echo "OVERPASS_ENABLED=false,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>" ;;
-    # The PMTiles builder MUST carry the raw-display env (2026-07-29 pivot) —
-    # the env-vars-file above only reaches the SERVICES, and this JOB is what
-    # actually writes heatmap-display.pmtiles to GCS. Same values as the service
-    # block. Without this it would keep building the MATCHED aggregate.
+      echo "EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>" ;;
+    # The PMTiles builder MUST carry the raw-display knobs — the env-vars-file
+    # above only reaches the SERVICES, and this JOB is what actually writes
+    # heatmap-display.pmtiles to GCS. Same values as the service block.
     # + HEATMAP_PUBLIC_BASE_URL: this JOB writes the freshness pointer
     # (latest_url — the URL the client resolves the pmtiles THROUGH) AND the
     # raster tiles.json template. It MUST carry the tiles.* base so both become
@@ -634,7 +589,7 @@ job_env_for() {
     # skips the GCS upload + raster pyramid ("HEATMAP_GCS_BUCKET unset →
     # skipping") — a silent no-op heatmap on any job recreate.
     "common-trails-build-pmtiles-${ENV}")
-      echo "HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,OVERPASS_ENABLED=false,HEATMAP_RASTER_PYRAMID=true,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL},HEATMAP_GCS_BUCKET=${HEATMAP_GCS_BUCKET}" ;;
+      echo "HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,HEATMAP_RASTER_PYRAMID=true,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL},HEATMAP_GCS_BUCKET=${HEATMAP_GCS_BUCKET}" ;;
     *)
       echo "" ;;
   esac

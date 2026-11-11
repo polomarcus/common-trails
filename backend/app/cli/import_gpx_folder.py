@@ -152,7 +152,6 @@ def _ingest_one(user_id: str, path: Path, sport: str, contribute: bool) -> tuple
             user_id=user_id,
             activity_data=activity_data,
             contribute_heatmap=contribute,
-            skip_heat_computation=False,
         )
     except Exception as e:
         return ("error", f"ingest failed: {e}")

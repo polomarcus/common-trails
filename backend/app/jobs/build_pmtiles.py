@@ -1,21 +1,17 @@
-"""Build PMTiles heatmap from heat_edges (DISPLAY ONLY).
+"""Build the community heatmap PMTiles from masked raw traces (DISPLAY ONLY).
 
-Generates ONE file for MapLibre rendering:
-  - heatmap-display.pmtiles  (~10MB with min_uc=2, OSM-matched only;
-    grid-fallback "desire lines" are KEPT by default since 2026-07-20 —
-    env HEATMAP_KEEP_GRID_FALLBACK / HEATMAP_GRID_FALLBACK_MIN_UC, SSOT
-    heat_aggregation.resolve_grid_fallback_display)
-    props: user_count, sport, heat_score
+Generates ``heatmap-display.pmtiles`` for MapLibre rendering, straight from
+``activities`` (``app.services.raw_trace_display``):
+  - ``trails`` LineString layer (user_count / heat_score / sport)
+  - ``heat_points`` Point layer (density weights)
 
-NOTE: Routing data uses a separate CTGB tile system (not PMTiles).
-PMTiles is for display only — tippecanoe simplifies geometry and drops
-"densest" features at low zooms, which is wrong for routing accuracy.
+Privacy = endpoint masking (``trace_privacy``) + the ``HEATMAP_MIN_USERS``
+floor — see docs/raw-trace-heatmap-prototype.md.
 
 Run:
     python -m app.jobs.build_pmtiles
-    python -m app.jobs.build_pmtiles --output-dir /tmp --min-uc 2
+    python -m app.jobs.build_pmtiles --output-dir /tmp
 
-Time: ~1 min (with min_uc=2 filter)
 Prerequisites: tippecanoe installed (brew install tippecanoe)
 """
 import argparse
@@ -32,111 +28,6 @@ from sqlalchemy import text as sa_text
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-
-def export_geojson(db, path: str, props: list[str], min_uc: int,
-                   max_grid_fallback_m: float = 60.0,
-                   grid_fallback_min_uc: int | None = None,
-                   drop_grid_fallback: bool | None = None) -> int:
-    """Stream heat_edges as newline-delimited GeoJSON. Returns feature count.
-
-    Grid-fallback edges (``osm_way_id IS NULL``) are the "desire lines" —
-    off-OSM traces like MTB singletracks / DFCI paths that don't exist in
-    OSM. Since 2026-07-20 (Paul: "j'ai pas envie de perdre les lignes de
-    désir") they are KEPT by default; the policy is env-driven and SSOT'd
-    in ``heat_aggregation.resolve_grid_fallback_display`` so this export
-    and the live MVT endpoint cannot drift. ``drop_grid_fallback`` /
-    ``grid_fallback_min_uc`` default to ``None`` = resolve from env
-    (``HEATMAP_KEEP_GRID_FALLBACK`` default true;
-    ``HEATMAP_GRID_FALLBACK_MIN_UC`` default follows ``min_uc``, i.e. the
-    K-anonymity floor — 1 in the K=1 beta so solo singletracks show).
-    Explicit values override (ops / tests).
-
-    Two residual filters on grid-fallback edges when kept:
-
-    1. **Length cap** — drop anything longer than ``max_grid_fallback_m``.
-       These are GPS-jump artifacts the densifier failed to fill in
-       (tunnels, dropouts) and render as straight-line spaghetti
-       crossing fields/buildings. Accepted tradeoff: GPS-noise fragments
-       ≤60 m may render (the Strava-like imperfection Paul accepts).
-
-    2. **Community confirmation** — keep only when ``user_count >=
-       grid_fallback_min_uc`` (the resolved floor above).
-
-    OSM-matched edges (``osm_way_id IS NOT NULL``) are kept regardless
-    of length and regardless of user_count >= ``min_uc``.
-    """
-    from app.services.heat_aggregation import resolve_grid_fallback_display
-
-    env_drop, env_grid_min_uc = resolve_grid_fallback_display(min_uc)
-    if drop_grid_fallback is None:
-        drop_grid_fallback = env_drop
-    if grid_fallback_min_uc is None:
-        grid_fallback_min_uc = env_grid_min_uc
-    prop_json = ", ".join(f"'{p}', {p}" for p in props)
-    if 'heat_score' in props:
-        # heat_score now factors in highway_type so primary roads burn
-        # brighter than residential lanes at equal user_count — Komoot's
-        # bright pink/orange on D-series. Boost: +0.15 for primary /
-        # secondary / trunk, +0.05 for tertiary / unclassified, none for
-        # residential / service / paths.
-        prop_json = prop_json.replace(
-            "'heat_score', heat_score",
-            "'heat_score', ROUND(LEAST(1.0, "
-            "LN(1 + user_count) / (8.0 * LN(2)) "
-            "+ CASE WHEN highway_type IN ('primary', 'secondary', 'trunk') THEN 0.15 "
-            "WHEN highway_type IN ('tertiary', 'unclassified') THEN 0.05 "
-            "ELSE 0 END"
-            ")::numeric, 3)"
-        )
-    # Aggregate heat_edges by OSM way (one feature per OSM way). Without
-    # this, an OSM way that 12 GPS traces snapped to produces 12 overlapping
-    # copies of the way's 2-point segment — visible as micro-zigzag at z16+
-    # from 5-dp snap noise on each segment, never forming a single continuous
-    # road line.
-    #
-    # READ from the pre-materialised ``heat_edges_agg`` table (SSOT builder
-    # ``build_agg_read_sql``) instead of re-running the ~5 M-row GROUP BY over
-    # ``heat_edges`` at build time — that live aggregation OOMed the
-    # whole-world build on db-f1-micro. ``build_agg_read_sql`` serves the
-    # EXACT same ``combined`` shape (agg holds the OSM-matched half; grid
-    # fallback is read live only when kept). With grid fallback KEPT (the
-    # prod default since 2026-07-20 — desire lines), the live half is a
-    # single index-driven scan of the NULL-osm_way_id heat_edges only; with
-    # ``drop_grid_fallback=True`` it is a pure indexed SELECT of the agg
-    # table — ZERO heat_edges scan.
-    # The agg table is maintained by the SAME aggregation
-    # definition (``build_heat_aggregation_sql``) via the incremental hook +
-    # ``rebuild_heat_agg`` backfill, so the two display paths can't drift.
-    # Whole-world here (no bbox predicate).
-    from app.services.heat_aggregation import build_agg_read_sql
-
-    aggregation_cte = build_agg_read_sql(
-        min_uc=min_uc,
-        bbox_predicate=None,
-        grid_fallback_min_uc=grid_fallback_min_uc,
-        max_grid_fallback_m=max_grid_fallback_m,
-        drop_grid_fallback=drop_grid_fallback,
-    )
-    query = f"""
-        {aggregation_cte}
-        SELECT json_build_object(
-            'type', 'Feature',
-            'geometry', ST_AsGeoJSON(geometry)::json,
-            'properties', json_build_object({prop_json})
-        )::text
-        FROM combined
-    """
-
-    written = 0
-    with open(path, "w") as f:
-        for row in db.execute(sa_text(query)):
-            f.write(row[0])
-            f.write("\n")
-            written += 1
-            if written % 500000 == 0:
-                log.info("  Exported %d", written)
-    return written
 
 
 def _isolated_export_enabled() -> bool:
@@ -277,19 +168,17 @@ def run_tippecanoe(geojson_path: str, output: str, min_zoom: int, max_zoom: int,
         raise RuntimeError("tippecanoe failed")
 
 
-def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
-         drop_grid_fallback: bool | None = None,
-         grid_fallback_min_uc: int | None = None) -> None:
+def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int) -> None:
+    """Build + publish the heatmap. ``min_uc`` no longer filters anything (the
+    render floor is ``HEATMAP_MIN_USERS``); it is only stamped into
+    ``stats.json`` (``min_uc`` field), as before."""
     if not shutil.which("tippecanoe"):
         log.error("tippecanoe not found. Install: brew install tippecanoe")
         return
 
     from app.db.session import SessionLocal
-    from app.services.raw_trace_display import raw_display_enabled
     db = SessionLocal()
     try:
-        raw_mode = raw_display_enabled()
-
         t0 = time.time()
         # Snapshot start, recorded BEFORE the export query: the pointer publish
         # is a compare-and-set on this timestamp, so a build that started
@@ -297,59 +186,25 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
         # newer pointer (overlapping builds — see _publish_pointer_cas).
         snapshot_started_at = _utc_now_iso()
         geojson_path = "/tmp/heat_edges_display.geojsonl"
-        # RAW mode also emits a companion heat_points GeoJSONL → a second
-        # tippecanoe layer rendered as a maplibre `heatmap` density field
-        # (raster-style Strava look, fixes the vector-line "pâté"). None in
-        # matched mode (single `trails` layer, unchanged).
-        points_path: str | None = None
-        raw_network_m: float | None = None
-        if raw_mode:
-            # HEATMAP_DISPLAY_SOURCE=raw — precise masked raw traces instead
-            # of the matched heat_edges_agg. Emits BOTH the `trails` LineString
-            # layer (user_count/heat_score/sport — crisp lines + arrows) AND a
-            # `heat_points` Point layer (w/sport — the density raster). Privacy =
-            # endpoint masking (trace_privacy), NOT K-anonymity — see
-            # docs/raw-trace-heatmap-prototype.md.
-            points_path = "/tmp/heat_points_display.geojsonl"
-            log.info("Building heatmap-display.pmtiles from RAW masked traces "
-                     "(HEATMAP_DISPLAY_SOURCE=raw) — trails + heat_points layers...")
-            # stats_out captures the occupied-lattice network estimate for the
-            # home "km de chemins" banner (heat_edges_agg is dropped under raw).
-            raw_stats: dict = {}
-            written = _run_raw_export(db, geojson_path, points_path, raw_stats)
-            raw_network_m = raw_stats.get("network_m")
-            pts_mb = (os.path.getsize(points_path) / 1024 / 1024
-                      if os.path.exists(points_path) else 0.0)
-            log.info("Raw export: %.0fs (%d line features, %.1f MB trails + "
-                     "%.1f MB heat_points)", time.time() - t0, written,
-                     os.path.getsize(geojson_path) / 1024 / 1024, pts_mb)
-        else:
-            # Count the pre-materialised aggregate (one row per (osm_way_id,
-            # sport)), NOT raw ``heat_edges``. This is a log line only — but the
-            # old ``SELECT COUNT(*) FROM heat_edges`` was a full scan of the ~5 M
-            # row table that severed the db-f1-micro connection ("server closed
-            # the connection unexpectedly") BEFORE the light agg build could run,
-            # defeating the whole point of #441. ``heat_edges_agg`` is ~45 k rows
-            # with an indexed ``user_count``; the meaningful "size of the build"
-            # number is aggregated ways anyway.
-            count = db.execute(sa_text(
-                f"SELECT COUNT(*) FROM heat_edges_agg WHERE user_count >= {min_uc}"
-            )).scalar()
-            log.info("Building heatmap-display.pmtiles for %d aggregated ways (min_uc=%d)...", count, min_uc)
-
-            # ``None`` values defer to export_geojson, which resolves the
-            # desire-lines policy from env via the SSOT helper
-            # (heat_aggregation.resolve_grid_fallback_display): keep grid
-            # fallback by default, confirmation floor follows min_uc/K.
-            # Explicit CLI flags (--keep-grid-fallback / --drop-grid-fallback /
-            # --grid-fallback-min-uc) override for ops.
-            written = export_geojson(db, geojson_path,
-                           ['user_count', 'pass_count', 'sport',
-                            'heat_score', 'highway_type'],
-                           min_uc,
-                           grid_fallback_min_uc=grid_fallback_min_uc,
-                           drop_grid_fallback=drop_grid_fallback)
-            log.info("Export: %.0fs (%.1f MB)", time.time() - t0, os.path.getsize(geojson_path) / 1024 / 1024)
+        # Precise masked raw traces. Emits BOTH the `trails` LineString layer
+        # (user_count/heat_score/sport — crisp lines + arrows) AND a companion
+        # `heat_points` Point layer (w/sport) that the frontend renders as a
+        # maplibre `heatmap` density field. Privacy = endpoint masking
+        # (trace_privacy), NOT K-anonymity — see
+        # docs/raw-trace-heatmap-prototype.md.
+        points_path = "/tmp/heat_points_display.geojsonl"
+        log.info("Building heatmap-display.pmtiles from RAW masked traces "
+                 "— trails + heat_points layers...")
+        # stats_out captures the occupied-lattice network estimate for the
+        # home "km de chemins" banner.
+        raw_stats: dict = {}
+        written = _run_raw_export(db, geojson_path, points_path, raw_stats)
+        raw_network_m: float | None = raw_stats.get("network_m")
+        pts_mb = (os.path.getsize(points_path) / 1024 / 1024
+                  if os.path.exists(points_path) else 0.0)
+        log.info("Raw export: %.0fs (%d line features, %.1f MB trails + "
+                 "%.1f MB heat_points)", time.time() - t0, written,
+                 os.path.getsize(geojson_path) / 1024 / 1024, pts_mb)
 
         output = os.path.join(output_dir, "heatmap-display.pmtiles")
         if written == 0:
@@ -384,23 +239,22 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
             # OOM-SIGKILL'd — which no try/except can catch — so if it ran first a
             # kill would strand /map on the PREVIOUS build with no error surfaced.
             _upload_to_export_bucket(output, snapshot_started_at=snapshot_started_at)
-            # RAW mode only: also publish the un-tiled geojsonl (gzipped) so the
+            # Also publish the un-tiled geojsonl (gzipped) so the
             # community-EXPORT endpoints (export._query_aggregated_heat_edges)
             # can STREAM + bbox-clip this pre-built artifact instead of
             # re-running the full raw aggregation per request. Best-effort.
-            if raw_mode:
-                _upload_geojsonl_to_export_bucket(geojson_path)
-                # Export speedup: also publish one gzipped geojsonl per sport
-                # (``heatmap-display-<sport>.geojsonl.gz``) so a sport-filtered
-                # export streams a SMALL per-sport file instead of the whole
-                # national all-sports one. Best-effort, never raises — the
-                # combined artifact above already backs every export.
-                _upload_per_sport_geojsonl_to_export_bucket(geojson_path)
-                # Raster XYZ pyramid: render {z}/{x}/{y}.png + a TileJSON to the
-                # public bucket so gpx.studio / VisuGPX can add the heatmap as a
-                # custom overlay ("calque") via one URL. Reads the still-on-disk
-                # geojsonl. Env-gated (HEATMAP_RASTER_PYRAMID); never raises.
-                _build_and_upload_raster_pyramid(geojson_path)
+            _upload_geojsonl_to_export_bucket(geojson_path)
+            # Export speedup: also publish one gzipped geojsonl per sport
+            # (``heatmap-display-<sport>.geojsonl.gz``) so a sport-filtered
+            # export streams a SMALL per-sport file instead of the whole
+            # national all-sports one. Best-effort, never raises — the
+            # combined artifact above already backs every export.
+            _upload_per_sport_geojsonl_to_export_bucket(geojson_path)
+            # Raster XYZ pyramid: render {z}/{x}/{y}.png + a TileJSON to the
+            # public bucket so gpx.studio / VisuGPX can add the heatmap as a
+            # custom overlay ("calque") via one URL. Reads the still-on-disk
+            # geojsonl. Env-gated (HEATMAP_RASTER_PYRAMID); never raises.
+            _build_and_upload_raster_pyramid(geojson_path)
             os.unlink(geojson_path)
             log.info("=== Done in %.0fs ===", time.time() - t0)
             log.info("Output: %s", output)
@@ -418,11 +272,8 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
         # the PMTiles (local ``output_dir`` + the public GCS bucket). The
         # homepage fetches that static file, NEVER the DB at request time,
         # so a cold db-f1-micro (min-instances=0) can't blank the hero.
-        # Runs AFTER the PMTiles deliverable + its upload (same ordering
-        # discipline as the quality audit) but BEFORE the heavy raw-edge
-        # quality scan, so a scan that severs the connection can't stop
-        # stats from being published. Queries are cheap (indexed
-        # activities aggregates + the ~45-87k-row heat_edges_agg).
+        # Runs AFTER the PMTiles deliverable + its upload. Queries are cheap
+        # (indexed activities aggregates).
         publish_stats_json(db, output_dir, min_uc, network_m_override=raw_network_m)
 
         # Evolution time-series — append ONE snapshot of the community-heatmap
@@ -431,30 +282,6 @@ def main(output_dir: str, min_zoom: int, max_zoom: int, min_uc: int,
         # probes; fully fail-soft so it can never break the deliverable above.
         capture_heatmap_metrics_snapshot(db, source="rebuild", min_uc=min_uc,
                                          network_m_override=raw_network_m)
-
-        # Post-build heat-quality audit — log structured metrics per
-        # monitored region so Cloud Logging / Sentry can alert on
-        # spaghetti drift over time. The thresholds are advisory only;
-        # we never fail the build on quality (a quality issue should
-        # surface in the heatmap, not in the rebuild pipeline).
-        #
-        # ORDERING INVARIANT (db-f1-micro): this is the ONLY raw-``heat_edges``
-        # access left on the default build path (grid_fallback / dangling-
-        # endpoint degree are inherently raw-edge concepts, uncomputable from
-        # the by-way ``heat_edges_agg``). It MUST run strictly AFTER the
-        # deliverables are done — the local PMTiles binary + its GCS upload
-        # above — so that a heavy raw scan severing the connection can never
-        # abort the build. The queries are bbox-scoped (GiST-indexed, not a
-        # full-table scan), per-region try/except'd, statement-timeout-boxed,
-        # and the whole function never raises. Do NOT move this call before
-        # ``_upload_to_export_bucket``.
-        #
-        # RAW-trace cutover: grid_fallback / dangling-endpoint metrics are
-        # matched-pipeline (``heat_edges``) concepts — meaningless under raw and
-        # a pointless full-scan on f1-micro (``heat_edges`` is empty/dropped
-        # post-pivot). Skip the raw-``heat_edges`` audit entirely in raw mode.
-        if not raw_mode:
-            _emit_heat_quality_metrics(db)
     finally:
         db.close()
 
@@ -935,32 +762,9 @@ def _upload_to_export_bucket(pmtiles_path: str, snapshot_started_at: str | None 
             "license_url": "https://opendatacommons.org/licenses/odbl/1-0/",
             "attribution": "© CHEMINS COMMUNS contributors — ODbL 1.0",
         }
-        # Best-effort edge count from the light ``heat_edges_agg`` table (one
-        # row per (osm_way_id, sport), ~45 k rows), NOT raw ``heat_edges`` — a
-        # full 5 M-row COUNT would sever the db-f1-micro connection.
-        try:
-            from sqlalchemy import text as _sa_text
-
-            from app.db.session import SessionLocal
-            _db = SessionLocal()
-            try:
-                edges = _db.execute(_sa_text(
-                    "SELECT COUNT(*) FROM heat_edges_agg WHERE user_count >= 1"
-                )).scalar()
-                pointer["edge_count"] = int(edges) if edges is not None else 0
-            finally:
-                _db.close()
-        except Exception:  # noqa: BLE001 — pointer best-effort
-            pass
-        # Report the ACTUAL gate the render used. In raw mode that is
-        # min_users() (HEATMAP_MIN_USERS) — NOT the legacy matched-era
-        # HEATMAP_K_ANONYMITY, which is unset in prod and defaulted this field
-        # to a misleading "2" while the render was really K=1 all along.
-        from app.services.raw_trace_display import min_users, raw_display_enabled
-        pointer["k_anonymity"] = (
-            min_users() if raw_display_enabled()
-            else int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
-        )
+        # The gate the render used: min_users() (HEATMAP_MIN_USERS).
+        from app.services.raw_trace_display import min_users
+        pointer["k_anonymity"] = min_users()
 
         if not _publish_pointer_cas(bucket, pointer):
             # An overlapping NEWER build already published: touch nothing else.
@@ -1234,26 +1038,16 @@ def compute_community_stats(db, min_uc: int, network_m_override: float | None = 
     - ``traces`` — count of COMMUNITY-ELIGIBLE activity rows (``COUNT(*)``):
       the honest number of contributed rides, NOT the ~4.6 M cumulative
       ``pass_count`` the old banner mislabelled.
-    - ``km`` — **unique km of the community NETWORK**: ``SUM(ST_Length)`` over
-      the DISTINCT OSM ways in ``heat_edges_agg`` (one row per
-      ``(osm_way_id, sport)``, ~45-87 k indexed rows), deduped by
-      ``osm_way_id`` so a way mapped under two sports (gravel+mtb) counts
-      once, and filtered to ``user_count >= min_uc`` so it matches what the
-      heatmap actually displays. Chosen over ``SUM(activities.distance_m)``
-      (total km *ridden*) because the label is "km de chemins" (km of
-      *paths* / the network the community has reclaimed), not km ridden.
-      It is LIGHT: build-time only (never per-visit), reads the small
-      pre-aggregated table, never the ~5 M-row raw ``heat_edges``.
-      **Fallback:** when ``heat_edges_agg`` is empty (local dev without an
-      OSM import, or a fresh DB before the backfill) the network sum is 0 —
-      we then fall back to ``SUM(activities.distance_m)`` so the number is
-      never a misleading 0 in any environment.
+    - ``km`` — **unique km of the community NETWORK** ("km de chemins", the
+      network the community has reclaimed — not km ridden): the build passes
+      ``network_m_override`` = the occupied-lattice estimate from
+      ``export_raw_geojson`` (deduped by geography). **Fallback:** without an
+      override (the live ``/heatmap/summary`` endpoint has no lattice) or when
+      it is 0, ``SUM(activities.distance_m)`` over the eligible set.
 
     Never raises: each query is defensively wrapped so a transient hiccup
     yields 0 for that field rather than aborting the whole build.
     """
-    from app.services.raw_trace_display import raw_display_enabled
-
     def _scalar(sql: str, params: dict | None = None, default=0):
         try:
             val = db.execute(sa_text(sql), params or {}).scalar()
@@ -1281,42 +1075,12 @@ def compute_community_stats(db, min_uc: int, network_m_override: float | None = 
         _elig_params,
     ))
 
-    # Unique network metres — "km de chemins" (the network the community has
-    # reclaimed), NOT total km ridden.
-    #
-    # RAW mode (prod since the pivot): ``heat_edges_agg`` is DROPPED, so the
-    # old SUM(ST_Length) query below would fail → warning spam → silent fallback
-    # to total km RIDDEN (over-counts every repeat ride). Instead the build path
-    # passes ``network_m_override`` = the occupied-lattice estimate from
-    # ``export_raw_geojson`` (deduped by geography — see its comment). The live
-    # ``/heatmap/summary`` endpoint has no lattice → override is None and
-    # we drop to the ridden-distance fallback below (rare; the home always reads
-    # the accurate static ``stats.json`` this build wrote).
-    #
-    # MATCHED mode (legacy): the DISTINCT-ON(osm_way_id) aggregate sum, collapsing
-    # the gravel/mtb duplicate rows for a shared physical way before summing.
-    if network_m_override is not None:
-        network_m = float(network_m_override)
-    elif raw_display_enabled():
-        network_m = 0.0  # no agg table in raw mode; drop to the ridden fallback
-    else:
-        network_m = float(_scalar(
-            """
-            SELECT COALESCE(SUM(ST_Length(geometry::geography)), 0)
-            FROM (
-                SELECT DISTINCT ON (osm_way_id) geometry
-                FROM heat_edges_agg
-                WHERE user_count >= :min_uc
-                ORDER BY osm_way_id
-            ) w
-            """,
-            {"min_uc": min_uc},
-        ))
+    # Unique network metres — see the docstring.
+    network_m = float(network_m_override) if network_m_override is not None else 0.0
     if network_m <= 0:
-        # Dev / pre-backfill fallback: total ridden distance is cheap (indexed
-        # single-column SUM). Gated to the SAME community-eligible set so the
-        # fallback km can't be inflated by personal (strava_api / non-consented)
-        # rides that the primary heat_edges_agg path already excludes.
+        # Fallback: total ridden distance is cheap (indexed single-column SUM).
+        # Gated to the SAME community-eligible set so the fallback km can't be
+        # inflated by personal (strava_api / non-consented) rides.
         network_m = float(_scalar(
             f"SELECT COALESCE(SUM(distance_m), 0) FROM activities WHERE {_elig_where}",
             _elig_params,
@@ -1341,16 +1105,10 @@ def capture_heatmap_metrics_snapshot(
     """Append ONE row to ``heatmap_metrics`` (the admin evolution time-series).
 
     Reuses ``compute_community_stats`` (SSOT) for contributors / activities /
-    network_km so the chart never drifts from the home-banner headline, and
-    adds two CHEAP heatmap-size numbers:
-
-    * ``agg_ways`` — ``COUNT(*)`` of the small ``heat_edges_agg`` table.
-    * ``heat_edges`` — the ``pg_class`` reltuples ESTIMATE (same cheap source
-      as ``/readyz``); NEVER a live ``COUNT(*)`` scan of the ~5 M-row table
-      (that severed the f1-micro connection in #442).
-
-    ``grid_fallback_pct`` is left NULL unless a caller passes it (computing it
-    needs a raw ``heat_edges`` scan — off-limits on the hot path).
+    network_km so the chart never drifts from the home-banner headline. The
+    legacy ``heat_edges`` / ``agg_ways`` columns (matched pipeline, removed)
+    are written as 0 until the schema drops them; ``grid_fallback_pct`` stays
+    NULL unless a caller passes it.
 
     FAIL-SOFT: wrapped end-to-end in try/except so a snapshot hiccup can NEVER
     break the heatmap rebuild that calls it. Returns the
@@ -1359,26 +1117,9 @@ def capture_heatmap_metrics_snapshot(
     try:
         stats = compute_community_stats(db, min_uc, network_m_override=network_m_override)
 
-        def _scalar(sql: str, default: int = 0) -> int:
-            try:
-                val = db.execute(sa_text(sql)).scalar()
-                return int(val) if val is not None else default
-            except Exception:  # noqa: BLE001 — best-effort size probe
-                db.rollback()
-                return default
-
-        agg_ways = _scalar("SELECT COUNT(*) FROM heat_edges_agg")
-        # reltuples estimate across the heat_edges partitions — cheap, no scan.
-        heat_edges = _scalar(
-            "SELECT COALESCE(SUM(GREATEST(reltuples, 0)), 0)::bigint FROM pg_class "
-            "WHERE relkind = 'r' AND relname LIKE 'heat_edges_%' "
-            "AND relname <> 'heat_edges_agg' "
-            "AND relname NOT LIKE '%idx%' AND relname NOT LIKE '%key%'"
-        )
-
         row = {
-            "heat_edges": heat_edges,
-            "agg_ways": agg_ways,
+            "heat_edges": 0,
+            "agg_ways": 0,
             "activities": int(stats["traces"]),
             "contributors": int(stats["contributors"]),
             "network_km": float(stats["km"]),
@@ -1468,73 +1209,8 @@ def publish_stats_json(db, output_dir: str, min_uc: int,
     return stats
 
 
-def _emit_heat_quality_metrics(db) -> None:
-    """Compute disconnection metrics for the monitored regions and
-    emit them as structured logs + a Sentry measurement. Best-effort —
-    never raises (a quality-check failure should not break the build).
-
-    Guarded by a per-statement timeout: the 2026-07 O(n²) regression
-    (correlated subqueries in the metric SQL) made ONE region take
-    >29 min, silently eating build time on every rebuild. The metric
-    query is O(n) now (seconds per region at 2.3M edges); if it ever
-    regresses past the timeout we log a warning instead of stalling
-    the build."""
-    import time
-
-    from sqlalchemy import text as sa_text
-
-    try:
-        from app.services.heat_quality import (
-            ALERT_GRID_FALLBACK_RATIO,
-            ALERT_ISOLATED_RATIO,
-            MONITORED_REGIONS,
-            compute_disconnection_metrics,
-        )
-        try:
-            import sentry_sdk
-        except ImportError:
-            sentry_sdk = None  # type: ignore[assignment]
-
-        db.execute(sa_text("SET statement_timeout = '120s'"))
-        for label, bbox in MONITORED_REGIONS:
-            t0 = time.monotonic()
-            try:
-                m = compute_disconnection_metrics(db, bbox)
-            except Exception as exc:
-                db.rollback()
-                # SET inside a transaction is undone by the rollback —
-                # re-apply so the NEXT region is still time-boxed.
-                db.execute(sa_text("SET statement_timeout = '120s'"))
-                log.warning("heat_quality region=%s failed after %.1fs: %s",
-                            label, time.monotonic() - t0, exc)
-                continue
-            payload = {"event": "heat_quality", "region": label, **m.as_log_dict()}
-            log.info("heat_quality region=%s edges=%d grid=%.1f%% iso=%.1f%% took=%.1fs data=%s",
-                     label, m.edges_total,
-                     100 * m.grid_fallback_ratio, 100 * m.isolated_ratio,
-                     time.monotonic() - t0, payload)
-            if m.edges_total > 0 and sentry_sdk is not None:
-                # Sentry measurement: one per region per build. Use
-                # set_tag for the region so dashboards can group.
-                sentry_sdk.set_tag(f"heat_quality.{label}.grid_fallback_ratio",
-                                   round(m.grid_fallback_ratio, 4))
-                sentry_sdk.set_tag(f"heat_quality.{label}.isolated_ratio",
-                                   round(m.isolated_ratio, 4))
-                if (m.grid_fallback_ratio > ALERT_GRID_FALLBACK_RATIO or
-                        m.isolated_ratio > ALERT_ISOLATED_RATIO):
-                    sentry_sdk.capture_message(
-                        f"heat_quality alert: region={label} "
-                        f"grid={m.grid_fallback_ratio:.1%} iso={m.isolated_ratio:.1%}",
-                        level="warning",
-                    )
-        db.execute(sa_text("SET statement_timeout = 0"))
-    except Exception as exc:
-        # Best effort — never fail the build
-        log.warning("heat_quality emit failed: %s", exc)
-
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build PMTiles (display + routing)")
+    parser = argparse.ArgumentParser(description="Build the community heatmap PMTiles")
     parser.add_argument("--output-dir", default="/tmp")
     parser.add_argument("--min-zoom", type=int, default=6)
     # max-zoom 15 (was 14): at z17+ the user pans street-level and the
@@ -1543,29 +1219,8 @@ if __name__ == "__main__":
     # this heatmap continuous?" assessment.
     parser.add_argument("--max-zoom", type=int, default=15)
     parser.add_argument("--min-uc", type=int, default=1,
-                        help="Minimum user_count (default 1 for dev/beta — see all traces. Use 2+ for production K-anonymity)")
-    grid_group = parser.add_mutually_exclusive_group()
-    grid_group.add_argument("--keep-grid-fallback", action="store_true",
-                            help="Force-include heat_edges with NULL osm_way_id "
-                                 "(grid-snapped GPS 'desire lines'). Default "
-                                 "behaviour already follows env "
-                                 "HEATMAP_KEEP_GRID_FALLBACK (true unless set "
-                                 "false); this flag overrides env for ops.")
-    grid_group.add_argument("--drop-grid-fallback", action="store_true",
-                            help="Force-exclude grid-fallback edges (the old "
-                                 "Komoot-quality default), overriding env.")
-    parser.add_argument("--grid-fallback-min-uc", type=int, default=None,
-                        help="Override the grid_fallback_min_uc confirmation "
-                             "floor (default: env HEATMAP_GRID_FALLBACK_MIN_UC, "
-                             "else follows --min-uc).")
+                        help="Stamped into stats.json (min_uc). Does not filter the "
+                             "render — the floor is HEATMAP_MIN_USERS.")
     args = parser.parse_args()
 
-    _drop: bool | None = None
-    if args.drop_grid_fallback:
-        _drop = True
-    elif args.keep_grid_fallback:
-        _drop = False
-
-    main(args.output_dir, args.min_zoom, args.max_zoom, args.min_uc,
-         drop_grid_fallback=_drop,
-         grid_fallback_min_uc=args.grid_fallback_min_uc)
+    main(args.output_dir, args.min_zoom, args.max_zoom, args.min_uc)

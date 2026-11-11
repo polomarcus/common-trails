@@ -382,7 +382,6 @@ def _ingest_raw(uid: str, name: str, raw: bytes, *, fallback: str = "unknown"):
         fallback_sport=fallback,
         contribute_heatmap=True,
         source="manual_upload",
-        skip_heat_computation=True,
     )
     assert outcome == "imported" and aid, (outcome, _err)
     return str(aid)

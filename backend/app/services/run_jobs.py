@@ -7,10 +7,10 @@ Event-driven kicks for prod Cloud Run Jobs:
   call so the archive is drained promptly instead of waiting for the daily
   backstop scheduler.
 * ``trigger_build_pmtiles_job`` — after the archive drain ingests >=1 activity
-  (heat computation on) we fire the ``common-trails-build-pmtiles`` job so the
-  new contribution appears on the static ``heatmap-display.pmtiles`` served from
-  GCS. Without this a contribution updates ``heat_edges``/``heat_edges_agg`` but
-  never reaches the map until the next unrelated rebuild.
+  we fire the ``common-trails-build-pmtiles`` job so the new contribution
+  appears on the static ``heatmap-display.pmtiles`` served from GCS. Without
+  this a contribution lands in ``activities`` but never reaches the map until
+  the next unrelated rebuild.
 
 Auth mirrors ``app.api.admin._fetch_executions``: the in-container GCE metadata
 server mints an access token for the calling runtime SA. This only works on
@@ -191,11 +191,11 @@ def trigger_ingest_archives_job() -> bool:
 def trigger_build_pmtiles_job() -> bool:
     """Fire-and-forget: request one execution of the build-pmtiles Cloud Run
     Job so the static ``heatmap-display.pmtiles`` on GCS is rebuilt from the
-    fresh ``heat_edges_agg``.
+    current ``activities``.
 
     Returns True on a 2xx from ``jobs:run``, else False. NEVER raises — every
     I/O failure is logged and swallowed so the archive drain stays best-effort
-    (the ingested ``heat_edges`` are already committed). ⚠️ A missed ping has NO
+    (the ingested activities are already committed). ⚠️ A missed ping has NO
     scheduled backstop: the display stays stale until the NEXT trigger — a later
     upload's ping, the next drain that imports something, or a manual rebuild.
     The build-pmtiles job is proven to run on db-f1-micro with no tier bump.

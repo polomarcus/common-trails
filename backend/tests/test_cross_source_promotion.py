@@ -23,7 +23,6 @@ from app.services.provenance import COMMUNITY_SOURCE, STRAVA_API_SOURCE
 
 _USER = "xsrc-promo-user"
 _LON0, _LAT0 = 7.2005, 4.2005
-_BBOX = (7.2, 4.2, 7.21, 4.21)
 _DATE = datetime(2025, 5, 1, 7, 0, tzinfo=UTC)
 
 
@@ -73,13 +72,18 @@ def _contribute_of(activity_id: str) -> bool:
         db.close()
 
 
-def _count_edges() -> int:
+def _community_rows() -> int:
+    """Rows of the test user the community build would read — the SSOT gate
+    (``provenance.community_eligible_conditions``) the raw export filters on."""
+    from app.services.provenance import community_eligible_conditions
+
+    conds, params = community_eligible_conditions()
     db = SessionLocal()
     try:
-        return db.execute(sa_text(
-            "SELECT COUNT(*) FROM heat_edges "
-            "WHERE ST_Intersects(geometry, ST_MakeEnvelope(:a,:b,:c,:d,4326))"
-        ), {"a": _BBOX[0], "b": _BBOX[1], "c": _BBOX[2], "d": _BBOX[3]}).scalar() or 0
+        return db.execute(
+            sa_text("SELECT COUNT(*) FROM activities WHERE user_id = :u AND " + " AND ".join(conds)),
+            {**params, "u": _USER},
+        ).scalar() or 0
     finally:
         db.close()
 
@@ -90,15 +94,6 @@ def _cleanup():
     db = SessionLocal()
     try:
         db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": _USER})
-        db.execute(sa_text(
-            "DELETE FROM heat_edge_contributors WHERE edge_key IN ("
-            "  SELECT edge_key FROM heat_edges "
-            "  WHERE ST_Intersects(geometry, ST_MakeEnvelope(:a,:b,:c,:d,4326)))"
-        ), {"a": _BBOX[0], "b": _BBOX[1], "c": _BBOX[2], "d": _BBOX[3]})
-        db.execute(sa_text(
-            "DELETE FROM heat_edges "
-            "WHERE ST_Intersects(geometry, ST_MakeEnvelope(:a,:b,:c,:d,4326))"
-        ), {"a": _BBOX[0], "b": _BBOX[1], "c": _BBOX[2], "d": _BBOX[3]})
         db.commit()
     finally:
         db.close()
@@ -110,7 +105,7 @@ def _ingest_strava():
         "source": STRAVA_API_SOURCE, "sport": "mtb",
         "geometry_geojson": _STRAVA_GEO, "distance_m": 5000,
         "activity_date": _DATE,
-    }, contribute_heatmap=True)  # inline heat (skip defaults False)
+    }, contribute_heatmap=True)
 
 
 def _ingest_manual(file_hash: str = "xsrc-manual-1"):
@@ -123,11 +118,10 @@ def _ingest_manual(file_hash: str = "xsrc-manual-1"):
     }, contribute_heatmap=True)
 
 
-@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_strava_then_manual_promotes_single_row_and_counts_once():
     r1 = _ingest_strava()
     assert r1["status"] == "created"
-    assert _count_edges() == 0, "strava_api ride must not feed community"
+    assert _community_rows() == 0, "strava_api ride must not feed community"
 
     r2 = _ingest_manual()
     assert r2["status"] == "promoted", f"expected promotion, got {r2}"
@@ -141,17 +135,14 @@ def test_strava_then_manual_promotes_single_row_and_counts_once():
     # Compliance: the stored geometry is the UPLOADED GPX, not the Strava polyline.
     assert geom == _MANUAL_GEO
 
-    # The ride now appears in the community, counted once.
-    assert _count_edges() > 0
-    assert r2["edges_indexed"] > 0
+    # The ride is now community-eligible, counted once.
+    assert _community_rows() == 1
 
 
-@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_manual_then_strava_skips_without_double_count():
     r1 = _ingest_manual()
     assert r1["status"] == "created"
-    edges_after_manual = _count_edges()
-    assert edges_after_manual > 0
+    assert _community_rows() == 1
 
     r2 = _ingest_strava()
     # A strava sync landing over an existing community row is a plain dedup
@@ -159,7 +150,7 @@ def test_manual_then_strava_skips_without_double_count():
     assert r2["status"] == "already_exists"
     assert r2["activity_id"] == r1["activity_id"]
     assert _count_activities() == 1
-    assert _count_edges() == edges_after_manual, "community count must not change"
+    assert _community_rows() == 1, "community count must not change"
 
     # The kept row stays community + keeps the uploaded geometry.
     source, geom = _row(r1["activity_id"])
@@ -168,8 +159,8 @@ def test_manual_then_strava_skips_without_double_count():
 
 
 def test_async_promotion_adopts_manual_contribute_intent():
-    """ASYNC path (skip_heat_computation=True): promotion must adopt the
-    INCOMING upload's contribute_heatmap intent, not the stale twin's.
+    """Promotion must adopt the INCOMING upload's contribute_heatmap intent,
+    not the stale twin's.
 
     Regression: the pre-existing strava_api twin is opted OUT
     (contribute_heatmap=False) while the manual upload intends IN (True). The
@@ -177,39 +168,40 @@ def test_async_promotion_adopts_manual_contribute_intent():
     promotion left it False the promoted ride would silently never reach the
     community.
     """
-    # 1. Pre-existing Strava-API twin, opted OUT, stored WITHOUT heat (async).
+    # 1. Pre-existing Strava-API twin, opted OUT.
     r1 = ingest_activity(_USER, {
         "provider": "strava", "provider_activity_id": "xsrc-async-strava",
         "source": STRAVA_API_SOURCE, "sport": "mtb",
         "geometry_geojson": _STRAVA_GEO, "distance_m": 5000,
         "activity_date": _DATE,
-    }, contribute_heatmap=False, skip_heat_computation=True)
+    }, contribute_heatmap=False)
     assert r1["status"] == "created"
     assert _contribute_of(r1["activity_id"]) is False
 
-    # 2. Manual upload of the SAME ride, opted IN, via the ASYNC path.
+    # 2. Manual upload of the SAME ride, opted IN.
     r2 = ingest_activity(_USER, {
         "provider": "file", "provider_activity_id": None,
         "source": COMMUNITY_SOURCE, "sport": "mtb",
         "geometry_geojson": _MANUAL_GEO, "distance_m": 5030,
         "file_hash": "xsrc-async-manual",
         "activity_date": _DATE + timedelta(seconds=40),
-    }, contribute_heatmap=True, skip_heat_computation=True)
+    }, contribute_heatmap=True)
     assert r2["status"] == "promoted"
     assert r2["activity_id"] == r1["activity_id"]
     # The promoted row adopts the manual upload's opt-IN intent.
     assert _contribute_of(r1["activity_id"]) is True
+    assert _community_rows() == 1
 
 
 def test_promotion_then_reupload_is_idempotent():
     _ingest_strava()
     r2 = _ingest_manual(file_hash="xsrc-manual-dup")
     assert r2["status"] == "promoted"
-    edges_after_promotion = _count_edges()
+    assert _community_rows() == 1
 
     # Re-uploading the same manual file → file-hash dedup, no new row, no
     # inflation of the community count.
     r3 = _ingest_manual(file_hash="xsrc-manual-dup")
     assert r3["status"] == "already_exists"
     assert _count_activities() == 1
-    assert _count_edges() == edges_after_promotion
+    assert _community_rows() == 1

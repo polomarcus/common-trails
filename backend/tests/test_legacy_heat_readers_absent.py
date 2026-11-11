@@ -1,47 +1,10 @@
-"""Non-regression: the last readers of ``heat_edges`` / ``heat_edges_agg`` must
-NOT fail when those LEGACY tables are ABSENT (raw-trace pivot 2026-07-29 — the
-community map is the static raw PMTiles; these read models are dropped in
-prod). Each test drives the REAL function with its DB dependency faked so the
-exact "relation does not exist" failure is reproduced (no live DB needed).
+"""Non-regression: the /admin heatmap panels are fail-soft — a missing /
+unreadable table degrades to nulls instead of 500-ing the dashboard.
 
 ``/readyz`` no longer reads any heatmap table — see ``test_health.py``.
 """
 
 
-# --------------------------------------------------------------------------
-# 1. ingest readers (their HTTP routes are gone; the functions remain until
-#    the matched code leaves ingest.py) — empty (no query) in raw mode.
-# --------------------------------------------------------------------------
-def test_get_heat_cells_aggregated_raw_mode_returns_empty(monkeypatch):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-
-    def _boom():
-        raise AssertionError("raw cell aggregation must not open a DB session")
-
-    monkeypatch.setattr("app.db.session.SessionLocal", _boom)
-
-    from app.services.ingest import get_heat_cells_aggregated
-
-    assert get_heat_cells_aggregated(sport="gravel", bbox=(3.0, 43.0, 4.0, 44.0)) == []
-
-
-def test_get_heat_edges_public_raw_mode_returns_empty(monkeypatch):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-
-    def _boom():
-        raise AssertionError("raw edge export must not open a DB session")
-
-    monkeypatch.setattr("app.db.session.SessionLocal", _boom)
-
-    from app.services.ingest import get_heat_edges_public
-
-    assert get_heat_edges_public(sport="road", bbox=(3.0, 43.0, 4.0, 44.0)) == []
-
-
-# --------------------------------------------------------------------------
-# 2. /admin heatmap panels — fail-soft: a missing / unreadable table degrades
-#    to nulls instead of 500-ing the dashboard.
-# --------------------------------------------------------------------------
 class _FakeDBEverythingRaises:
     def __init__(self):
         self.rolled_back = False

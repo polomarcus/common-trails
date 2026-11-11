@@ -6,26 +6,17 @@ This service lets the owner fix it, for one activity or a batch.
 
 What a change touches:
 
-1. ``activities.sport`` — the source of truth. In RAW display mode (prod since
-   the 2026-07-29 pivot) the PMTiles build reads ``activities.sport`` live, so
-   this is all the community layer needs once rebuilt.
-2. MATCHED mode only (legacy ``HEATMAP_DISPLAY_SOURCE != raw``): the activity's
-   ``heat_edge_contributors`` rows live under edge keys that embed the OLD sport
-   (``_edge_key``), i.e. in the old ``heat_edges`` partition. They are purged
-   (same recompute as GDPR deletion, ``purge_activity_heat``) and the trace is
-   re-written under the NEW sport with ``_update_heat_edges`` — then ONE
-   deduplicated ``heat_edges_agg`` refresh. Community-eligible rows only (the
-   only ones that ever wrote heat).
-3. Fires the debounced ``build-pmtiles`` rebuild (the same ping
+1. ``activities.sport`` — the source of truth. The PMTiles build reads
+   ``activities.sport`` live, so this is all the community layer needs once
+   rebuilt.
+2. Fires the debounced ``build-pmtiles`` rebuild (the same ping
    ``/imports/files`` uses) when at least one changed row is community-eligible
    — personal-only rows never reach the static display. Debounced because a
    user looping PATCH must not fire N expensive rebuild jobs.
 
 Derived caches deliberately NOT touched: ``display_coords`` (fingerprint =
 max-span / bbox / version) and ``display_geojson`` are pure functions of the
-geometry, never of the sport. The legacy ``heat_cells`` layer has no
-per-activity attribution (same limitation as deletion — see
-``activity_deletion``). ``/me/stats`` is computed live in SQL (no cache).
+geometry, never of the sport. ``/me/stats`` is computed live in SQL (no cache).
 
 ``sport_is_default`` (migration 0071): TRUE when the sport is only the generic
 default of an import ("Ride" → road with no finer signal). ANY owner action on
@@ -34,15 +25,12 @@ clears it: the rider has now said what the activity is.
 """
 
 import logging
-from datetime import UTC, datetime
 
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity
-from app.services.activity_deletion import purge_activity_heat
 from app.services.provenance import is_community_eligible
-from app.services.raw_trace_display import raw_display_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -86,56 +74,17 @@ def change_activities_sport(
             db.commit()
         return found_ids, []
 
-    matched_mode = not raw_display_enabled()
-    touched_ways: set[int] = set()
-    to_rewrite: list[tuple[str, str, datetime | None]] = []
     any_community = False
     for act in changed:
         old = act.sport
         act.sport = sport
-        eligible = _community_eligible(act)
-        any_community = any_community or eligible
-        if matched_mode and eligible:
-            touched_ways.update(purge_activity_heat(db, act.id))
-            to_rewrite.append((act.id, act.geometry_geojson, act.activity_date))
+        any_community = any_community or _community_eligible(act)
         logger.info("activity sport changed: id=%s user=%s %s -> %s", act.id, user_id, old, sport)
     changed_ids = [a.id for a in changed]
     db.commit()
 
-    if to_rewrite:
-        # Re-write the heat contributions under the NEW sport partition. Each
-        # call opens its own session + commits; the agg refresh is deferred
-        # into ONE deduplicated pass (archive-drain batching pattern).
-        from app.services.ingest import _maintain_heat_agg, _update_heat_edges
-
-        for aid, geojson, act_date in to_rewrite:
-            try:
-                _update_heat_edges(
-                    user_id,
-                    sport,
-                    geojson,
-                    activity_date=act_date or datetime.now(UTC),
-                    activity_id=aid,
-                    collect_touched_ways=touched_ways,
-                )
-            except Exception:  # noqa: BLE001 — sport change already committed
-                logger.warning("heat re-write failed after sport change: id=%s", aid, exc_info=True)
-        if touched_ways:
-            _maintain_heat_agg(db, sorted(touched_ways))
-
     if any_community:
-        try:
-            from app.services.run_jobs import (
-                build_pmtiles_debounce_ok,
-                trigger_build_pmtiles_job,
-            )
-
-            if build_pmtiles_debounce_ok():
-                trigger_build_pmtiles_job()
-            else:
-                logger.info("build-pmtiles trigger debounced after sport change")
-        except Exception:  # pragma: no cover - defense in depth
-            logger.warning("build-pmtiles trigger failed after sport change", exc_info=True)
+        _request_community_rebuild()
 
     return found_ids, changed_ids
 
@@ -165,20 +114,6 @@ def _refresh_my_heatmap_file(db: Session, user_id: str) -> None:
 
 
 # ── Default-sport activities ("Ride" → road with no finer signal) ───────────
-
-# Matched mode only: a ``from_default`` call that must CHANGE the sport of more
-# rows than this is refused (same ceiling as the explicit id list).
-DEFAULT_SPORT_MATCHED_MAX = 500
-
-
-class TooManyDefaultSportActivities(Exception):
-    """``from_default`` would re-write heat for too many activities at once
-    (matched display mode only)."""
-
-    def __init__(self, count: int) -> None:
-        super().__init__(count)
-        self.count = count
-
 
 def count_default_sport(db: Session, user_id: str) -> int:
     return int(
@@ -220,55 +155,13 @@ def resolve_default_sport(db: Session, user_id: str, sport: str) -> tuple[int, l
     """Apply ``sport`` to EVERY default-sport activity of ``user_id`` and clear
     their flag. Returns ``(matched, changed_ids)``.
 
-    RAW display mode (prod): nothing but ``activities.sport`` feeds the
-    community layer, so the whole set — thousands of rows — is ONE statement in
-    ONE transaction: no row is loaded, no geometry read. The "Ma heatmap"
-    staleness is bumped once (by the statement-level trigger when a sport
-    changed, by hand for a pure confirmation), its rebuild scheduled once, and
-    ONE debounced community rebuild is requested if a changed row is
-    community-eligible.
-
-    MATCHED mode (legacy): changing a sport re-writes the activity's heat
-    edges, which is slow and commits on its own. A pure confirmation (every
-    flagged row already has ``sport``) is still one UPDATE; otherwise the set
-    goes through ``change_activities_sport`` in ONE call — the id-list path,
-    same ceiling — and a larger set raises ``TooManyDefaultSportActivities``
-    BEFORE anything is written (the client then sends explicit id batches).
+    Nothing but ``activities.sport`` feeds the community layer, so the whole
+    set — thousands of rows — is ONE statement in ONE transaction: no row is
+    loaded, no geometry read. The "Ma heatmap" staleness is bumped once (by the
+    statement-level trigger when a sport changed, by hand for a pure
+    confirmation), its rebuild scheduled once, and ONE debounced community
+    rebuild is requested if a changed row is community-eligible.
     """
-    if raw_display_enabled():
-        return _resolve_default_sport_raw(db, user_id, sport)
-
-    ids = [
-        str(r[0])
-        for r in db.execute(
-            sa_text(
-                "SELECT id FROM activities WHERE user_id = :u AND sport_is_default "
-                "AND sport <> :s ORDER BY id"
-            ),
-            {"u": user_id, "s": sport},
-        ).fetchall()
-    ]
-    if len(ids) > DEFAULT_SPORT_MATCHED_MAX:
-        raise TooManyDefaultSportActivities(len(ids))
-    matched = 0
-    changed: list[str] = []
-    if ids:
-        found, changed = change_activities_sport(db, user_id, ids, sport)
-        matched = len(found)
-    confirmed = db.execute(
-        sa_text(
-            "UPDATE activities SET sport_is_default = false "
-            "WHERE user_id = :u AND sport_is_default AND sport = :s"
-        ),
-        {"u": user_id, "s": sport},
-    ).rowcount
-    if confirmed:
-        _refresh_my_heatmap_file(db, user_id)
-    db.commit()
-    return matched + int(confirmed or 0), changed
-
-
-def _resolve_default_sport_raw(db: Session, user_id: str, sport: str) -> tuple[int, list[str]]:
     from app.services import my_heatmap_files
     from app.services.provenance import community_eligible_conditions
 

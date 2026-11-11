@@ -1,4 +1,4 @@
-.PHONY: up down logs test test-slow test-golden e2e-import-real backend frontend dev dev-frontend lint format dfci-download dfci-extract dfci-upload pmtiles heatmap-status gcp-precheck
+.PHONY: up down logs test test-slow e2e-import-real backend frontend dev dev-frontend lint format dfci-download dfci-extract dfci-upload pmtiles heatmap-status gcp-precheck
 
 ## GOLDEN RULE: any GCP action must verify BOTH gcloud config AND ADC
 ## (Application Default Credentials — what terraform/gsutil/google-cloud
@@ -105,9 +105,8 @@ prod-import-gpx: gcp-precheck
 	kill $$PROXY_PID 2>/dev/null || true ; \
 	exit $${EXIT:-0}
 
-## Import a local Strava bulk export into prod ``activities`` (and
-## downstream heat_edges via the ingest pipeline). Cloud-sql-proxy
-## pattern: parse runs locally in the backend
+## Import a local Strava bulk export into prod ``activities``.
+## Cloud-sql-proxy pattern: parse runs locally in the backend
 ## container, INSERTs go over the proxy to prod db-f1-micro.
 ##
 ## Required: USER_ID=<uuid of the prod user that owns these activities>.
@@ -115,9 +114,6 @@ prod-import-gpx: gcp-precheck
 ##
 ## Strava export folder is ./data/strava-export on the host (already
 ## bind-mounted at /strava-export inside the backend container, ro).
-##
-## ~1400 activities with the in-process spatial/HMM matcher = ~30 min.
-## ingest_activity does inline heat compute via the in-process matcher.
 ##
 ## Idempotent: re-running with same files is a no-op (file_hash dedup).
 prod-import-strava: gcp-precheck
@@ -132,8 +128,6 @@ prod-import-strava: gcp-precheck
 	echo "→ importing /strava-export → prod (user_id=$(USER_ID))…" ; \
 	docker compose exec -T \
 	    -e DATABASE_URL="postgresql://api:$$DB_PWD@host.docker.internal:5433/common_trails" \
-	    -e SKIP_OSM_FETCH=true \
-	    -e SKIP_MATVIEW_REFRESH=true \
 	    -e SKIP_PMTILES_REBUILD=true \
 	    backend python -m scripts.import_strava_export /strava-export --user-id $(USER_ID) || EXIT=$$? ; \
 	kill $$PROXY_PID 2>/dev/null || true ; \
@@ -157,10 +151,8 @@ down:
 ## Hours-of-debugging trap (May 2026). The pipe-to-stdout below uses
 ## ``cat ... > host_file``, which truncates and writes the existing
 ## inode — the container picks up the new bytes immediately.
-## --min-uc tracks the K-anonymity floor (HEATMAP_K_ANONYMITY in the backend
-## container's env: 1 in dev compose for full visibility, default 2 in prod).
-## Without it, build_pmtiles' argparse default (1) published single-user
-## OSM-matched edges into the static binary — a K-anon bypass (June 2026 audit).
+## --min-uc only stamps stats.json (min_uc); the render floor is
+## HEATMAP_MIN_USERS.
 pmtiles:
 	docker compose exec -T backend sh -c 'python -m app.jobs.build_pmtiles --output-dir /tmp --min-uc "$${HEATMAP_K_ANONYMITY:-2}"'
 	docker compose exec -T backend cat /tmp/heatmap-display.pmtiles > frontend/public/heatmap-display.pmtiles
@@ -180,9 +172,8 @@ heatmap-status:
 	@docker compose exec -T db psql -U postgres -d common_trails -tAc " \
 	  SELECT 'activities: ' || COUNT(*) || ' rows, latest=' || \
 	         COALESCE(MAX(created_at)::text, 'never') FROM activities; \
-	  SELECT 'heat_edges: ' || COUNT(*) || ' rows' FROM heat_edges; \
-	  SELECT 'distinct contributors: ' || COUNT(DISTINCT user_id_hash) \
-	    FROM heat_edge_contributors;"
+	  SELECT 'community contributors: ' || COUNT(DISTINCT user_id) \
+	    FROM activities WHERE contribute_heatmap AND source = 'manual_upload';"
 	@echo
 	@echo "── Frontend artefacts ──────────────────────"
 	@if [ -f frontend/public/heatmap-display.pmtiles ]; then \
@@ -225,52 +216,6 @@ test-slow:
 e2e-import-real:
 	@test -n "$(ARCHIVE)" || { echo "usage: make e2e-import-real ARCHIVE=/path/to/export.zip"; exit 2; }
 	REDROP=$(REDROP) scripts/e2e-import-real.sh "$(ARCHIVE)"
-
-## Run the GOLDEN + SLOW tests against the DEV stack (real occitanie OSM PBF
-## in osm_road_edges + data/ mounted). These pin the ingestion → heatmap
-## quality invariants (continuity, per-point osm_way_id, pass_count
-## accumulation, K-anonymity, corpus aggregate) and SKIP under `make test`
-## (which uses the clean .env.test DB with no PBF). `-ra` prints the skip
-## reasons so a missing PBF is VISIBLE, never a silent green.
-##
-## Prereqs: `make up` (stack running) + an `osm_road_edges` substrate already
-## in the dev DB. The OSM import CLI was removed with the matched pipeline, so
-## on a fresh DB these goldens report "skipped (needs PBF)" — a skip is NOT a
-## pass. They leave with the matched ingest code.
-test-golden:
-	@docker compose ps backend 2>/dev/null | grep -qiE "up|running" || { \
-	  echo "✗ backend not running — run 'make up' first"; exit 1; }
-	docker compose run --rm --no-deps \
-	    -v "$(PWD)/data:/app/data:ro" \
-	    backend pytest -ra -m "golden or slow" tests/
-
-## Restore the "clean continuous heatmap from Paul's rides" local state in
-## ~2 min (single-user, realistic pass_counts, built pmtiles)
-## instead of the ~1.5h wipe→import→rebuild. Use this any time the local DB
-## got polluted (multi-user demo data) or you just want the known-good state
-## back. Snapshot lives in data/clean-snapshot/. See the
-## reference_clean_local_heatmap_snapshot memory.
-heatmap-restore:
-	bash scripts/restore-clean-heatmap.sh
-
-## Re-capture the clean snapshot FROM the current DB + built artifacts
-## (after you've intentionally improved the clean state). Overwrites
-## data/clean-snapshot/.
-heatmap-snapshot:
-	@mkdir -p data/clean-snapshot
-	# heat_edges is PARTITIONED (heat_edges_road/_gravel/_mtb/...): the 'heat_edges*'
-	# glob captures the parent AND every child partition (the actual data lives in
-	# the children; -t heat_edges alone dumps an empty parent). heat_edge_contributors
-	# is listed separately (its name doesn't match the heat_edges* glob).
-	# heat_edges_agg (migration 0057) is DERIVED from heat_edges — EXCLUDE it
-	# (-T) so the snapshot stays lean; `make heatmap-restore` rebuilds it from
-	# the restored heat_edges (the 'heat_edges*' glob would otherwise also
-	# capture it, and restore doesn't truncate it → PK conflicts).
-	docker compose exec -T db pg_dump -U postgres -d common_trails --data-only \
-	  -t activities -t 'heat_edges*' -T heat_edges_agg -t heat_edge_contributors --no-owner \
-	  | gzip > data/clean-snapshot/clean-heatmap.sql.gz
-	cp frontend/public/heatmap-display.pmtiles data/clean-snapshot/
-	@echo "✅ Clean snapshot captured → data/clean-snapshot/ ($$(du -sh data/clean-snapshot | cut -f1))"
 
 ## Start backend stack only (db + backend)
 backend:

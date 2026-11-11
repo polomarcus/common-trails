@@ -53,10 +53,7 @@ from collections import Counter
 
 import sentry_sdk
 
-from app.jobs.ingest_pending_archives import (
-    _ingest_member_bytes,
-    _recompute_heat_agg_batched,
-)
+from app.jobs.ingest_pending_archives import _ingest_member_bytes
 from app.services import archive_intake
 
 log = logging.getLogger("founder_import")
@@ -83,7 +80,6 @@ def import_founder_archive(
     pace_seconds: float = 0.1,
     dry_run: bool = False,
     contribute_heatmap: bool = True,
-    skip_heat_computation: bool = False,
 ) -> dict:
     """Ingest every ingestible member of ``bucket_key`` for ``user_id`` as a
     consented ``manual_upload`` community contribution.
@@ -122,10 +118,6 @@ def import_founder_archive(
     if size is not None and size > archive_intake.MAX_ARCHIVE_BYTES:
         raise ValueError(archive_intake.too_large_message(size))
 
-    # Same archive-scale batching as the paced drain (2026-07-20 incident):
-    # defer the per-activity heat_edges_agg recompute, run ONE deduplicated
-    # batch at the end — even when members failed mid-way.
-    touched_ways: set[int] = set()
     db = SessionLocal()
     try:
         if not dry_run:
@@ -179,8 +171,6 @@ def import_founder_archive(
                         resolved_sport=resolved_sport,
                         contribute_heatmap=contribute_heatmap,
                         source=archive_intake.ARCHIVE_PROVENANCE,
-                        skip_heat_computation=skip_heat_computation,
-                        collect_touched_ways=touched_ways,
                         fallback_date=csv_dates.get(name),
                     )
                     if outcome == "imported":
@@ -197,7 +187,6 @@ def import_founder_archive(
                     log.error("member %s failed to ingest", name, exc_info=True)
     finally:
         db.close()
-        _recompute_heat_agg_batched(touched_ways)
 
     summary["skipped_reasons"] = dict(summary["skipped_reasons"])
     return summary
@@ -258,12 +247,6 @@ def main() -> int:
         help="Seconds to pause between members (default: 0.1).",
     )
     parser.add_argument(
-        "--skip-heat-computation",
-        action="store_true",
-        help="Store activities without computing heat inline (rebuild heatmap "
-        "as a separate ops step). Off by default.",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Stream + count members WITHOUT recording consent or writing "
@@ -280,7 +263,6 @@ def main() -> int:
             locale=args.locale,
             pace_seconds=args.pace,
             dry_run=args.dry_run,
-            skip_heat_computation=args.skip_heat_computation,
         )
     except Exception as exc:
         sentry_sdk.capture_exception(exc)

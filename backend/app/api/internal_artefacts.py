@@ -13,11 +13,6 @@
     Cloud Tasks may retry on 5xx and we'd rather re-do work than wedge
     the queue.
 
-(The ``POST /internal/matview/refresh`` endpoint was removed in June 2026
-when the ``heat_edges_display`` materialized view was dropped — the live
-MVT tile endpoint now aggregates ``heat_edges`` directly at request time
-via the shared ``app.services.heat_aggregation`` builder.)
-
 Design / rationale: ``docs/prod-ingestion-flow.md`` and
 ``docs/migration-runbook.md``.
 """
@@ -73,11 +68,8 @@ def _rebuild_and_upload_pmtiles() -> dict[str, Any]:
         return {"ok": False, "error": f"import: {exc}"}
 
     target_dir = tempfile.mkdtemp(prefix="artefactrebuild_")
-    # min_uc MUST track the API's K-anonymity floor: this PMTiles binary is
-    # uploaded to the public artefacts bucket + served to browsers, so
-    # publishing at min_uc=1 leaked single-user OSM-matched edges while the
-    # API enforced K=2 (June 2026 audit S1). HEATMAP_K_ANONYMITY is 1 in dev
-    # compose (full visibility) and defaults to 2 in prod.
+    # min_uc is only stamped into stats.json now (the render floor is
+    # HEATMAP_MIN_USERS) — kept in step with HEATMAP_K_ANONYMITY as before.
     k_anon = int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
     try:
         try:

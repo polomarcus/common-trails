@@ -203,6 +203,35 @@ def test_build_job_asserts_heatmap_bucket(gcloud_calls):
     assert "HEATMAP_PUBLIC_BASE_URL=https://tiles.chemins-communs.fr" in env
 
 
+@pytest.mark.parametrize("job", [
+    "common-trails-ingest-pending-archives-prod",
+    "common-trails-build-pmtiles-prod",
+    "common-trails-resync-reminder-prod",
+])
+def test_job_env_carries_no_matched_pipeline_var(gcloud_calls, job):
+    """The matched pipeline is deleted: the env merged onto each job no longer
+    names its knobs — and still carries a well-formed KEY=VALUE list."""
+    env = _job_env_update(gcloud_calls, job)
+    for retired in ("OVERPASS_ENABLED", "HEATMAP_DISPLAY_SOURCE", "OSM_TILE_CACHE_MAX",
+                    "OSM_GRID_CACHE_MAX", "OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY"):
+        assert f"{retired}=" not in env, (job, retired)
+    assert not env.startswith(","), env
+    assert ",," not in env, env
+
+
+def test_drain_job_still_carries_its_load_bearing_env(gcloud_calls):
+    env = _job_env_update(gcloud_calls, "common-trails-ingest-pending-archives-prod")
+    for needed in (
+        "UPLOADS_BUCKET=common-trails-common-trails-uploads-prod",
+        "BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-prod",
+        "MAX_ARCHIVE_BYTES=2147483648",
+        "GCP_PROJECT=common-trails",
+        "GCP_REGION=europe-west1",
+        "INTERNAL_MY_HEATMAP_HANDLER_URL=",
+    ):
+        assert needed in env, needed
+
+
 def _find_deploy_workflow() -> Path | None:
     for parent in Path(__file__).resolve().parents:
         candidate = parent / ".github" / "workflows" / "deploy-gcp.yml"

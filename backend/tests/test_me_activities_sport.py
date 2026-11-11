@@ -15,7 +15,6 @@ from sqlalchemy import text as sa_text
 from app.db.session import SessionLocal
 from tests.test_me_activities_delete import (
     MISSING_ID,
-    _contrib_edge_keys,
     _register_second_user,
     _upload,
 )
@@ -115,44 +114,6 @@ class TestPatchSingle:
         assert resp.status_code == 200
         assert _sport(aid) == "mtb"
         fake.assert_not_called()
-
-    def test_matched_mode_moves_heat_to_new_sport_partition(self, client, auth_headers, monkeypatch):
-        """Legacy matched mode: the contributor rows (edge keys embed the sport)
-        must move from the old partition to the new one — not linger as
-        pollution of the old layer."""
-        monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-        aid = _new(client, auth_headers)
-        db = SessionLocal()
-        try:
-            before = _contrib_edge_keys(db, aid)
-        finally:
-            db.close()
-        assert before and all(k.startswith("gravel/") for k in before)
-
-        resp = client.patch(f"/me/activities/{aid}", headers=auth_headers, json={"sport": "mtb"})
-        assert resp.status_code == 200
-
-        db = SessionLocal()
-        try:
-            after = _contrib_edge_keys(db, aid)
-            # Old-sport edges left with NO contributor (orphans that would keep
-            # polluting the gravel layer). An edge may legitimately survive if
-            # another run's rider shares these random coords on the persistent
-            # test DB — so assert on orphans, not on existence.
-            orphans = db.execute(
-                sa_text(
-                    "SELECT COUNT(*) FROM heat_edges he WHERE he.edge_key = ANY(:k) "
-                    "AND NOT EXISTS (SELECT 1 FROM heat_edge_contributors c "
-                    "WHERE c.edge_key = he.edge_key)"
-                ),
-                {"k": before},
-            ).scalar()
-        finally:
-            db.close()
-        assert after and all(k.startswith("mtb/") for k in after)
-        # This activity no longer contributes anything to the old partition.
-        assert not set(after) & set(before)
-        assert orphans == 0
 
 
 class TestPatchBulk:

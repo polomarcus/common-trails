@@ -11,7 +11,7 @@ properties Paul must trust before running the prod one-off:
   (d) per-activity GDPR deletion still works on a reassigned activity;
   (e) the merge is idempotent and the one-off CLI is dry-run-safe.
 
-Uses the real Postgres test DB (activities, heat_edges, heat_edge_contributors).
+Uses the real Postgres test DB.
 """
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ from app.services.account_merge import (
     is_synthetic_account,
     merge_synthetic_account,
 )
-from app.services.ingest import heat_user_id_hash
 
 _STUB_STRAVA_ID = "strava_stub_user_42"
 _STUB_SYNTH_EMAIL = f"strava_{_STUB_STRAVA_ID}@strava.local"
@@ -63,53 +62,16 @@ def _mk_activity(
     return aid
 
 
-def _mk_heat_edge(db, *, edge_key: str, sport: str = "road", way_id: int | None = None) -> None:
-    db.execute(sa_text(
-        "INSERT INTO heat_edges (edge_key, sport, user_count, pass_count, "
-        "forward_count, backward_count, osm_way_id, geometry) VALUES "
-        "(:k, :s, 0, 0, 0, 0, :w, ST_GeomFromText('LINESTRING(3.8 43.6, 3.81 43.61)', 4326)) "
-        "ON CONFLICT (edge_key, sport) DO NOTHING"
-    ), {"k": edge_key, "s": sport, "w": way_id})
-
-
-def _add_contrib(db, *, edge_key: str, user_id: str, activity_id: str) -> None:
-    db.execute(sa_text(
-        "INSERT INTO heat_edge_contributors (edge_key, user_id_hash, activity_id) "
-        "VALUES (:k, :h, :a) ON CONFLICT DO NOTHING"
-    ), {"k": edge_key, "h": heat_user_id_hash(user_id), "a": activity_id})
-
-
-def _recount_edge(db, edge_key: str) -> None:
-    db.execute(sa_text(
-        "UPDATE heat_edges SET user_count = sub.uc, pass_count = sub.pc FROM "
-        "(SELECT edge_key, COUNT(DISTINCT user_id_hash) uc, COUNT(*) pc "
-        " FROM heat_edge_contributors WHERE edge_key = :k GROUP BY edge_key) sub "
-        "WHERE heat_edges.edge_key = :k"
-    ), {"k": edge_key})
-
-
-def _edge_counts(db, edge_key: str) -> tuple[int, int]:
-    row = db.execute(sa_text(
-        "SELECT user_count, pass_count FROM heat_edges WHERE edge_key = :k"
-    ), {"k": edge_key}).fetchone()
-    return (row[0], row[1]) if row else (0, 0)
-
-
 @pytest.fixture
 def db():
     s = SessionLocal()
     created_users: list[str] = []
-    created_edges: list[str] = []
-    # expose collectors so tests can register for cleanup
+    # expose the collector so tests can register for cleanup
     s._created_users = created_users  # type: ignore[attr-defined]
-    s._created_edges = created_edges  # type: ignore[attr-defined]
     try:
         yield s
     finally:
         s.rollback()
-        for ek in created_edges:
-            s.execute(sa_text("DELETE FROM heat_edge_contributors WHERE edge_key = :k"), {"k": ek})
-            s.execute(sa_text("DELETE FROM heat_edges WHERE edge_key = :k"), {"k": ek})
         for uid in created_users:
             s.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": uid})
             s.execute(sa_text("DELETE FROM contribution_consents WHERE user_id = :u"), {"u": uid})
@@ -270,12 +232,7 @@ def test_gdpr_delete_after_merge(db):
     survivor = _mk_user(db, email=f"real_{athlete}@example.com", password="hash")
     synth = _mk_user(db, email=_synthetic_email(athlete), password=None)
     db._created_users += [survivor, synth]
-    edge = f"test-merge-gdpr-{athlete}"
-    db._created_edges.append(edge)
     aid = _mk_activity(db, user_id=synth, source="manual_upload", provider="gpx")
-    _mk_heat_edge(db, edge_key=edge, way_id=None)
-    _add_contrib(db, edge_key=edge, user_id=synth, activity_id=aid)
-    _recount_edge(db, edge)
     db.commit()
 
     merge_synthetic_account(db, survivor, synth, commit=True)
@@ -283,51 +240,44 @@ def test_gdpr_delete_after_merge(db):
     assert db.execute(sa_text("SELECT user_id FROM activities WHERE id = :a"),
                       {"a": aid}).scalar() == survivor
 
-    # GDPR delete keyed on the SURVIVOR now succeeds and cleans heat.
+    # GDPR delete keyed on the SYNTHETIC id no longer matches anything…
+    assert delete_user_activity(db, synth, aid) is False
+    # …and keyed on the SURVIVOR it succeeds.
     assert delete_user_activity(db, survivor, aid) is True
     assert db.execute(sa_text("SELECT 1 FROM activities WHERE id = :a"),
                       {"a": aid}).scalar() is None
-    assert db.execute(sa_text(
-        "SELECT COUNT(*) FROM heat_edge_contributors WHERE activity_id = :a"),
-        {"a": aid}).scalar() == 0
-    # Edge with zero remaining contributors is gone.
-    assert db.execute(sa_text("SELECT 1 FROM heat_edges WHERE edge_key = :k"),
-                      {"k": edge}).scalar() is None
 
 
-# ── K-anonymity: two former accounts collapse to ONE contributor hash ────────
+# ── Distinct-user floor: two former accounts count as ONE contributor ────────
 
-def test_kanon_hash_collapses_on_merge(db):
+def test_merged_accounts_count_as_one_contributor(db):
+    """The community build counts DISTINCT ``activities.user_id`` (the
+    ``HEATMAP_MIN_USERS`` floor + the contributors banner): after a merge the
+    same physical person must count ONCE, with both rides preserved."""
     athlete = uuid.uuid4().hex[:10]
     survivor = _mk_user(db, email=f"real_{athlete}@example.com", password="hash")
     synth = _mk_user(db, email=_synthetic_email(athlete), password=None)
     db._created_users += [survivor, synth]
-    edge = f"test-merge-kanon-{athlete}"
-    db._created_edges.append(edge)
-    _mk_heat_edge(db, edge_key=edge)
-    # Same edge contributed by BOTH accounts on DIFFERENT (non-duplicate) rides.
+    # DIFFERENT (non-duplicate) rides on the two accounts.
     surv_act = _mk_activity(db, user_id=survivor, source="manual_upload",
                             provider="gpx", when=datetime(2024, 1, 1, tzinfo=UTC),
                             distance_m=1000.0)
     synth_act = _mk_activity(db, user_id=synth, source="manual_upload",
                              provider="gpx", when=datetime(2024, 6, 1, tzinfo=UTC),
                              distance_m=2000.0)
-    _add_contrib(db, edge_key=edge, user_id=survivor, activity_id=surv_act)
-    _add_contrib(db, edge_key=edge, user_id=synth, activity_id=synth_act)
-    _recount_edge(db, edge)
     db.commit()
-    assert _edge_counts(db, edge) == (2, 2)  # two distinct hashes pre-merge
+
+    def _riders() -> tuple[int, int]:
+        row = db.execute(sa_text(
+            "SELECT COUNT(DISTINCT user_id), COUNT(*) FROM activities WHERE id IN (:a, :b)"
+        ), {"a": surv_act, "b": synth_act}).fetchone()
+        return int(row[0]), int(row[1])
+
+    assert _riders() == (2, 2)  # two distinct users pre-merge
 
     merge_synthetic_account(db, survivor, synth, commit=True)
 
-    uc, pc = _edge_counts(db, edge)
-    assert uc == 1, "one physical person must count ONCE toward K-anonymity"
-    assert pc == 2, "both passes preserved"
-    # All contributor rows now carry the survivor's hash.
-    hashes = {r[0] for r in db.execute(sa_text(
-        "SELECT DISTINCT user_id_hash FROM heat_edge_contributors WHERE edge_key = :k"),
-        {"k": edge})}
-    assert hashes == {heat_user_id_hash(survivor)}
+    assert _riders() == (1, 2), "one physical person counts ONCE; both rides kept"
 
 
 # ── (e) idempotent + noop guards ─────────────────────────────────────────────

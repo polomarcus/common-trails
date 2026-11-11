@@ -1,7 +1,7 @@
-"""Raw-trace display source (app.services.raw_trace_display) — flag + export.
+"""Raw-trace display source (app.services.raw_trace_display) — the export.
 
 Pins:
-  * ``HEATMAP_DISPLAY_SOURCE`` defaults to raw; ``matched`` is explicit (legacy).
+  * the build always runs the raw exporter (there is no other source);
   * raw export produces non-empty, frontend-shaped LineString features from
     seeded consented activities, with endpoint masking applied.
   * a trace shorter than 2 * mask contributes nothing (fully masked).
@@ -32,7 +32,6 @@ from app.services.raw_trace_display import (
     max_span_km,
     min_users,
     plausible_bbox,
-    raw_display_enabled,
 )
 
 LAT = 43.61
@@ -108,55 +107,24 @@ def _patch_build_side_effects(monkeypatch):
     monkeypatch.setattr(bp, "_upload_to_export_bucket", lambda *a, **k: None)
     monkeypatch.setattr(bp, "publish_stats_json", lambda *a, **k: {})
     monkeypatch.setattr(bp, "capture_heatmap_metrics_snapshot", lambda *a, **k: None)
-    monkeypatch.setattr(bp, "_emit_heat_quality_metrics", lambda *a, **k: None)
     monkeypatch.setattr(bp.os.path, "getsize", lambda _p: 0)
     monkeypatch.setattr(bp.os, "unlink", lambda _p: None)
     return bp
 
 
-def test_build_matched_mode_calls_matched_exporter(monkeypatch, tmp_path, matched_mode):
-    """Explicit ``matched`` (legacy) → build reads heat_edges_agg via
-    export_geojson, NEVER the raw exporter."""
+def test_build_calls_raw_exporter(monkeypatch, tmp_path):
     bp = _patch_build_side_effects(monkeypatch)
-    calls = {"matched": 0, "raw": 0}
-
-    def _fake_matched(db, path, *a, **k):
-        calls["matched"] += 1
-        open(path, "w").close()
-        return 0
+    calls = {"raw": 0}
 
     def _fake_raw(db, path, *a, **k):
         calls["raw"] += 1
         open(path, "w").close()
         return 0
 
-    monkeypatch.setattr(bp, "export_geojson", _fake_matched)
     monkeypatch.setattr("app.services.raw_trace_display.export_raw_geojson", _fake_raw)
 
     bp.main(str(tmp_path), 6, 15, 1)
-    assert calls == {"matched": 1, "raw": 0}
-
-
-def test_build_raw_mode_calls_raw_exporter(monkeypatch, tmp_path):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-    bp = _patch_build_side_effects(monkeypatch)
-    calls = {"matched": 0, "raw": 0}
-
-    def _fake_matched(db, path, *a, **k):
-        calls["matched"] += 1
-        open(path, "w").close()
-        return 0
-
-    def _fake_raw(db, path, *a, **k):
-        calls["raw"] += 1
-        open(path, "w").close()
-        return 0
-
-    monkeypatch.setattr(bp, "export_geojson", _fake_matched)
-    monkeypatch.setattr("app.services.raw_trace_display.export_raw_geojson", _fake_raw)
-
-    bp.main(str(tmp_path), 6, 15, 1)
-    assert calls == {"matched": 0, "raw": 1}
+    assert calls == {"raw": 1}
 
 
 _USER_A = "rawproto-user-a"
@@ -273,23 +241,6 @@ def test_masked_endpoints_never_counted_toward_gate(monkeypatch, seeded_two_user
         assert cell_lat < true_end_lat - 15 * STEP + deg
         # And the interior really has both users (proves counting works).
         assert riders == {_USER_A, _USER_B}
-
-
-def test_flag_defaults_to_raw(monkeypatch):
-    """Raw is the default (unset / empty); only an explicit ``matched`` selects
-    the legacy pipeline."""
-    monkeypatch.delenv("HEATMAP_DISPLAY_SOURCE", raising=False)
-    assert raw_display_enabled() is True
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "")
-    assert raw_display_enabled() is True
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-    assert raw_display_enabled() is False
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", " Matched ")
-    assert raw_display_enabled() is False
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-    assert raw_display_enabled() is True
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "RAW")
-    assert raw_display_enabled() is True
 
 
 def test_lattice_default_is_memory_bounded_but_still_fine(monkeypatch):
@@ -540,7 +491,6 @@ def test_build_zero_features_skips_tippecanoe_gracefully(monkeypatch, tmp_path):
     the build: tippecanoe aborts on empty input, so main() skips it + the upload
     and leaves the published tileset untouched. Regression for the prod-flip
     edge case (fix: build_pmtiles.main 0-feature guard)."""
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
     bp = _patch_build_side_effects(monkeypatch)
     calls = {"tippecanoe": 0, "upload": 0}
 

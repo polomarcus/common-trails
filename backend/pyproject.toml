@@ -73,7 +73,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "golden: end-to-end ingestion goldens that need the local occitanie OSM PBF in osm_road_edges; auto-skipped when absent (CI has no PBF). Run locally.",
 ]
 
 [tool.ruff]
