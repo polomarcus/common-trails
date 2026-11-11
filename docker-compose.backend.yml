@@ -24,10 +24,6 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-common_trails}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-production}
       TEST_MODE: ${TEST_MODE:-false}
-      ENABLE_STRAVA_INTEGRATION: ${ENABLE_STRAVA_INTEGRATION:-false}
-      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
-      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
-      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:8787/integrations/strava/callback}
       RATELIMIT_ENABLED: ${RATELIMIT_ENABLED:-false}
       SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
       HEATMAP_K_ANONYMITY: ${HEATMAP_K_ANONYMITY:-1}

@@ -48,7 +48,6 @@ services:
       ROUTING_EXTERNAL: ${ROUTING_EXTERNAL:-false}
       SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
       SKIP_OSM_ENRICHMENT: ${SKIP_OSM_ENRICHMENT:-true}
-      ENABLE_STRAVA_INTEGRATION: ${ENABLE_STRAVA_INTEGRATION:-true}
       ENABLE_GARMIN_INTEGRATION: ${ENABLE_GARMIN_INTEGRATION:-true}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3787}
       # Heatmap export (PRD #391). In prod set HEATMAP_GCS_BUCKET to the
@@ -58,9 +57,6 @@ services:
       # resolves against the backend origin and 404s).
       HEATMAP_GCS_BUCKET: ${HEATMAP_GCS_BUCKET:-}
       HEATMAP_DEV_PMTILES_URL: ${HEATMAP_DEV_PMTILES_URL:-http://localhost:3787/heatmap-display.pmtiles}
-      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
-      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
-      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:8787/integrations/strava/callback}
       GARMIN_CLIENT_ID: ${GARMIN_CLIENT_ID:-}
       GARMIN_CLIENT_SECRET: ${GARMIN_CLIENT_SECRET:-}
       GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-http://localhost:8787/integrations/garmin/callback}
