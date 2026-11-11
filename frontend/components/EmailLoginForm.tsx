@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useI18n } from '@/lib/i18n';
 import { requestMagicLink } from '@/lib/email-auth';
 
@@ -12,8 +12,16 @@ import { requestMagicLink } from '@/lib/email-auth';
  * `variant` tunes colors for the two surfaces:
  *  - 'dark'  (default) — on the dark home/strava cards (light text).
  *  - 'light' — on a white card.
+ *
+ * `intro` is the host's heading/pitch above the form ("Créer un compte…"). It
+ * is rendered HERE so it disappears once the link is sent: the card then shows
+ * only "Vérifiez votre boîte mail" (Paul, 2026-11-11 — the leftover pitch
+ * above the confirmation read as clutter).
  */
-export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' | 'light' }) {
+export default function EmailLoginForm({ variant = 'dark', intro }: {
+  variant?: 'dark' | 'light';
+  intro?: ReactNode;
+}) {
   const { t, locale } = useI18n();
   const [email, setEmail] = useState('');
   const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error' | 'rateLimited'>('idle');
@@ -59,6 +67,8 @@ export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' 
   }
 
   return (
+    <>
+    {intro}
     <form onSubmit={submit} data-testid="email-login-form" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <input
         type="email"
@@ -94,5 +104,6 @@ export default function EmailLoginForm({ variant = 'dark' }: { variant?: 'dark' 
         {state === 'sending' ? t('emailAuth.sending') : t('emailAuth.sendBtn')}
       </button>
     </form>
+    </>
   );
 }

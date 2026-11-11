@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
@@ -23,7 +23,7 @@ const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
 // ── Auth Section (slide-in panel) ─────────────────────────────────────────────
 
-function AuthSection({ onLogin }: { onLogin: (token: string) => void }) {
+function AuthSection({ onLogin, header }: { onLogin: (token: string) => void; header?: ReactNode }) {
   const { t, locale } = useI18n();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
@@ -73,9 +73,13 @@ function AuthSection({ onLogin }: { onLogin: (token: string) => void }) {
     <div>
       {/* Passwordless magic-link — the primary path (create account or log in). */}
       <div style={{ marginBottom: 16 }}>
-        <p style={{ color: '#fff', fontSize: 14, fontWeight: 700, margin: '0 0 2px' }}>{t('emailAuth.title')}</p>
-        <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12, margin: '0 0 12px' }}>{t('emailAuth.subtitle')}</p>
-        <EmailLoginForm variant="dark" />
+        <EmailLoginForm variant="dark" intro={
+          <>
+            {header}
+            <p style={{ color: '#fff', fontSize: 14, fontWeight: 700, margin: '0 0 2px' }}>{t('emailAuth.title')}</p>
+            <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12, margin: '0 0 12px' }}>{t('emailAuth.subtitle')}</p>
+          </>
+        } />
       </div>
       {/* Legacy email+password login — DEV ONLY. Public auth is magic-link only
           (real accounts are passwordless); the backend /auth/login stays for the
@@ -688,11 +692,13 @@ export default function HomePage() {
             animation: 'heroSlideUp 0.3s ease both',
             pointerEvents: 'auto',
           }}>
-            <div style={{ marginBottom: 14 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#fff', margin: '0 0 4px' }}>{t('home.hero.join')}</h3>
-              <p style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.55)', margin: 0, lineHeight: 1.5 }}>{t('home.hero.joinSub')}</p>
-            </div>
-            <AuthSection onLogin={handleLogin} />
+            {/* The pitch is the form's `intro`: gone once the link is sent. */}
+            <AuthSection onLogin={handleLogin} header={
+              <div style={{ marginBottom: 14 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 800, color: '#fff', margin: '0 0 4px' }}>{t('home.hero.join')}</h3>
+                <p style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.55)', margin: 0, lineHeight: 1.5 }}>{t('home.hero.joinSub')}</p>
+              </div>
+            } />
           </div>
         )}
       </div>

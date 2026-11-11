@@ -47,6 +47,19 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
     { href: '/calque', label: t('nav.overlay') },
   ];
 
+  // Signed out, "Se connecter" links to the home — where the login form lives.
+  // Already ON a page with that form (the home), the link went nowhere and the
+  // button looked dead (Paul, 2026-11-11): bring the form into view and focus
+  // its email field instead.
+  const focusLoginForm = (e: React.MouseEvent) => {
+    if (isLoggedIn) return;
+    const input = document.querySelector<HTMLInputElement>('[data-testid="email-login-input"]');
+    if (!input) return; // no form on this page → follow the link to the home
+    e.preventDefault();
+    input.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    input.focus({ preventScroll: true });
+  };
+
   useEffect(() => {
     try {
       const userId = typeof window !== 'undefined' ? localStorage.getItem('user_id') : null;
@@ -224,7 +237,7 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
         {/* RIGHT: Account / Login. Signed in → /map (their own heatmap; with no
             import yet the map shows an empty-state card linking to /strava),
             never the import page (Paul, 2026-11-11). */}
-        <Link href={isLoggedIn ? '/map' : '/'} data-testid="topnav-account" style={{
+        <Link href={isLoggedIn ? '/map' : '/'} data-testid="topnav-account" onClick={focusLoginForm} style={{
           padding: '3px 10px',
           background: '#2d6a4f',
           color: '#fff',
