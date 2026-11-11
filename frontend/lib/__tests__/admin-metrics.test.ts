@@ -3,8 +3,6 @@ import {
   ageMs,
   freshnessLevel,
   relativeParts,
-  resyncLevel,
-  stravaLevel,
   sparklinePoints,
   sparklinePath,
   FRESHNESS_THRESHOLDS,
@@ -44,29 +42,6 @@ describe('relativeParts', () => {
     expect(relativeParts(5 * 60_000)).toEqual({ unit: 'min', value: 5 });
     expect(relativeParts(3 * 3600_000)).toEqual({ unit: 'h', value: 3 });
     expect(relativeParts(2 * 24 * 3600_000)).toEqual({ unit: 'd', value: 2 });
-  });
-});
-
-describe('resyncLevel', () => {
-  it('maps job status to chip level', () => {
-    expect(resyncLevel(null)).toBe('unknown');
-    expect(resyncLevel('COMPLETED')).toBe('green');
-    expect(resyncLevel('running')).toBe('amber');
-    expect(resyncLevel('PENDING')).toBe('amber');
-    expect(resyncLevel('FAILED')).toBe('red');
-  });
-});
-
-describe('stravaLevel', () => {
-  it('unknown when nobody connected', () => {
-    expect(stravaLevel({ strava_connected: 0, strava_sync_failures: 0, strava_reconnect_required: false })).toBe('unknown');
-  });
-  it('green when connected + clean', () => {
-    expect(stravaLevel({ strava_connected: 1, strava_sync_failures: 0, strava_reconnect_required: false })).toBe('green');
-  });
-  it('amber on failures, red on reconnect required', () => {
-    expect(stravaLevel({ strava_connected: 1, strava_sync_failures: 2, strava_reconnect_required: false })).toBe('amber');
-    expect(stravaLevel({ strava_connected: 1, strava_sync_failures: 5, strava_reconnect_required: true })).toBe('red');
   });
 });
 

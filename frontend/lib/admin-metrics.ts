@@ -24,13 +24,6 @@ export interface Freshness {
   last_activity_date: string | null;
   heat_agg_updated_at: string | null;
   heat_edges_agg: number;
-  last_resync_at: string | null;
-  last_resync_status: string | null;
-  strava_connected: number;
-  strava_sync_failures: number;
-  strava_reconnect_required: boolean;
-  reconnect_threshold: number;
-  webhook_subscription_present: boolean;
 }
 
 export interface HeatmapMetricsResponse {
@@ -68,8 +61,6 @@ export const FRESHNESS_THRESHOLDS = {
   rebuild: { amber: DAY, red: 7 * DAY },
   // Last activity ingested: amber after 3 days, red after 2 weeks.
   activity: { amber: 3 * DAY, red: 14 * DAY },
-  // Last resync run: amber after 2 days, red after a week.
-  resync: { amber: 2 * DAY, red: 7 * DAY },
 } as const;
 
 /**
@@ -84,29 +75,6 @@ export function relativeParts(age: number | null): { unit: 'never' | 'now' | 'mi
   const hours = Math.floor(age / HOUR);
   if (hours < 24) return { unit: 'h', value: hours };
   return { unit: 'd', value: Math.floor(age / DAY) };
-}
-
-/** Resync-status chip: red on FAILED, amber on RUNNING/PENDING, green on COMPLETED. */
-export function resyncLevel(status: string | null): ChipLevel {
-  if (!status) return 'unknown';
-  const s = status.toUpperCase();
-  if (s === 'FAILED') return 'red';
-  if (s === 'RUNNING' || s === 'PENDING') return 'amber';
-  if (s === 'COMPLETED') return 'green';
-  return 'unknown';
-}
-
-/**
- * Strava-sync chip: red once reconnect is required, amber on any accumulated
- * failure, green when connected + clean, unknown when nobody is connected.
- */
-export function stravaLevel(
-  f: Pick<Freshness, 'strava_reconnect_required' | 'strava_sync_failures' | 'strava_connected'>,
-): ChipLevel {
-  if (f.strava_connected <= 0) return 'unknown';
-  if (f.strava_reconnect_required) return 'red';
-  if (f.strava_sync_failures > 0) return 'amber';
-  return 'green';
 }
 
 export interface Point { x: number; y: number }

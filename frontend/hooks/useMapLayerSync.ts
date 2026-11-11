@@ -3,8 +3,6 @@
 import { useEffect } from 'react';
 import { SPORT_COLORS } from '@/lib/constants';
 import { WAYMARKED_LAYERS } from '@/lib/basemap-styles';
-import { API_URL } from '@/lib/api-client';
-import { getToken } from '@/lib/auth';
 import { getTrackBbox, activityDisplayGeometry } from '@/lib/map-utils';
 import { applyUserTraceOpacity } from '@/lib/user-traces-layers';
 import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
@@ -36,12 +34,6 @@ export function useMapLayerSync(params: {
   editParentRoute: any; // eslint-disable-line @typescript-eslint/no-explicit-any
   routeVariants: any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
   visibleVariantIds: Set<string>;
-  photoData: any; // eslint-disable-line @typescript-eslint/no-explicit-any
-  setPhotoData: (v: any) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
-  setLightboxPhotos: (v: any[]) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
-  setLightboxPhoto: (v: any) => void; // eslint-disable-line @typescript-eslint/no-explicit-any
-  photoMarkersRef: React.MutableRefObject<any[]>; // eslint-disable-line @typescript-eslint/no-explicit-any
-  maplibreModuleRef: React.MutableRefObject<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   layersBeforeActivityRef: React.MutableRefObject<LayerToggles | null>;
   layersBeforeRouteRef: React.MutableRefObject<LayerToggles | null>;
   waymarkedBeforeRouteRef: React.MutableRefObject<WaymarkedToggles | null>;
@@ -59,9 +51,6 @@ export function useMapLayerSync(params: {
     loadCommunityHeatmap, loadDfciTrails,
     selectedActivity, viewedRoute, editParentRoute,
     routeVariants, visibleVariantIds,
-    photoData, setPhotoData,
-    setLightboxPhotos, setLightboxPhoto,
-    photoMarkersRef, maplibreModuleRef,
     layersBeforeActivityRef, layersBeforeRouteRef, waymarkedBeforeRouteRef,
     updateTraceMarkers, clearTraceMarkers,
     viewedSurface, viewedRouteProfileDataRef, routeTooltipRef,
@@ -267,124 +256,6 @@ export function useMapLayerSync(params: {
     m.setLayoutProperty('user-cells-fill', 'visibility', cellsVis);
     m.setLayoutProperty('user-cells-outline', 'visibility', cellsVis);
   }, [mapInstance, layers.myCells]);
-
-  // ── Photo layer toggle + fetch ────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapInstance || !layersReady.current) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const m = mapInstance as any;
-    const vis = layers.photos ? 'visible' : 'none';
-    if (m.getLayer('user-photos-clusters')) m.setLayoutProperty('user-photos-clusters', 'visibility', vis);
-    if (m.getLayer('user-photos-cluster-count')) m.setLayoutProperty('user-photos-cluster-count', 'visibility', vis);
-    if (m.getLayer('user-photos-point')) m.setLayoutProperty('user-photos-point', 'visibility', vis);
-    // Show/hide DOM markers
-    photoMarkersRef.current.forEach((marker: any) => {
-      marker.getElement().style.display = layers.photos ? 'block' : 'none';
-    });
-    // Fetch photos on first enable
-    if (layers.photos && !photoData) {
-      const token = getToken();
-      if (token) {
-        fetch(`${API_URL}/me/photos`, { credentials: 'include' })
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
-            if (data) {
-              setPhotoData(data);
-              m.getSource('user-photos')?.setData(data);
-            }
-          })
-          .catch(() => {});
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapInstance, layers.photos]);
-
-  // Update photo source data when photoData changes
-  useEffect(() => {
-    if (!mapInstance || !layersReady.current || !photoData) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const m = mapInstance as any;
-    m.getSource('user-photos')?.setData(photoData);
-
-    // Create/update DOM markers for unclustered photos
-    // Clean up existing markers
-    photoMarkersRef.current.forEach((marker: any) => marker.remove());
-    photoMarkersRef.current = [];
-
-    if (!layers.photos) return;
-
-    const allPhotos = photoData.features || [];
-    setLightboxPhotos(allPhotos);
-
-    // Listen for sourcedata to manage DOM photo markers
-    const updateMarkers = () => {
-      if (!m.getSource('user-photos') || !m.isSourceLoaded('user-photos')) return;
-
-      // Remove old markers
-      photoMarkersRef.current.forEach((marker: any) => marker.remove());
-      photoMarkersRef.current = [];
-
-      // Query unclustered features in current viewport
-      const features = m.querySourceFeatures('user-photos', {
-        filter: ['!', ['has', 'point_count']],
-      });
-
-      // Deduplicate by photo id
-      const seen = new Set<string>();
-      for (const f of features) {
-        const pid = f.properties?.id;
-        if (!pid || seen.has(pid)) continue;
-        seen.add(pid);
-
-        const el = document.createElement('div');
-        el.style.width = '48px';
-        el.style.height = '48px';
-        el.style.borderRadius = '50%';
-        el.style.border = '3px solid #fff';
-        el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-        el.style.overflow = 'hidden';
-        el.style.cursor = 'pointer';
-        el.style.backgroundImage = `url(${f.properties.url_thumb})`;
-        el.style.backgroundSize = 'cover';
-        el.style.backgroundPosition = 'center';
-
-        el.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const idx = allPhotos.findIndex((p: any) => p.properties?.id === pid);
-          const photo = allPhotos[idx >= 0 ? idx : 0];
-          if (photo) {
-            setLightboxPhoto({
-              url_medium: photo.properties.url_medium,
-              caption: photo.properties.caption,
-              activity_name: photo.properties.activity_name,
-              index: idx >= 0 ? idx : 0,
-            });
-          }
-        });
-
-        if (!maplibreModuleRef.current) continue;
-        const marker = new maplibreModuleRef.current.Marker({ element: el })
-          .setLngLat(f.geometry.coordinates)
-          .addTo(m);
-        photoMarkersRef.current.push(marker);
-      }
-    };
-
-    // Use a debounced approach: update markers on moveend and sourcedata
-    m.on('moveend', updateMarkers);
-    m.on('sourcedata', (e: any) => {
-      if (e.sourceId === 'user-photos' && e.isSourceLoaded) updateMarkers();
-    });
-    // Initial update
-    setTimeout(updateMarkers, 200);
-
-    return () => {
-      m.off('moveend', updateMarkers);
-      photoMarkersRef.current.forEach((marker: any) => marker.remove());
-      photoMarkersRef.current = [];
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapInstance, photoData, layers.photos]);
 
   // ── Highlight selected activity on the map ────────────────────────────────
 

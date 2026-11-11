@@ -42,12 +42,12 @@ import type { LayerToggles } from '@/hooks/useLayerToggles';
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 const INITIAL_LAYERS: LayerToggles = {
-  heatmap: true, dfci: true, myTraces: true, myCells: false, hillshade: false, photos: false,
+  heatmap: true, dfci: true, myTraces: true, myCells: false, hillshade: false,
 };
 
 let latestLayers: LayerToggles = INITIAL_LAYERS;
 
-function Harness({ menuOpen = false, isAdmin, activitiesLoading }: { menuOpen?: boolean; isAdmin?: boolean; activitiesLoading?: boolean } = {}) {
+function Harness({ menuOpen = false, isAdmin, activitiesLoading, moreLayers = false, userEmail = null }: { menuOpen?: boolean; isAdmin?: boolean; activitiesLoading?: boolean; moreLayers?: boolean; userEmail?: string | null } = {}) {
   const [layers, setLayers] = useState<LayerToggles>(INITIAL_LAYERS);
   latestLayers = layers;
   const noop = () => {};
@@ -56,7 +56,7 @@ function Harness({ menuOpen = false, isAdmin, activitiesLoading }: { menuOpen?: 
     waymarked: { hiking: false, cycling: false, mtb: false }, setWaymarked: noop,
     highContrast: false, setHighContrast: noop,
     showLayersMenu: true, setShowLayersMenu: noop,
-    showMoreLayers: false, setShowMoreLayers: noop,
+    showMoreLayers: moreLayers, setShowMoreLayers: noop,
     showBasemapMenu: false, setShowBasemapMenu: noop,
     basemapKey: 'ign', setBasemapKey: noop,
     layersMenuRef: React.createRef<HTMLDivElement>() as React.RefObject<HTMLDivElement>,
@@ -66,7 +66,7 @@ function Harness({ menuOpen = false, isAdmin, activitiesLoading }: { menuOpen?: 
     dfciCount: null,
     exploreMode: false, setExploreMode: noop,
     showUserMenu: menuOpen, setShowUserMenu: noop, isAdmin,
-    userEmail: null, stravaName: null, stravaSyncing: false, stravaSyncMsg: null, lastSyncedAt: null,
+    userEmail,
     handleLogout: noop, setShowImportModal: noop, setShowExportModal: noop,
     activitiesCount: 0, mapInstance: null, dateLocale: 'fr-FR', activitiesLoading,
   };
@@ -295,6 +295,49 @@ describe('MapToolbar — account menu "Admin" entry is admin-only', () => {
   it('shown for an admin', async () => {
     await act(async () => { root = createRoot(container); root.render(<Harness menuOpen isAdmin />); });
     expect(adminLink()).toBeDefined();
+  });
+});
+
+// Non-régression (2026-11) : la synchronisation Strava (connexion OAuth, sync
+// par l'API, photos Strava) est supprimée. Le produit n'ingère que des
+// fichiers déposés : ni calque « Photos Strava », ni entrée « Connecter /
+// Synchroniser Strava » dans le menu du compte.
+describe('MapToolbar — no Strava live-sync entry points', () => {
+  let container: HTMLDivElement;
+  let root: Root | null = null;
+
+  beforeEach(() => {
+    auth.token = 'cookie-auth';
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container.remove();
+  });
+
+  it('"Plus de calques" unfolded: no Strava photos toggle', async () => {
+    await act(async () => { root = createRoot(container); root.render(<Harness moreLayers />); });
+    // The unfolded section is really rendered (its other toggles are there)…
+    expect(container.querySelector('[data-testid="toggle-hillshade"]')).not.toBeNull();
+    // …without any photo layer.
+    expect(container.querySelector('[data-testid="toggle-photos"]')).toBeNull();
+    expect(container.textContent).not.toMatch(/photos/i);
+  });
+
+  it('account menu: file import is the only way in — no Strava connect / sync entry', async () => {
+    await act(async () => {
+      root = createRoot(container);
+      root.render(<Harness menuOpen userEmail="rider@example.org" />);
+    });
+    expect(container.querySelector('[data-testid="map-open-import"]')).not.toBeNull();
+    expect(container.textContent).toContain('rider@example.org');
+    // "export Strava" stays (a file the rider uploads); connecting or syncing
+    // an account does not.
+    expect(container.textContent).not.toMatch(/connecter strava|strava connect|synchronis|sync|compte de /i);
+    const hrefs = Array.from(container.querySelectorAll('a')).map((a) => a.getAttribute('href') ?? '');
+    expect(hrefs.some((h) => h.includes('/integrations/strava'))).toBe(false);
   });
 });
 
