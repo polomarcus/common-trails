@@ -265,8 +265,7 @@ class TestRawModeSkipsSpatialPresort:
         # FAILS pre-fix: the probe double-read → 4 loads for 2 members.
         assert self._run_drain(monkeypatch) == 2
 
-    def test_matched_mode_still_presorts(self, monkeypatch):
-        monkeypatch.delenv("HEATMAP_DISPLAY_SOURCE", raising=False)
+    def test_matched_mode_still_presorts(self, monkeypatch, matched_mode):
         # Legacy matched mode keeps the locality sort: probe + ingest loads.
         assert self._run_drain(monkeypatch) == 4
 

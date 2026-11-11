@@ -94,6 +94,7 @@ def _call_export(request: Request):
 
 
 class TestHeatmapExportGzip:
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_gzip_path_sets_encoding_and_is_smaller(self):
         _seed_cells(3)
 
@@ -116,6 +117,7 @@ class TestHeatmapExportGzip:
 
 
 class TestHeatmapExportCap:
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_unbounded_request_is_capped(self, monkeypatch):
         _seed_cells(3)
         # Force the cap below the seeded feature count — an unbounded/dense
@@ -129,6 +131,7 @@ class TestHeatmapExportCap:
         assert len(data["features"]) == 1
         assert "hint" in data["metadata"]
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_within_cap_not_truncated(self, monkeypatch):
         _seed_cells(3)
         monkeypatch.setattr(heatmap_api, "_EXPORT_MAX_FEATURES", 1000)

@@ -79,6 +79,7 @@ class TestHeatmapTrailsDirectionFields:
             f"&max_lon={_TEST_BBOX[2]}&max_lat={_TEST_BBOX[3]}"
         )
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_direction_fields_present(self, client):
         self._seed_edges()
         resp = self._query(client)
@@ -91,6 +92,7 @@ class TestHeatmapTrailsDirectionFields:
         assert "forward_count" in props
         assert "backward_count" in props
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_direction_values_correct(self, client):
         self._seed_edges()
         resp = self._query(client)
@@ -101,6 +103,7 @@ class TestHeatmapTrailsDirectionFields:
         assert props["backward_count"] == 1
         assert props["forward_count"] + props["backward_count"] == props["pass_count"]
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_direction_fields_default_zero(self, client):
         """Features without backward traversals should have backward_count=0."""
         # Different segment, still inside the test bbox — slight lat shift

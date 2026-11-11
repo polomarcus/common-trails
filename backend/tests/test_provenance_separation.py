@@ -103,6 +103,7 @@ class TestIngestGate:
             "strava_api activity must NOT write heat_edges (community layer)"
         )
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_manual_upload_feeds_community(self):
         before = _count_edges()
         r = ingest_activity(_USER, {
@@ -128,6 +129,7 @@ class TestIngestGate:
         assert r["status"] == "created"
         assert _count_edges() == before, "legacy NULL-source rows must not feed community"
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_public_read_reflects_only_community_contributions(self):
         # A strava_api ride writes nothing; a manual_upload ride writes edges.
         ingest_activity(_USER, {
@@ -167,6 +169,7 @@ class TestProcessHeatComputeGate:
         assert res["edges_indexed"] == 0
         assert _count_edges() == before
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_manual_upload_activity_computes(self):
         from app.api.internal_ingest import process_heat_compute
         r = ingest_activity(_USER, {

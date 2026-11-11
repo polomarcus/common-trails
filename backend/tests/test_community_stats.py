@@ -220,6 +220,7 @@ def test_km_fallback_excludes_non_community_activities():
         db.close()
 
 
+@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_km_network_dedup_and_min_uc_filter():
     """km = unique network km: dedupe by osm_way_id, filter user_count>=min_uc."""
     db = SessionLocal()

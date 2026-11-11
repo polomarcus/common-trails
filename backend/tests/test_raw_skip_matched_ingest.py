@@ -98,7 +98,7 @@ class TestRawSkipsMatchedIngest:
         assert _count_edges() == before, "raw mode must not write heat_edges"
 
     def test_matched_manual_upload_still_writes_heat_edges(self, monkeypatch):
-        """Control: matched mode (the default) is UNCHANGED — a community-eligible
+        """Control: explicit matched mode (legacy) is UNCHANGED — a community-eligible
         upload still feeds heat_edges. Proves the skip is raw-specific."""
         monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
         before = _count_edges()

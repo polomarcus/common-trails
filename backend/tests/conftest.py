@@ -42,6 +42,20 @@ def _reset_rate_limiter_and_cookies(client):
     limiter.enabled = False
 
 
+@pytest.fixture
+def matched_mode(monkeypatch):
+    """LEGACY PIPELINE — removed with slice D of the matched-pipeline deletion.
+
+    Raw is the default display source (``raw_display_enabled()``), like prod.
+    A test that still exercises the old matched pipeline (map-matching,
+    ``heat_edges``, live MVT tiles, K-anonymity read models) must select it
+    explicitly through this fixture; it is deleted together with the code it
+    covers. ``raw_display_enabled()`` reads the env on every call, so this
+    switches the real gate. Do NOT use it in a new test.
+    """
+    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
+
+
 # Hérault/Gard corridor the local golden GPX fixtures live in. ONE shared bbox
 # so every OSM-gated golden uses the SAME skip predicate (agent-C audit: today
 # the convention is ad-hoc per-test bbox isolation).
