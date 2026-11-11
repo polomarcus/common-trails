@@ -988,6 +988,20 @@ const en: Translations = {
   'map.activity.sportChange': 'Change this activity\'s sport',
   'map.activity.sportHint': 'Wrong sport at import? Fix it: the community heatmap will be updated.',
   'map.activity.sportError': 'Couldn\'t change the sport — please try again.',
+  'map.activity.sportDefault': 'default sport',
+  'map.activity.sportDefaultHint': 'Strava does not say which kind of bike ride this is: it is filed under Road by default. Pick the right sport.',
+  'map.defaultSport.notice': '{count} bike rides are filed under "Road" by default: Strava does not say which kind.',
+  'map.defaultSport.noticeOne': '1 bike ride is filed under "Road" by default: Strava does not say which kind.',
+  'map.defaultSport.cta': 'Re-classify them',
+  'map.defaultSport.dismiss': 'Close',
+  'map.defaultSport.title': 'Rides filed under "Road" by default',
+  'map.defaultSport.intro': 'Tick the gravel or MTB rides, choose their sport, then apply. The community heatmap will be updated.',
+  'map.defaultSport.selectAll': 'Select all ({count})',
+  'map.defaultSport.others': 'and {count} more',
+  'map.defaultSport.sportLabel': 'Re-classify as',
+  'map.defaultSport.apply': 'Apply ({count})',
+  'map.defaultSport.confirmRoad': 'These are road rides',
+  'map.defaultSport.error': 'The change failed — please try again.',
   // Activity photo strip
 
   // ── Overlay / heatmap in gpx.studio ───────────────────────────────────────

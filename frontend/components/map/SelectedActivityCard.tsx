@@ -19,15 +19,20 @@ interface SelectedActivityCardProps {
    * activity list + the "Ma heatmap" source in sync.
    */
   onSportChange?: (activityId: string, sport: string) => void;
+  /** Called once the PATCH succeeded (the default-sport count may have changed). */
+  onSportSaved?: (activityId: string) => void;
 }
 
-function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: SelectedActivityCardProps) {
+function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange, onSportSaved }: SelectedActivityCardProps) {
   const t = useT();
   // Local copy for the optimistic update; re-synced when another activity is
   // selected or the parent pushes a new sport.
   const [sport, setSport] = useState(activity.sport);
   const [saving, setSaving] = useState(false);
   const [sportError, setSportError] = useState(false);
+  // The sport is only the import's generic default ("Ride" → Route): shown as
+  // a hint until the rider picks one. Kept locally so a failed PATCH restores it.
+  const [sportIsDefault, setSportIsDefault] = useState(activity.sport_is_default === true);
   // Guards against a slow PATCH resolving after the user selected another trace.
   const currentIdRef = useRef(activity.id);
   useEffect(() => {
@@ -35,6 +40,9 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
     setSport(activity.sport);
     setSportError(false);
   }, [activity.id, activity.sport]);
+  useEffect(() => {
+    setSportIsDefault(activity.sport_is_default === true);
+  }, [activity.id, activity.sport_is_default]);
 
   const sportColor = SPORT_COLORS[sport] ?? '#2d6a4f';
   // A legacy/aliased stored sport (e.g. "offroad") stays selectable as the
@@ -47,16 +55,20 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
     const id = activity.id;
     const prev = sport;
     if (next === prev || saving) return;
+    const wasDefault = sportIsDefault;
     setSport(next);
+    setSportIsDefault(false);
     setSportError(false);
     setSaving(true);
     onSportChange?.(id, next);
     try {
       await updateActivitySport(id, next);
+      onSportSaved?.(id);
     } catch {
       onSportChange?.(id, prev);
       if (currentIdRef.current === id) {
         setSport(prev);
+        setSportIsDefault(wasDefault);
         setSportError(true);
       }
     } finally {
@@ -107,6 +119,18 @@ function SelectedActivityCard({ activity, dateLocale, onClose, onSportChange }: 
                 ))}
               </select>
             </label>
+            {sportIsDefault && (
+              <span
+                data-testid="activity-sport-default"
+                title={t('map.activity.sportDefaultHint')}
+                style={{
+                  padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600,
+                  background: '#fcf8e3', color: '#8a6d3b', cursor: 'help',
+                }}
+              >
+                {t('map.activity.sportDefault')}
+              </span>
+            )}
             {activity.provider === 'strava' && activity.provider_activity_id ? (
               <a
                 href={`https://www.strava.com/activities/${activity.provider_activity_id}`}
