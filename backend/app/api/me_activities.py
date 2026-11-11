@@ -221,6 +221,9 @@ async def me_activities(
     """
     started = time.perf_counter()
     user_id = current_user.user_id
+    # ``is True``: the handler is also called directly (tests), where an omitted
+    # ``download`` is the truthy ``Query(...)`` default object, not ``False``.
+    download = download is True
     if download:
         # "Télécharger ma heatmap" (Calques): the rider's WHOLE corpus as a
         # file, not the map's "most recent 5000" window. Same streamed body
