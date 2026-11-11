@@ -44,6 +44,9 @@ services:
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-10080}
       HEATMAP_K_ANONYMITY: ${HEATMAP_K_ANONYMITY:-1}
       TEST_MODE: ${TEST_MODE:-true}
+      # Heatmap display source — raw like prod (the legacy `matched` pipeline is
+      # being removed; overridable only until that code is gone).
+      HEATMAP_DISPLAY_SOURCE: ${HEATMAP_DISPLAY_SOURCE:-raw}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
       ROUTING_EXTERNAL: ${ROUTING_EXTERNAL:-false}
       SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}

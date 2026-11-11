@@ -3,9 +3,9 @@
 ## Overview
 
 **Current (prod, since 2026-07-29): raw-trace display** — selected by
-`HEATMAP_DISPLAY_SOURCE=raw` (code default is still `matched`,
-`backend/app/services/raw_trace_display.py`; prod sets `raw` in
-`scripts/deploy-prod.sh`). The heatmap is drawn from the precise GPS traces of
+`HEATMAP_DISPLAY_SOURCE=raw`, which is also the code default
+(`backend/app/services/raw_trace_display.py`; prod sets it explicitly in
+`scripts/deploy-prod.sh`, the compose files default to it). The heatmap is drawn from the precise GPS traces of
 consented `manual_upload` activities, read straight from `activities`:
 
 ```

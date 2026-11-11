@@ -44,16 +44,16 @@ This populates `osm_road_edges` (~7M rows, Hérault/Gard/Cévennes). You only re
 
 The rendered heatmap is a **static PMTiles binary**: it is stale until you rebuild it and reload the browser.
 
-Prod renders the **raw-trace** pipeline (`HEATMAP_DISPLAY_SOURCE=raw`), but `docker-compose.yml` does not set that variable, so the dev backend runs the code default (`matched`). To build the prod-like raw PMTiles locally, pass the env on the `exec` (the floor is `HEATMAP_MIN_USERS`, not `--min-uc`):
+Prod renders the **raw-trace** pipeline (`HEATMAP_DISPLAY_SOURCE=raw`). That is also the code default and what `docker-compose.yml` sets, so the dev backend builds the same thing as prod (the floor is `HEATMAP_MIN_USERS`, not `--min-uc`):
 
 ```bash
-docker compose exec -T -e HEATMAP_DISPLAY_SOURCE=raw -e HEATMAP_MIN_USERS=1 \
+docker compose exec -T -e HEATMAP_MIN_USERS=1 \
     backend python -m app.jobs.build_pmtiles --output-dir /tmp
 docker compose exec -T backend cat /tmp/heatmap-display.pmtiles > frontend/public/heatmap-display.pmtiles
 # then hard-reload the browser (Cmd-Shift-R)
 ```
 
-Write the host file **in place** (`cat … >`), never `docker compose cp` — see Trap #2. `make pmtiles` does the same two steps but in the dev default (matched) mode with `--min-uc ${HEATMAP_K_ANONYMITY}`.
+Write the host file **in place** (`cat … >`), never `docker compose cp` — see Trap #2. `make pmtiles` does the same two steps (it still passes `--min-uc ${HEATMAP_K_ANONYMITY}`, which only the legacy matched path reads).
 
 Legacy matched pipeline only: `make heatmap-rebuild` runs `rebuild_heatmap` (TRUNCATE + re-ingest every activity, then `ANALYZE`) → `make pmtiles`; `make heat-quality` prints per-region spaghetti/discontinuity ratios (exits 2 on alert).
 
