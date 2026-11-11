@@ -59,7 +59,6 @@ def _feature_properties(act: dict) -> dict:
         "moving_time": act.get("moving_time"),
         "provider": act.get("provider", "file"),
         "provider_activity_id": act.get("provider_activity_id"),
-        "total_photo_count": act.get("total_photo_count") or 0,
     }
 
 

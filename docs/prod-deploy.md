@@ -162,10 +162,7 @@ re-running on an already-admin user is a no-op). Register/login with the
 account first, then:
 
 ```bash
-# by email
 python -m app.cli.promote_admin paul@example.com
-# by legacy Strava athlete id (integration_accounts.external_user_id → user)
-python -m app.cli.promote_admin <athlete_id>
 ```
 
 Run it with the prod `DATABASE_URL` in scope — locally against
@@ -173,9 +170,8 @@ Run it with the prod `DATABASE_URL` in scope — locally against
 api image (any job in the `JOBS` list shares that image; override its command
 with `--args` / `--command`) or through the Cloud SQL proxy from your machine.
 
-The CLI resolves the identifier by email OR Strava athlete id (whichever
-matches), prints the resolved user + the `is_admin` before/after, is idempotent,
-and errors clearly on no-match or an ambiguous identifier. Source:
+The CLI resolves the identifier by email, prints the resolved user + the
+`is_admin` before/after, is idempotent, and errors clearly on no-match. Source:
 `backend/app/cli/promote_admin.py`.
 
 **What /admin gives you.** `GET /admin/users` (per-user traces / per-sport)

@@ -131,10 +131,8 @@ Note: `pass_count` on surviving heat_cells is not per-user attributable
 
 ```sql
 BEGIN;
--- Activities: cascades activity_cells + activity_photos via FK ON DELETE CASCADE.
+-- Activities: cascades activity_cells via FK ON DELETE CASCADE.
 DELETE FROM activities             WHERE user_id  = ':USER_ID';
-DELETE FROM integration_accounts   WHERE user_id  = ':USER_ID';   -- Strava OAuth tokens
-DELETE FROM import_jobs            WHERE user_id  = ':USER_ID';
 DELETE FROM magic_link_tokens      WHERE user_id  = ':USER_ID';
 DELETE FROM pending_archive_files  WHERE user_id  = ':USER_ID';
 DELETE FROM pending_archives       WHERE user_id  = ':USER_ID';
@@ -237,7 +235,6 @@ tables no longer exist):
 SELECT
   (SELECT count(*) FROM users                 WHERE id = ':USER_ID')       AS users,
   (SELECT count(*) FROM activities            WHERE user_id = ':USER_ID')  AS activities,
-  (SELECT count(*) FROM integration_accounts  WHERE user_id = ':USER_ID')  AS integrations,
   (SELECT count(*) FROM heat_edge_contributors WHERE user_id_hash = :HASH) AS heat_contribs,
   (SELECT count(*) FROM heat_cell_contributors WHERE user_id_hash = :HASH) AS cell_contribs;
 ```

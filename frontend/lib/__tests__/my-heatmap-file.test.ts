@@ -32,7 +32,7 @@ const SUMMARY: MyHeatmapSummary = {
   total: 1,
   activities: [{
     id: 'a1', name: '', sport: 'gravel', distance_m: 1234, elevation_gain_m: 50, activity_date: '2025-05-04T08:00:00+00:00',
-    created_at: null, undated: false, provider: 'strava', provider_activity_id: '42', total_photo_count: 2,
+    created_at: null, undated: false, provider: 'strava', provider_activity_id: '42',
     bbox: [3, 43, 3.1, 43.1], center: [3.05, 43.05], start: [3, 43],
   }],
 };
@@ -90,7 +90,7 @@ describe('summaryToActivityItems', () => {
     const [a] = summaryToActivityItems(SUMMARY, 'Sortie');
     expect(a).toMatchObject({
       id: 'a1', name: 'Sortie', sport: 'gravel', bbox: [3, 43, 3.1, 43.1], center: [3.05, 43.05],
-      provider: 'strava', provider_activity_id: '42', total_photo_count: 2, undated: false, coords: [],
+      provider: 'strava', provider_activity_id: '42', undated: false, coords: [],
     });
   });
 });

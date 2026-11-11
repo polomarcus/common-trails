@@ -407,11 +407,10 @@ async def admin_users(
 
     One row per registered user with: identity (id/email/username/is_admin/
     created_at) and a traces summary (count + per-sport breakdown + total distance + first/last date +
-    provider split + skipped/failed import counts).
+    provider split).
 
-    Efficiency (runs on db-f1-micro): the heavy tables (`activities`,
-    `import_jobs`) are touched by exactly THREE `GROUP BY user_id` scans
-    (indexed column) — never a per-user N+1. The users table is tiny
+    Efficiency (runs on db-f1-micro): the heavy `activities` table
+    is touched by exactly TWO `GROUP BY user_id` scans (indexed column) — never a per-user N+1. The users table is tiny
     (friends-beta) and fully materialised.
 
     Deliberately OMITTED: per-user grid-fallback vs OSM-matched heat_edge
@@ -447,19 +446,6 @@ async def admin_users(
         .all()
     )
 
-    # ── Import-job outcomes per user: skipped/failed counts (debug: how
-    #    many traces the ingest DROPPED, e.g. ambiguous-sport skips). ─────
-    from app.db.models import ImportJob
-    import_agg = (
-        db.query(
-            ImportJob.user_id,
-            func.coalesce(func.sum(ImportJob.skipped_count), 0),
-            func.coalesce(func.sum(ImportJob.failed_count), 0),
-        )
-        .group_by(ImportJob.user_id)
-        .all()
-    )
-
     # ── Fold the GROUP BY rows into per-user accumulators ────────────────
     by_user_sport: dict[str, dict] = {}
     for uid, sport, count, dist, first_d, last_d in sport_agg:
@@ -481,15 +467,9 @@ async def admin_users(
     for uid, provider, count in provider_agg:
         by_user_provider.setdefault(uid, {})[provider or "unknown"] = count
 
-    by_user_imports = {
-        uid: {"skipped": int(skipped), "failed": int(failed)}
-        for uid, skipped, failed in import_agg
-    }
-
     users = []
     for u_id, email, username, is_admin, created_at in user_rows:
         sport = by_user_sport.get(u_id, {})
-        imports = by_user_imports.get(u_id, {"skipped": 0, "failed": 0})
         users.append({
             "id": str(u_id),
             "email": email,
@@ -503,8 +483,6 @@ async def admin_users(
                 "by_provider": by_user_provider.get(u_id, {}),
                 "first_activity_date": sport["first"].isoformat() if sport.get("first") else None,
                 "last_activity_date": sport["last"].isoformat() if sport.get("last") else None,
-                "skipped_import_count": imports["skipped"],
-                "failed_import_count": imports["failed"],
             },
         })
 
@@ -578,8 +556,7 @@ async def admin_archives(
                 "failed": r[8],
                 # Truncate to ~300 chars, KEEPING THE HEAD — the original
                 # traceback/reason is at the front and is the load-bearing
-                # diagnostic signal (same convention as the ImportJob
-                # last_error cap in admin_cancel_job below).
+                # diagnostic signal.
                 "last_error": r[9][:300] if r[9] else None,
                 "created_at": r[10].isoformat() if r[10] else None,
                 "updated_at": r[11].isoformat() if r[11] else None,
@@ -737,63 +714,3 @@ async def admin_recent_jobs(
     # Most-recent first
     items.sort(key=lambda i: i.get("start_time") or "", reverse=True)
     return {"per_job": per_job, "items": items}
-
-
-@router.post("/jobs/{job_id}/cancel")
-async def admin_cancel_job(
-    job_id: str,
-    _admin: Annotated[AuthenticatedUser, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
-) -> dict:
-    """Force a stuck ImportJob to FAILED so its per-user lock releases.
-
-    Use case: a Job container crashed before it could write status='FAILED'
-    (e.g. the 2026-05-26 JWT_SECRET incident — container exited at module
-    import). The row stays RUNNING forever, the per-user queue lock waits
-    up to 6 h for that ghost. The job-startup zombie cleanup handles new
-    job launches; this endpoint lets ops fix the *current* stuck state
-    without an SQL Studio session.
-
-    Idempotent: a job already in FAILED/COMPLETED is returned unchanged.
-    """
-    from app.db.models import ImportJob
-
-    job = db.query(ImportJob).filter(ImportJob.id == job_id).first()
-    if not job:
-        raise HTTPException(404, f"ImportJob {job_id} not found")
-
-    if job.status in ("FAILED", "COMPLETED"):
-        return {
-            "id": str(job.id),
-            "status": job.status,
-            "changed": False,
-            "message": f"Job already in terminal state ({job.status})",
-        }
-
-    prev_status = job.status
-    job.status = "FAILED"
-    # Cap last_error around 2 KB so repeated cancel/admin-action cycles
-    # don't blow it up indefinitely (Postgres TEXT has no hard limit
-    # but the UI + JSON serializer choke past a few KB).
-    #
-    # KEEP THE PREFIX, not the suffix — the original Python traceback
-    # is at the head of last_error and is the load-bearing diagnostic
-    # signal. Symmetric with the SQL `LEFT(..., 2048)` cap in the
-    # zombie-cleanup UPDATE (which also keeps the head). A tail-slice
-    # `[-2048:]` would silently destroy root-cause evidence after
-    # repeated admin actions.
-    suffix = " [cancelled by admin]"
-    head = job.last_error or ""
-    head_budget = 2048 - len(suffix)
-    job.last_error = head[:head_budget] + suffix
-    db.commit()
-    log.warning(
-        "Admin %s cancelled ImportJob %s (was %s, user=%s)",
-        _admin.user_id, job_id, prev_status, job.user_id,
-    )
-    return {
-        "id": str(job.id),
-        "status": "FAILED",
-        "changed": True,
-        "previous_status": prev_status,
-    }

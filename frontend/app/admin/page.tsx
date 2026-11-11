@@ -108,8 +108,6 @@ interface AdminUserRow {
     by_provider: Record<string, number>;
     first_activity_date: string | null;
     last_activity_date: string | null;
-    skipped_import_count: number;
-    failed_import_count: number;
   };
 }
 
@@ -897,11 +895,6 @@ export default function AdminPage() {
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
                             {fmt(u.activities.total)}
-                            {u.activities.skipped_import_count > 0 && (
-                              <div style={{ fontSize: 10, color: '#d97706', fontWeight: 400 }}>
-                                {t('admin.users.skipped', { n: u.activities.skipped_import_count })}
-                              </div>
-                            )}
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', color: '#6b7280' }}>
                             {fmt(km)} km

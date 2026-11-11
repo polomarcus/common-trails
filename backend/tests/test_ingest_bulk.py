@@ -40,7 +40,6 @@ def _make_activity_data(idx: int, with_geom: bool = True) -> dict:
         "distance_m": 1500 + idx,
         "elevation_gain_m": 50,
         "moving_time": 600,
-        "total_photo_count": 0,
     }
 
 

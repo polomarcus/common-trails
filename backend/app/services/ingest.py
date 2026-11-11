@@ -3151,17 +3151,10 @@ def ingest_activity(
                 Activity.provider_activity_id == provider_activity_id,
             ).first()
             if existing:
-                # Backfill activity_date / total_photo_count if missing
-                updated = False
+                # Backfill activity_date if missing
                 new_date = activity_data.get("activity_date")
                 if new_date and not existing.activity_date:
                     existing.activity_date = new_date
-                    updated = True
-                new_photo_count = activity_data.get("total_photo_count")
-                if new_photo_count and not existing.total_photo_count:
-                    existing.total_photo_count = new_photo_count
-                    updated = True
-                if updated:
                     db.commit()
                 return {"activity_id": existing.id, "status": "already_exists"}
 
@@ -3300,7 +3293,6 @@ def ingest_activity(
             contribute_heatmap=contribute_heatmap,
             geometry_source=activity_data.get("geometry_source", "polyline"),
             moving_time=activity_data.get("moving_time"),
-            total_photo_count=activity_data.get("total_photo_count", 0),
             activity_date=activity_data.get("activity_date"),
         )
         db.add(activity)
@@ -3747,7 +3739,6 @@ def _ingest_activities_bulk_impl(
                             contribute_heatmap=contribute_heatmap,
                             geometry_source=act_data.get("geometry_source", "polyline"),
                             moving_time=act_data.get("moving_time"),
-                            total_photo_count=act_data.get("total_photo_count", 0),
                             activity_date=act_data.get("activity_date"),
                         )
                         flush_db.add(activity)
@@ -3855,14 +3846,13 @@ def _ingest_activities_bulk_impl(
         return batch_created, batch_failed
 
     def _backfill_existing(act_data: dict) -> None:
-        """Backfill activity_date / total_photo_count for an existing row.
+        """Backfill activity_date for an existing row.
 
         Short-lived session so the connection is released between
-        backfills. The common case is a no-op (both fields already set).
+        backfills. The common case is a no-op (date already set).
         """
         new_date = act_data.get("activity_date")
-        new_photo_count = act_data.get("total_photo_count")
-        if not (new_date or new_photo_count):
+        if not new_date:
             return
         bf_db = SessionLocal()
         try:
@@ -3871,16 +3861,9 @@ def _ingest_activities_bulk_impl(
                 Activity.provider == "strava",
                 Activity.provider_activity_id == act_data.get("provider_activity_id"),
             ).first()
-            if existing:
-                dirty = False
-                if new_date and not existing.activity_date:
-                    existing.activity_date = new_date
-                    dirty = True
-                if new_photo_count and not existing.total_photo_count:
-                    existing.total_photo_count = new_photo_count
-                    dirty = True
-                if dirty:
-                    bf_db.commit()
+            if existing and not existing.activity_date:
+                existing.activity_date = new_date
+                bf_db.commit()
         finally:
             bf_db.close()
 
@@ -4654,7 +4637,7 @@ def user_map_activities_validator(user_id: str, sport: str | None = None) -> tup
     Why ``xmin`` and not a list of columns: Postgres gives every row VERSION a
     new ``xmin`` (the inserting transaction id) — ANY ``UPDATE`` of the row
     (sport edit, rename, date change, geometry upgrade/promotion, display cache
-    backfill, contribute/consent flags, photo count…) writes a new tuple with a
+    backfill, contribute/consent flags…) writes a new tuple with a
     new ``xmin``, an INSERT adds an id, a DELETE removes one. So the digest
     changes whenever anything the feed serialises can have changed, without
     enumerating columns (a column added to the feed later is covered for free)
@@ -4742,7 +4725,6 @@ def iter_user_map_activities(
             Activity.moving_time,
             Activity.activity_date,
             Activity.created_at,
-            Activity.total_photo_count,
         )
         .where(*_map_activity_filters(user_id, sport))
         .order_by(effective_date.desc().nullslast(), Activity.id.desc())
@@ -4776,7 +4758,6 @@ def iter_user_map_activities(
                 # ``undated`` tells the truth (undated = never public, provenance SSOT).
                 "undated": r.activity_date is None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
-                "total_photo_count": r.total_photo_count or 0,
             }
     finally:
         db.close()
@@ -4812,7 +4793,6 @@ def get_user_activities_meta(user_id: str) -> list[dict]:
             Activity.moving_time,
             Activity.activity_date,
             Activity.created_at,
-            Activity.total_photo_count,
         ).where(Activity.user_id == user_id)
 
         rows = db.execute(stmt).all()
@@ -4834,7 +4814,6 @@ def get_user_activities_meta(user_id: str) -> list[dict]:
                 # ``undated`` tells the truth (undated = never public, provenance SSOT).
                 "undated": r.activity_date is None,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
-                "total_photo_count": r.total_photo_count or 0,
             }
             for r in rows
         ]
@@ -4976,7 +4955,6 @@ def get_activity_by_id(user_id: str, activity_id: str) -> dict | None:
             # ``undated`` tells the truth (undated = never public, provenance SSOT).
             "undated": a.activity_date is None,
             "created_at": a.created_at.isoformat() if a.created_at else None,
-            "total_photo_count": a.total_photo_count or 0,
         }
     finally:
         db.close()

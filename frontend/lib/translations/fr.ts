@@ -726,7 +726,6 @@ const fr: Translations = {
   'admin.users.col.lastActivity': 'Dernière activité',
   'admin.users.role.admin': 'Admin',
   'admin.users.role.user': 'Membre',
-  'admin.users.skipped': '{n} ignorée(s)',
 
   // ── Admin: heatmap monitoring (fraîcheur + évolution) ─────────────────────────
   'admin.mon.freshness': 'Fraîcheur & santé',
@@ -742,7 +741,7 @@ const fr: Translations = {
   'admin.mon.series.heatEdges': 'Segments (heat_edges)',
   'admin.mon.series.activities': 'Activités',
   'admin.mon.series.networkKm': 'Réseau (km)',
-  'admin.mon.empty': "Pas encore d'historique — le premier point apparaîtra après le prochain rebuild ou le cron quotidien.",
+  'admin.mon.empty': "Pas encore d'historique — le premier point apparaîtra après le prochain rebuild de la heatmap.",
   'admin.mon.snapshots': '{n} instantané(s)',
   'admin.mon.latest': 'actuel : {value}',
 
@@ -866,9 +865,6 @@ const fr: Translations = {
   'strava.sportConfirmTitle': 'Ces traces sont du :',
   'notif.markRead': 'Marquer comme lu',
   'notif.markAllRead': 'Tout marquer comme lu',
-  'notif.activitySynced.title': 'Sortie synchronisée',
-  'notif.activitySynced.body': 'Ta sortie « {name} » est synchronisée dans ta vue perso ✓',
-  'notif.activitySynced.bodyNoName': 'Ta sortie est synchronisée dans ta vue perso ✓',
 
   // ── MAP i18n consolidation (fix/map-i18n-consolidation) ──────────────────────
   // Toolbar

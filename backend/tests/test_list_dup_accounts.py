@@ -19,7 +19,6 @@ def _db_available() -> bool:
         db = SessionLocal()
         try:
             db.execute(sa_text("SELECT 1 FROM users LIMIT 1"))
-            db.execute(sa_text("SELECT 1 FROM integration_accounts LIMIT 1"))
             return True
         finally:
             db.close()
@@ -29,7 +28,7 @@ def _db_available() -> bool:
 
 pytestmark = pytest.mark.skipif(
     not _db_available(),
-    reason="needs the PostGIS DB (users + integration_accounts + activities)",
+    reason="needs the PostGIS DB (users + activities)",
 )
 
 
@@ -64,18 +63,9 @@ def test_detects_synthetic_account_and_temporal_collision():
     synth_addr = f"strava_{athlete}@strava.local"
     act_email = str(uuid.uuid4())
     act_strava = str(uuid.uuid4())
-    acct_id = str(uuid.uuid4())
     try:
         _insert_user(db, email_uid, email_addr, has_pw=False)   # email/magic-link
         _insert_user(db, strava_uid, synth_addr, has_pw=False)  # synthetic strava
-        db.execute(
-            sa_text(
-                "INSERT INTO integration_accounts "
-                "(id, user_id, provider, access_token, external_user_id) "
-                "VALUES (:id, :uid, 'strava', 'stub', :ath)"
-            ),
-            {"id": acct_id, "uid": strava_uid, "ath": athlete},
-        )
         # Same start time under the TWO different users → collision.
         ts = "2026-05-01 09:00:00+00"
         _insert_activity(db, act_email, email_uid, ts)
@@ -88,10 +78,6 @@ def test_detects_synthetic_account_and_temporal_collision():
         assert strava_uid in synth_ids
         assert email_uid not in synth_ids
 
-        # The synthetic row carries the athlete id it was linked by.
-        synth_row = next(u for u in report["synthetic_strava_accounts"] if u["user_id"] == strava_uid)
-        assert synth_row["strava_athlete_id"] == athlete
-
         # The two accounts collide at the same start time → flagged as a pair.
         pair = {email_uid, strava_uid}
         assert any(
@@ -102,7 +88,6 @@ def test_detects_synthetic_account_and_temporal_collision():
         db.rollback()  # clear any aborted tx so cleanup DELETEs run
         db.execute(sa_text("DELETE FROM activities WHERE id IN (:a, :b)"),
                    {"a": act_email, "b": act_strava})
-        db.execute(sa_text("DELETE FROM integration_accounts WHERE id = :id"), {"id": acct_id})
         db.execute(sa_text("DELETE FROM users WHERE id IN (:a, :b)"),
                    {"a": email_uid, "b": strava_uid})
         db.commit()

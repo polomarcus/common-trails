@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models for CHEMINS COMMUNS.
 
 Data separation:
-- PRIVATE: activities, activity_cells, activity_photos, integration_accounts, import_jobs
+- PRIVATE: activities, activity_cells
 - COMMON (ODbL): heat_cells, edge_popularity, routes, route_versions, route_forks,
                   suggestions, route_tags
 """
@@ -244,76 +244,11 @@ class RouteTag(Base):
     __table_args__ = (UniqueConstraint("route_id", "tag"),)
 
 
-# ── Integration models (PRIVATE) ─────────────────────────────────────────────
-
-class IntegrationAccount(Base):
-    """Stored OAuth tokens for external providers (Strava, etc.)."""
-    __tablename__ = "integration_accounts"
-
-    id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    user_id = Column(String(36), nullable=False, index=True)
-    provider = Column(String(50), nullable=False)  # "strava"
-    access_token = Column(Text, nullable=False)
-    refresh_token = Column(Text, nullable=True)
-    expires_at = Column(BigInteger, nullable=True)
-    external_user_id = Column(String(100), nullable=True)
-    athlete_name = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=_now)
-    last_synced_at = Column(DateTime(timezone=True), nullable=True)
-    sync_failures = Column(Integer, default=0, server_default="0", nullable=False)
-    # Per-account heatmap-contribution preference (migration 0048). The
-    # Strava webhook worker reads this once per event instead of querying
-    # the user's most-recent Activity row each time — saves ~500 redundant
-    # SELECTs/week at friends-beta scale on the db-f1-micro pool.
-    # Default False — opting in must be an active user choice (the import
-    # flow's consent screen writes True here when the user toggles it).
-    contribute_heatmap = Column(
-        Boolean, default=False, server_default="false", nullable=False,
-    )
-
-    __table_args__ = (UniqueConstraint("user_id", "provider"),)
-
-
-class ImportJob(Base):
-    """Background import job tracking."""
-    __tablename__ = "import_jobs"
-
-    id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    user_id = Column(String(36), nullable=False, index=True)
-    provider = Column(String(50), nullable=False)  # "strava", "file"
-    status = Column(
-        Enum("PENDING", "RUNNING", "COMPLETED", "FAILED", name="import_job_status_enum", create_type=False),
-        nullable=False,
-        default="PENDING",
-    )
-    # The "cursor" is a JSON blob holding progress markers:
-    # {contribute_heatmap, phase, current_page, photos_imported,
-    #  last_failed_phase, …}. It started as a small pagination token
-    # (~10 chars, hence String(255)) but accreted more fields over time.
-    # On error paths that merge a long `last_error` into the cursor it
-    # has been observed near the 255 cap. Widened to Text in migration
-    # 0051 to remove the foot-gun. Audit 2026-05-29 ST-S2.6.
-    cursor = Column(Text, nullable=True)
-    total_count = Column(Integer, default=0)
-    imported_count = Column(Integer, default=0)
-    skipped_count = Column(Integer, default=0)
-    failed_count = Column(Integer, default=0)
-    last_error = Column(Text, nullable=True)
-    gps_upgraded_count = Column(Integer, default=0)
-    # Snapshot of "Strava activities still on polyline geometry" computed once
-    # at end of Phase 2 ingest. The /jobs/{id} poll endpoint reads this column
-    # instead of running a COUNT(*) on activities every 5 s (which starved the
-    # 5+3 pool — see migration 0045 for the incident).
-    gps_total = Column(Integer, default=0, server_default="0", nullable=False)
-    created_at = Column(DateTime(timezone=True), default=_now)
-    updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-
 class HeatmapMetric(Base):
     """Append-only snapshot of heatmap size, for the admin evolution chart.
 
-    One row per heatmap rebuild (``source='rebuild'``) + one per daily cron
-    (``source='daily'``). Numbers mirror ``compute_community_stats`` (SSOT)
+    One row per heatmap rebuild (``source='rebuild'``); legacy rows may carry
+    ``source='daily'`` (retired daily cron). Numbers mirror ``compute_community_stats`` (SSOT)
     so the time-series stays consistent with the home-banner headline. Reads
     are ``ORDER BY captured_at DESC LIMIT N`` off ``ix_heatmap_metrics_captured_at``
     — never a scan. See migration 0058.
@@ -327,7 +262,7 @@ class HeatmapMetric(Base):
     activities = Column(Integer, nullable=False, default=0, server_default="0")
     contributors = Column(Integer, nullable=False, default=0, server_default="0")
     network_km = Column(Numeric, nullable=False, default=0, server_default="0")
-    # NULL on the rebuild/daily snapshots (computing it needs a raw heat_edges
+    # NULL on the rebuild snapshots (computing it needs a raw heat_edges
     # scan, off-limits on the hot path). Populated only if a caller passes it.
     grid_fallback_pct = Column(Numeric, nullable=True)
     source = Column(Text, nullable=False, default="unknown", server_default="unknown")
@@ -378,7 +313,6 @@ class Activity(Base):
     contribute_heatmap = Column(Boolean, default=True)
     geometry_source = Column(String(20), default="polyline")  # "polyline" | "stream"
     moving_time = Column(Integer, nullable=True)  # seconds
-    total_photo_count = Column(Integer, default=0)  # from Strava API
     activity_date = Column(DateTime(timezone=True), nullable=True)  # actual date of activity
     created_at = Column(DateTime(timezone=True), default=_now)
 
@@ -478,25 +412,6 @@ class PendingArchive(Base):
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_now)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-
-class ActivityPhoto(Base):
-    """A geolocated photo from a user's Strava activity (private)."""
-    __tablename__ = "activity_photos"
-
-    id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
-    activity_id = Column(UUID(as_uuid=False), ForeignKey("activities.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(String(36), nullable=False, index=True)
-    strava_photo_id = Column(String(100), nullable=True)
-    url_thumb = Column(String(1024), nullable=False)
-    url_medium = Column(String(1024), nullable=False)
-    lat = Column(Float, nullable=True)
-    lon = Column(Float, nullable=True)
-    caption = Column(Text, nullable=True)
-    activity_name = Column(String(255), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=_now)
-
-    __table_args__ = (UniqueConstraint("user_id", "strava_photo_id"),)
 
 
 class ActivityCell(Base):
@@ -896,9 +811,9 @@ class CHBuildStatus(Base):
 class Notification(Base):
     """A user-scoped notification.
 
-    Emitted when a long-running async phase finishes (Strava GPS upgrade,
-    photo import, monthly resync) so the user sees the outcome the next
-    time they load the app, even if they closed the tab.
+    Was emitted when a long-running async phase of the retired Strava live
+    sync finished. Nothing emits one today (``emit_notification`` has no
+    caller); the table, its API and legacy rows are kept.
     """
     __tablename__ = "notifications"
 
@@ -908,9 +823,9 @@ class Notification(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # kind: "strava_import_complete" | "strava_gps_upgrade_complete"
+    # kind (legacy rows): "strava_import_complete" | "strava_gps_upgrade_complete"
     #     | "strava_photo_import_complete" | "strava_resync_complete"
-    #     | "strava_import_failed"
+    #     | "strava_import_failed" | "activity_synced"
     kind = Column(String(64), nullable=False)
     title = Column(String(255), nullable=False)
     body = Column(Text, nullable=False, default="")

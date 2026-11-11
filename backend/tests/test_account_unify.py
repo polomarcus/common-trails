@@ -32,14 +32,11 @@ _SYNTHETIC_EMAIL = f"strava_{_STUB_STRAVA_ID}@strava.local"
 
 @pytest.fixture(autouse=True)
 def _wipe_stub_binding():
-    """Remove any IntegrationAccount / synthetic user for the stub athlete
-    before AND after each test so bindings never leak across tests."""
+    """Remove any synthetic user for the stub athlete before AND after each
+    test so nothing leaks across tests."""
     def _wipe():
         db = SessionLocal()
         try:
-            db.execute(sa_text(
-                "DELETE FROM integration_accounts WHERE external_user_id = :x"
-            ), {"x": _STUB_STRAVA_ID})
             db.execute(sa_text(
                 "DELETE FROM users WHERE email = :e"
             ), {"e": _SYNTHETIC_EMAIL})

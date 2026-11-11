@@ -279,15 +279,15 @@ class TestAdminUsers:
             assert key in u, f"missing {key}"
         acts = u["activities"]
         for key in ("total", "total_distance_m", "by_sport", "by_provider",
-                    "first_activity_date", "last_activity_date",
-                    "skipped_import_count", "failed_import_count"):
+                    "first_activity_date", "last_activity_date"):
             assert key in acts, f"missing activities.{key}"
+        # Retired with the Strava API sync (import_jobs table dropped, 0070).
+        assert "skipped_import_count" not in acts
+        assert "failed_import_count" not in acts
 
     def test_per_user_aggregation(self, client):
         """Insert a user with 2 gravel + 1 road activity, then assert the
-        per-user aggregation returned by the real handler. A leftover
-        ``integration_accounts`` row (retired Strava API sync) must not
-        surface in the response."""
+        per-user aggregation returned by the real handler."""
         from sqlalchemy import text as sa_text
 
         from app.db.session import SessionLocal
@@ -311,14 +311,6 @@ class TestAdminUsers:
                     VALUES (:id, :uid, 'file', :sport, 'agg-act',
                         :dist, true, NOW(), NOW())
                 """), {"id": str(uuid.uuid4()), "uid": uid, "sport": sport, "dist": dist})
-            # Legacy linked account: still in the DB, no longer exposed.
-            db.execute(sa_text("""
-                INSERT INTO integration_accounts (id, user_id, provider,
-                    access_token, external_user_id, athlete_name,
-                    sync_failures, expires_at)
-                VALUES (:id, :uid, 'strava', 'tok', '12345678',
-                    'Test Athlete', 5, :exp)
-            """), {"id": str(uuid.uuid4()), "uid": uid, "exp": 1})
             db.commit()
         finally:
             db.close()
