@@ -55,7 +55,6 @@ def _seed(user_id: str, specs: list[dict]) -> list[str]:
                 distance_m=1000.0 + i,
                 elevation_gain_m=12.5 * i,
                 moving_time=600 + i,
-                total_photo_count=spec.get("photos", 0),
                 activity_date=spec.get("activity_date", BASE + dt.timedelta(days=i)),
             ))
             ids.append(aid)
@@ -77,7 +76,7 @@ def _update(activity_id: str, **values) -> None:
 class TestSpliceEquivalence:
     def test_spliced_feature_identical_to_parsed_feature(self, client, auth_headers):
         """For every row shape (cached, cached MultiLineString, NULL cache,
-        NULL-cache gap split, undated, null name, photos) the spliced text is
+        NULL-cache gap split, undated, null name) the spliced text is
         byte-identical to — and parses equal to — the former
         ``json.dumps(_activity_to_feature(act, compact=True))``."""
         user_id = _decode_user_id(auth_headers)
@@ -87,7 +86,7 @@ class TestSpliceEquivalence:
             {"name": "fallback", "cache": False},
             {"name": "fallback-gap", "cache": False, "coords": _gap_line()},
             {"name": "undated", "activity_date": None},
-            {"name": None, "photos": 3, "sport": "gravel"},
+            {"name": None, "sport": "gravel"},
         ])
         acts = list(iter_user_map_activities(user_id, limit=5000))
         assert len(acts) == 6
@@ -250,7 +249,7 @@ class TestEtag:
         etag = changed("sport edit", etag)
 
         # Rename (e.g. a Strava re-sync), date change, contribute flag,
-        # geometry promotion / cache backfill, photo count.
+        # geometry promotion / cache backfill.
         _update(ids[1], name="renamed")
         etag = changed("rename", etag)
         _update(ids[1], activity_date=BASE - dt.timedelta(days=30))
@@ -262,8 +261,6 @@ class TestEtag:
         etag = changed("geometry upgrade", etag)
         _update(ids[2], display_geojson=None)
         etag = changed("cache cleared", etag)
-        _update(ids[2], total_photo_count=4)
-        etag = changed("photo count", etag)
 
         # New import (real upload path).
         up = _upload_gpx(client, auth_headers, _make_gpx_bytes("new", 8), sport="road", name="etag_new.gpx")

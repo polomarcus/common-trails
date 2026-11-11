@@ -7,17 +7,15 @@ WHY THIS EXISTS
     #477):
 
       * email magic-link (``api/auth.request_magic_link``) — find-or-create
-        by ``users.email`` = the real address (e.g. ``paleclercq@gmail.com``),
+        by ``users.email`` = the real address (e.g. ``someone@example.com``),
         ``hashed_password=NULL``;
-      * "login with Strava" (the retired Strava OAuth login, since removed)
-        — find-or-create by ``integration_accounts.external_user_id`` (the
-        athlete id), minting a user with a SYNTHETIC email
+      * "login with Strava" (the retired Strava OAuth login, since removed;
+        its ``integration_accounts`` table was dropped by migration 0070)
+        — it minted a user with a SYNTHETIC email
         ``strava_<athlete_id>@strava.local``, ``hashed_password=NULL``.
 
     So a user who logged in with Strava FIRST, then later with their email,
-    owns activities under BOTH rows. The Strava ``/connect`` (link-to-session)
-    flow can't merge them: its anti-theft guard REFUSES to relink an athlete
-    already bound to another account (``status=conflict``). The home
+    owns activities under BOTH rows, and nothing reconciled them. The home
     "contributeurs" count over-counted partly because of this split (that
     stat is separately fixed to count community-eligible users only).
 
@@ -78,7 +76,6 @@ def collect_report(db, tolerance_min: int = 5) -> dict:
             "email": r.email,
             "synthetic_strava": bool(r.email and r.email.endswith("@strava.local")),
             "has_password": r.has_password,
-            "strava_athlete_id": r.strava_athlete_id,
             "activities": int(r.activities or 0),
             "manual_upload": int(r.manual_upload or 0),
             "strava_api": int(r.strava_api or 0),
@@ -89,16 +86,13 @@ def collect_report(db, tolerance_min: int = 5) -> dict:
             SELECT u.id AS user_id,
                    u.email AS email,
                    (u.hashed_password IS NOT NULL) AS has_password,
-                   ia.external_user_id AS strava_athlete_id,
                    COUNT(a.id) AS activities,
                    COUNT(a.id) FILTER (WHERE a.source = 'manual_upload') AS manual_upload,
                    COUNT(a.id) FILTER (WHERE a.source = 'strava_api') AS strava_api,
                    COUNT(a.id) FILTER (WHERE a.source IS NULL) AS legacy_null
             FROM users u
-            LEFT JOIN integration_accounts ia
-                   ON ia.user_id = u.id::text AND ia.provider = 'strava'
             LEFT JOIN activities a ON a.user_id = u.id::text
-            GROUP BY u.id, u.email, u.hashed_password, ia.external_user_id
+            GROUP BY u.id, u.email, u.hashed_password
             ORDER BY activities DESC, u.email
             """
         ))
@@ -152,10 +146,9 @@ def _print_human(report: dict) -> None:
             else "email/magic-link"
         )
         logger.info(
-            "  %s  <%s>  [%s]  activities=%d (manual=%d strava_api=%d null=%d)  athlete=%s",
+            "  %s  <%s>  [%s]  activities=%d (manual=%d strava_api=%d null=%d)",
             u["user_id"], u["email"], kind, u["activities"],
             u["manual_upload"], u["strava_api"], u["legacy_null"],
-            u["strava_athlete_id"] or "-",
         )
 
     synth = report["synthetic_strava_accounts"]

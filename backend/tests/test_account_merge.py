@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import text as sa_text
 
-from app.db.models import Activity, IntegrationAccount, User
+from app.db.models import Activity, User
 from app.db.session import SessionLocal
 from app.services.account_merge import (
     AccountMergeRefused,
@@ -112,7 +112,6 @@ def db():
             s.execute(sa_text("DELETE FROM heat_edges WHERE edge_key = :k"), {"k": ek})
         for uid in created_users:
             s.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": uid})
-            s.execute(sa_text("DELETE FROM integration_accounts WHERE user_id = :u"), {"u": uid})
             s.execute(sa_text("DELETE FROM contribution_consents WHERE user_id = :u"), {"u": uid})
             s.execute(sa_text("DELETE FROM users WHERE id = :u"), {"u": uid})
         s.commit()
@@ -142,10 +141,6 @@ def test_merge_reassigns_and_deletes_synthetic(db):
     db._created_users += [survivor, synth]
     a1 = _mk_activity(db, user_id=synth, source="strava_api", provider_activity_id="s1")
     a2 = _mk_activity(db, user_id=synth, source="manual_upload", provider="gpx")
-    db.add(IntegrationAccount(
-        id=str(uuid.uuid4()), user_id=synth, provider="strava",
-        access_token="x", refresh_token="y", expires_at=9_999_999_999,
-        external_user_id=athlete, athlete_name="A"))
     db.commit()
 
     res = merge_synthetic_account(db, survivor, synth, commit=True)
@@ -156,10 +151,6 @@ def test_merge_reassigns_and_deletes_synthetic(db):
     for aid in (a1, a2):
         assert db.execute(sa_text("SELECT user_id FROM activities WHERE id = :a"),
                           {"a": aid}).scalar() == survivor
-    # integration account reassigned
-    assert db.execute(sa_text(
-        "SELECT user_id FROM integration_accounts WHERE external_user_id = :x"),
-        {"x": athlete}).scalar() == survivor
     # synthetic user gone
     assert db.query(User).filter(User.id == synth).first() is None
     assert db.query(User).filter(User.id == survivor).first() is not None

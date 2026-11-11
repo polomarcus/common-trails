@@ -14,8 +14,8 @@ of ``heat_edges_agg`` (#441):
    is not stored per contributor — so they are clamped to the new
    ``pass_count`` (documented approximation).
 3. DELETE ``heat_edges`` rows left with zero contributors.
-4. DELETE the activity row — ``activity_cells`` + ``activity_photos``
-   cascade at the DB level (FK ``ON DELETE CASCADE``).
+4. DELETE the activity row — ``activity_cells`` cascades at the DB level
+   (FK ``ON DELETE CASCADE``).
 5. Incrementally refresh ``heat_edges_agg`` for the touched
    ``osm_way_id``s via the existing ``recompute_heat_agg_for_ways`` hook
    (best-effort, never fails the deletion) — the live MVT fallback
@@ -54,7 +54,7 @@ def _relation_exists(db: Session, name: str) -> bool:
     Under the raw-trace pivot (2026-07-29) the community heat tables
     (``heat_edges`` / ``heat_edge_contributors``) are being dropped in prod —
     the display no longer reads them. GDPR deletion must still delete the
-    activity (+ its FK-cascaded ``activity_cells`` / ``activity_photos``) even
+    activity (+ its FK-cascaded ``activity_cells``) even
     when the heat cleanup has no table to clean.
     """
     return bool(

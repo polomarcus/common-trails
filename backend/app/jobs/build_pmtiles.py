@@ -1353,7 +1353,7 @@ def capture_heatmap_metrics_snapshot(
     needs a raw ``heat_edges`` scan — off-limits on the hot path).
 
     FAIL-SOFT: wrapped end-to-end in try/except so a snapshot hiccup can NEVER
-    break the heatmap rebuild or the daily cron that calls it. Returns the
+    break the heatmap rebuild that calls it. Returns the
     inserted row as a dict (for logging/tests) or ``None`` on failure.
     """
     try:

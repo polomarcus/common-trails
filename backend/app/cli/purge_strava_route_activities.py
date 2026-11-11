@@ -40,7 +40,7 @@ Workflow (review before deleting):
 ``--apply`` deletes ONLY ids from the reviewed file that are STILL identified
 by a fresh run of the guards above (anything else is skipped + reported),
 through ``activity_deletion.delete_user_activity`` (heat contributor rows,
-cascaded cells/photos, agg refresh) with ONE build-pmtiles ping at the end.
+cascaded cells, agg refresh) with ONE build-pmtiles ping at the end.
 """
 
 import argparse

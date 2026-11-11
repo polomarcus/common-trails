@@ -192,7 +192,7 @@ def _user_id_of(client, headers) -> str:
 
 
 def test_hook_columns_match_trigger():
-    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0069_my_heatmap_shares.py"
+    path = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0070_drop_strava_api_leftovers.py"
     tree = ast.parse(path.read_text())
     cols = next(
         ast.literal_eval(n.value)

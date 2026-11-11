@@ -6,13 +6,13 @@ WHY (#477 / #520 Part B). One physical person can end up split across TWO
 paths keyed on DIFFERENT identifiers (see ``app/cli/list_dup_accounts.py``):
 
   * email magic-link → a user keyed on the real email, ``hashed_password=NULL``;
-  * "login with Strava" → a SYNTHETIC user ``strava_<athlete>@strava.local``,
-    ``hashed_password=NULL``, minted by ``_find_or_create_strava_user``.
+  * "login with Strava" (retired; the OAuth login and its
+    ``integration_accounts`` table are gone) → a SYNTHETIC user
+    ``strava_<athlete>@strava.local``, ``hashed_password=NULL``.
 
-They never reconcile: the Strava ``/connect`` anti-theft guard REFUSES to
-relink an athlete already bound elsewhere, and the ``@strava.local`` email is
-unique so the nudge to set a real email is blocked. The result — Paul owns
-activities under both ``paleclercq@gmail.com`` AND ``strava_10699414@strava.local``.
+They never reconciled. The result — one person owns activities under both
+``someone@example.com`` AND ``strava_<athlete>@strava.local``. Legacy
+synthetic rows can still exist, which is why this merge is kept.
 
 SAFE DESIGN (the one Paul approved). Merge is gated to CREDENTIAL-LESS
 SYNTHETIC ``@strava.local`` accounts only. A real, credentialed account is
@@ -24,7 +24,7 @@ authorizing its Strava athlete). The merge:
      Strava-API copy AND a manual upload). Reuses the ingest cross-source
      match (same user, start-time ±5 min, distance ±5 %) + provenance
      preference (keep the community-eligible ``manual_upload`` copy).
-  2. Reassigns every user-owned row (activities, integrations, consents,
+  2. Reassigns every user-owned row (activities, consents,
      routes, trips, …) from the synthetic account to the survivor.
   3. Rewrites the absorbed account's K-anonymity contributor hash onto the
      survivor's so one person counts once, and recomputes the touched
@@ -62,12 +62,10 @@ SYNTHETIC_EMAIL_SUFFIX = "@strava.local"
 
 # Every table that carries an OWNER reference to ``users.id`` as (table, column).
 # Reassigned wholesale from the absorbed account to the survivor. ``activities``
-# and ``integration_accounts`` are handled SEPARATELY (they have UNIQUE
-# constraints + heat side-effects) and are intentionally excluded here.
+# is handled SEPARATELY (UNIQUE constraint + heat side-effects) and is
+# intentionally excluded here.
 _OWNED_TABLES: tuple[tuple[str, str], ...] = (
     ("activity_cells", "user_id"),
-    ("activity_photos", "user_id"),
-    ("import_jobs", "user_id"),
     ("pending_archive_files", "user_id"),
     ("pending_archives", "user_id"),
     ("contribution_consents", "user_id"),
@@ -305,32 +303,7 @@ def merge_synthetic_account(
     )
     result.reassigned_activities = int(reassigned_activities or 0)
 
-    # 4) Reassign integration_accounts, guarding UNIQUE(user_id, provider):
-    #    if the survivor already owns a row for a provider, drop the absorbed's.
-    if _relation_exists(db, "integration_accounts"):
-        db.execute(
-            sa_text(
-                """
-                DELETE FROM integration_accounts a
-                WHERE a.user_id = :absorbed
-                  AND EXISTS (
-                      SELECT 1 FROM integration_accounts b
-                      WHERE b.user_id = :survivor AND b.provider = a.provider
-                  )
-                """
-            ),
-            {"absorbed": absorbed_user_id, "survivor": survivor_user_id},
-        )
-        n = db.execute(
-            sa_text(
-                "UPDATE integration_accounts SET user_id = :survivor "
-                "WHERE user_id = :absorbed"
-            ),
-            {"absorbed": absorbed_user_id, "survivor": survivor_user_id},
-        ).rowcount
-        result.reassigned_rows["integration_accounts"] = int(n or 0)
-
-    # 5) Reassign every other owner-referencing table.
+    # 4) Reassign every other owner-referencing table.
     for table, col in _OWNED_TABLES:
         if not _relation_exists(db, table):
             continue
@@ -341,7 +314,7 @@ def merge_synthetic_account(
         if n:
             result.reassigned_rows[table] = int(n)
 
-    # 6) Delete the now-empty synthetic user row.
+    # 5) Delete the now-empty synthetic user row.
     db.execute(sa_text("DELETE FROM users WHERE id = :id"), {"id": absorbed_user_id})
 
     # 7) Private "Ma heatmap" files: the bulk UPDATE + raw DELETEs above bypass

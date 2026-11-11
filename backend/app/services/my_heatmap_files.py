@@ -73,7 +73,7 @@ SHARE_PREFIX = "shares"
 VERSION_RE = re.compile(r"^r\d{1,18}-[0-9a-f]{16}$")
 TILE_LAYER = "activities"
 # Columns whose change alters the file — MUST match the trigger list in
-# alembic 0068 (pinned by test_my_heatmap_files::test_hook_columns_match_trigger).
+# alembic 0070 (pinned by test_my_heatmap_files::test_hook_columns_match_trigger).
 # geometry_geojson is checked separately, only when the display cache is NULL
 # (the file then derives its geometry from it) — every writer that changes the
 # geometry also rewrites display_geojson, and comparing two large TOASTed
@@ -90,7 +90,6 @@ DISPLAYED_COLUMNS = (
     "created_at",
     "provider",
     "provider_activity_id",
-    "total_photo_count",
     # The shared artefact filters on provenance (duplicate promotion rewrites it).
     "source",
 )
@@ -381,7 +380,6 @@ def _summary_entry(act: dict, parts: list[list]) -> dict:
         "undated": bool(act.get("undated", False)),
         "provider": act.get("provider") or "file",
         "provider_activity_id": act.get("provider_activity_id"),
-        "total_photo_count": act.get("total_photo_count") or 0,
         "bbox": [min(lons), min(lats), max(lons), max(lats)],
         "center": [mid[0], mid[1]],
         "start": [flat[0][0], flat[0][1]],

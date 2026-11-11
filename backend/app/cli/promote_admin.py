@@ -9,17 +9,13 @@ WHY THIS EXISTS
     with 403 for everyone. This CLI is the promote path: it flips
     ``is_admin`` on an existing account.
 
-    Register/login normally first (or connect Strava), then promote that
-    account.
+    Register/login normally first, then promote that account.
 
 RESOLUTION
-    The identifier is resolved against BOTH:
-      - ``users.email`` (exact match), and
-      - a Strava ``integration_accounts.external_user_id`` (the athlete
-        id) → its owning user.
-    Whichever matches wins. A no-match is a clear error; an identifier
-    that somehow resolves to two DIFFERENT users is rejected as ambiguous
-    rather than silently promoting one.
+    The identifier is the account's ``users.email`` (exact match; the
+    column is UNIQUE, so at most one user matches). A no-match is a clear
+    error. (Resolution by Strava athlete id went away with the
+    ``integration_accounts`` table — migration 0070.)
 
 IDEMPOTENT
     Re-running on an already-admin user is a no-op (exit 0, nothing
@@ -27,12 +23,9 @@ IDEMPOTENT
 
 Usage::
 
-    # by email
     docker compose exec -T backend python -m app.cli.promote_admin paul@example.com
-    # by Strava athlete id
-    docker compose exec -T backend python -m app.cli.promote_admin 28707
 
-Exit codes: 0 success (promoted OR already-admin), 1 no match / ambiguous / error.
+Exit codes: 0 success (promoted OR already-admin), 1 no match / error.
 """
 from __future__ import annotations
 
@@ -48,55 +41,25 @@ logger = logging.getLogger("promote_admin")
 
 
 class ResolveError(Exception):
-    """No user (or more than one distinct user) matched the identifier."""
+    """No user matched the identifier."""
 
 
 def resolve_user(db, identifier: str):
-    """Resolve a ``User`` by email OR Strava ``external_user_id``.
+    """Resolve a ``User`` by email (exact match).
 
     Returns the matched ``User`` ORM instance. Raises :class:`ResolveError`
-    when nothing matches, or when the identifier resolves to two or more
-    DISTINCT users (ambiguous).
+    when nothing matches.
     """
-    from app.db.models import IntegrationAccount, User
+    from app.db.models import User
 
     ident = (identifier or "").strip()
     if not ident:
         raise ResolveError("empty identifier")
 
-    # 1) exact email match
-    by_email = db.query(User).filter(User.email == ident).all()
-
-    # 2) Strava athlete-id match → owning user(s)
-    strava_owner_ids = [
-        row[0]
-        for row in db.query(IntegrationAccount.user_id)
-        .filter(
-            IntegrationAccount.provider == "strava",
-            IntegrationAccount.external_user_id == ident,
-        )
-        .all()
-    ]
-    by_strava = (
-        db.query(User).filter(User.id.in_(strava_owner_ids)).all()
-        if strava_owner_ids
-        else []
-    )
-
-    # union, distinct by user id
-    matches = {u.id: u for u in (*by_email, *by_strava)}
+    matches = db.query(User).filter(User.email == ident).all()
     if not matches:
-        raise ResolveError(
-            f"no user matches {ident!r} (tried users.email and "
-            f"Strava integration_accounts.external_user_id)"
-        )
-    if len(matches) > 1:
-        ids = ", ".join(sorted(matches))
-        raise ResolveError(
-            f"{ident!r} is ambiguous — resolves to {len(matches)} distinct "
-            f"users ({ids}); promote by a unique identifier"
-        )
-    return next(iter(matches.values()))
+        raise ResolveError(f"no user matches {ident!r} (tried users.email)")
+    return matches[0]
 
 
 def promote(db, identifier: str) -> tuple[object, bool]:
@@ -104,7 +67,7 @@ def promote(db, identifier: str) -> tuple[object, bool]:
 
     Returns ``(user, changed)`` where ``changed`` is False when the user
     was already an admin (no write performed). Raises
-    :class:`ResolveError` on no-match / ambiguity.
+    :class:`ResolveError` on no-match.
     """
     user = resolve_user(db, identifier)
     was_admin = bool(getattr(user, "is_admin", False))
@@ -118,11 +81,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.cli.promote_admin",
         description="Promote a user to admin (set users.is_admin=TRUE). "
-        "Resolves the identifier by email or Strava athlete id.",
+        "Resolves the identifier by email.",
     )
     parser.add_argument(
         "identifier",
-        help="User email OR Strava external_user_id (athlete id)",
+        help="User email",
     )
     args = parser.parse_args()
 
