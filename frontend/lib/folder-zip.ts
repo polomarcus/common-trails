@@ -115,19 +115,19 @@ export function planFolderZip(files: File[]): FolderZipPlan {
 
   if (gpxFitCount === 0) {
     throw new FolderZipError(
-      "Aucun fichier .gpx / .fit trouvé dans ce dossier. Choisissez le dossier racine de votre export Strava (celui qui contient activities.csv).",
+      "Aucun fichier .gpx / .fit trouvé dans ce dossier. Choisis le dossier racine de ton export Strava (celui qui contient activities.csv).",
     );
   }
 
   if (members.length > MAX_ZIP_MEMBERS) {
     throw new FolderZipError(
-      `Ce dossier contient ${members.length} fichiers — la limite est de ${MAX_ZIP_MEMBERS}. Importez par lots plus petits.`,
+      `Ce dossier contient ${members.length} fichiers — la limite est de ${MAX_ZIP_MEMBERS}. Importe par lots plus petits.`,
     );
   }
 
   if (totalBytes > MAX_ZIP_TOTAL_UNCOMPRESSED) {
     throw new FolderZipError(
-      `Ce dossier pèse ${(totalBytes / (1024 * 1024)).toFixed(0)} Mo — la limite est de ${MAX_ZIP_TOTAL_UNCOMPRESSED / (1024 * 1024)} Mo. Importez par lots plus petits.`,
+      `Ce dossier pèse ${(totalBytes / (1024 * 1024)).toFixed(0)} Mo — la limite est de ${MAX_ZIP_TOTAL_UNCOMPRESSED / (1024 * 1024)} Mo. Importe par lots plus petits.`,
     );
   }
 

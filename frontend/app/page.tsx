@@ -716,8 +716,8 @@ export default function HomePage() {
             {t('home.section.howItWorksSub')}
           </p>
 
-          {/* 3-step flow — Paul's narrative (2026-08-07): profitez d'une heatmap
-              → exportez vos données (Strava/Garmin/GPX) → construisez de
+          {/* 3-step flow — Paul's narrative (2026-08-07): profite d'une heatmap
+              → exporte tes données (Strava/Garmin/GPX) → construis de
               meilleures traces. Step 2 renders real export links (see
               renderStep2Desc: splits the {strava}/{garmin} placeholders). */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 32, marginBottom: 48 }}>

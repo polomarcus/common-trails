@@ -4,7 +4,7 @@
   ``redirect`` param (mirrors frontend/lib/safe-redirect.ts).
 * ``render_archive_done_email`` — provider-neutral wording: the drain does not
   know whether a .zip came from Strava, Garmin or Komoot, so the
-  "nothing new" copy must say "Votre archive", never "archive Strava".
+  "nothing new" copy must say "Ton archive", never "archive Strava".
 
 Drives the REAL functions (no inline mirrors).
 """
@@ -51,7 +51,7 @@ class TestArchiveDoneEmailWording:
 
     def test_nothing_new_copy_says_votre_archive(self):
         _subject, html = render_archive_done_email(imported=0, skipped=5, failed=0, locale="fr")
-        assert "Votre archive a été traitée" in html
+        assert "Ton archive a été traitée" in html
 
     def test_nothing_new_copy_says_your_archive_en(self):
         _subject, html = render_archive_done_email(imported=0, skipped=5, failed=0, locale="en")

@@ -215,7 +215,7 @@ def test_started_email_copy():
         estimated_seconds=660,
         locale="fr",
     )
-    assert subject == "Début de votre import, estimé à environ 15 minutes"
+    assert subject == "Début de ton import, estimé à environ 15 minutes"
     assert "<strong>1500</strong> fichiers" in html
     assert "second email" in html
     assert "0 minute" not in html
@@ -317,7 +317,7 @@ def test_drain_ingests_no_route_and_email_has_no_bogus_no_sport_line():
     _to, _subject, html = send.call_args.args
     assert "<strong>1</strong> ignorée (hors-scope / doublons)" in html
     assert "sans sport identifiable" not in html
-    assert "réimportez" not in html
+    assert "réimporte" not in html
 
 
 @pytest.mark.usefixtures("_archive_env")
@@ -336,10 +336,10 @@ def test_start_email_sent_once_with_estimate_and_not_on_rerun(monkeypatch):
     with patch.object(email_service, "send_email", MagicMock(return_value=True)) as send:
         _drain()
     subjects = [c.args[1] for c in send.call_args_list]
-    assert subjects[0] == "Début de votre import, estimé à environ 2 minutes"  # 60 + 2×0.4 s
+    assert subjects[0] == "Début de ton import, estimé à environ 2 minutes"  # 60 + 2×0.4 s
     assert send.call_args_list[0].args[0] == email
     assert "<strong>2</strong> fichiers" in send.call_args_list[0].args[2]
-    assert len(subjects) == 2 and subjects[1].startswith("Votre archive")
+    assert len(subjects) == 2 and subjects[1].startswith("Ton archive")
 
     # Re-run of the SAME archive (admin requeue / killed drain re-claimed):
     # attempts > 0 → no second start email, only the terminal one.

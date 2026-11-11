@@ -79,7 +79,7 @@ describe('EmailLoginForm', () => {
     await submit('rider@example.com');
     expect(container.querySelector('[data-testid="email-login-sent"]')).toBeNull();
     expect(container.querySelector('[data-testid="email-login-error"]')!.textContent)
-      .toContain('Trop de demandes, réessayez dans quelques minutes');
+      .toContain('Trop de demandes, réessaie dans quelques minutes');
   });
 
   it("forwards the page's ?redirect= to the magic-link request", async () => {

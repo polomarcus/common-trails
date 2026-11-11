@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 const TITLE = 'Explorer — Chemins communs';
-const DESCRIPTION = 'Trouvez des itinéraires gravel et VTT près de chez vous grâce à la communauté.';
+const DESCRIPTION = 'Trouve des itinéraires gravel et VTT près de chez toi grâce à la communauté.';
 
 export const metadata: Metadata = {
   title: 'Explorer',

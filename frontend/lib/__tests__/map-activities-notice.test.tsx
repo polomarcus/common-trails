@@ -62,7 +62,7 @@ describe('MapActivitiesNotice', () => {
 
     const card = container.querySelector('[data-testid="map-empty-state"]');
     expect(card).not.toBeNull();
-    expect(card!.textContent).toContain('Importez vos traces pour voir votre heatmap');
+    expect(card!.textContent).toContain('Importe tes traces pour voir ta heatmap');
     expect(container.querySelector('[data-testid="map-empty-state-cta"]')!.getAttribute('href')).toBe('/strava');
   });
 
@@ -93,9 +93,9 @@ describe('MapActivitiesNotice', () => {
     auth.token = 'cookie-auth';
     await act(async () => { root = createRoot(container); root.render(el(0)); });
     expect(container.querySelector('[data-testid="map-empty-state-processing"]')!.textContent)
-      .toContain('Traitement en cours — vos sorties apparaîtront ici, un email vous préviendra');
+      .toContain('Traitement en cours — tes sorties apparaîtront ici, un email te préviendra');
     expect(container.querySelector('[data-testid="map-empty-state-cta"]')).toBeNull();
-    expect(container.textContent).not.toContain('Importez vos traces');
+    expect(container.textContent).not.toContain('Importe tes traces');
   });
 
   it('marker older than 2 h: back to the import CTA', async () => {
