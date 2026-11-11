@@ -69,4 +69,9 @@ EXPOSE 8787
 
 # Retry alembic up to 5 times — CI healthcheck race condition means the DB
 # container may accept TCP before PostgreSQL is fully ready for queries.
-CMD ["sh", "-c", "for i in 1 2 3 4 5; do alembic upgrade head && break || echo \"Alembic attempt $i failed, retrying in 3s...\" && sleep 3; done && uvicorn app.main:app --host 0.0.0.0 --port 8787"]
+# If ALL attempts fail the container EXITS (non-zero) instead of starting the
+# API on an un-migrated schema: the old loop ended with a successful `sleep`,
+# so uvicorn started anyway. On Cloud Run a revision that cannot start never
+# takes traffic — the previous revision keeps serving and the deploy fails
+# loudly. See backend/start-web.sh (already in the image via `COPY . .`).
+CMD ["sh", "/app/start-web.sh"]
