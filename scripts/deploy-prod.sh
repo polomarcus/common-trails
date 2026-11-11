@@ -132,11 +132,13 @@ HEATMAP_PUBLIC_BASE_URL="https://tiles.chemins-communs.fr"
 # DIFFERENT bucket from the public one above, on purpose: these traces are NOT
 # endpoint-masked and start at users' homes. Never fronted by a CDN, never
 # granted to allUsers; served only through the authenticated /me/heatmap proxy.
-# Asserted in step 0b. Feature flag OFF by default — flip with
-# MY_HEATMAP_FILES_ENABLED=true (optionally MY_HEATMAP_FILES_USERS="<uuid>;<uuid>"
-# for a staged rollout) in the deployer's env.
+# Asserted in step 0b. ON by default since 2026-11-11 — it is live for every
+# account, and the old "false" default meant a MANUAL deploy (without the env
+# var deploy-gcp.yml sets) silently switched the feature off for everyone.
+# MY_HEATMAP_FILES_ENABLED=false still turns it off (optionally
+# MY_HEATMAP_FILES_USERS="<uuid>;<uuid>" for a staged rollout).
 MY_HEATMAP_BUCKET_NAME="common-trails-my-heatmap-${ENV}"
-MY_HEATMAP_FILES_ENABLED="${MY_HEATMAP_FILES_ENABLED:-false}"
+MY_HEATMAP_FILES_ENABLED="${MY_HEATMAP_FILES_ENABLED:-true}"
 MY_HEATMAP_FILES_USERS="${MY_HEATMAP_FILES_USERS:-}"
 
 # ── Cloud Scheduler (2026-11-07 ops audit P0-1/P0-2) ─────────────────────────
@@ -277,7 +279,7 @@ INTERNAL_ARTEFACT_HANDLER_URL: "${WORKER_RUN_URL}/internal/artefacts/rebuild"
 # new queue to create) with their own handler on the WORKER (tippecanoe).
 INTERNAL_MY_HEATMAP_HANDLER_URL: "${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
 MY_HEATMAP_BUCKET: "${MY_HEATMAP_BUCKET_NAME}"
-MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED:-false}"
+MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED}"
 MY_HEATMAP_FILES_USERS: "${MY_HEATMAP_FILES_USERS}"
 CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE: "common-trails-strava-webhook-${ENV}"
 INTERNAL_STRAVA_WEBHOOK_HANDLER_URL: "${WORKER_RUN_URL}/internal/strava/webhook-event"
@@ -440,7 +442,7 @@ fi
 #     signBlob / CORS needed;
 #   • FAIL the deploy if prevention is not enforced or a public principal is
 #     bound: shipping the feature against a public bucket would publish homes.
-# Runs ONLY when MY_HEATMAP_FILES_ENABLED=true. Flag OFF (the default) → the
+# Runs ONLY when MY_HEATMAP_FILES_ENABLED=true (the default). Flag OFF → the
 # step is skipped entirely: no bucket or IAM call, prod infra untouched.
 # No CDN, no lifecycle rule (the app deletes superseded versions itself), and
 # GCS soft delete OFF: a GDPR-deleted (or superseded) file of home-start traces
@@ -511,7 +513,7 @@ if [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]]; then
   assert_my_heatmap_bucket || true
   assert_my_heatmap_jobs_enqueue_iam
 else
-  # Flag OFF (default): ZERO bucket/IAM call — the deploy touches exactly the
+  # Flag OFF (explicit): ZERO bucket/IAM call — the deploy touches exactly the
   # infra it touched before this feature. The bucket is created/asserted by
   # the first deploy that turns the flag on.
   echo "   – skipped (MY_HEATMAP_FILES_ENABLED=false: feature off, bucket unused)"
