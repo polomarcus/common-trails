@@ -2,8 +2,8 @@
  * End-to-end: /strava is a source-neutral SINGLE-JOB contribution page.
  *
  * The compliance pivot CANCELLED the personal "connect Strava = see your own
- * rides" flow at the UI level (the backend OAuth/webhook/sync code stays but
- * dormant — no UI entry point). De-branding (2026-07): Strava is one source
+ * rides" flow (UI entry points, then the backend OAuth/webhook/sync code,
+ * were removed). De-branding (2026-07): Strava is one source
  * among GPX / FIT, so the HERO is a source-neutral deposit dropzone and all the
  * Strava-specific material (bulk-archive wizard + how-to) is folded into a
  * collapsed "Using Strava? Get your archive" section.

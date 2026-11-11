@@ -45,13 +45,12 @@ consent fields (`contribute_heatmap`, `consent_version`, …).
    user contributes, that the community heatmap will include them « en général
    dans l'heure ».
 
-## 3. Strava API sync (personal only)
+## 3. Legacy Strava API activities (personal only)
 
-Webhook events (`/integrations/strava/webhook` → Cloud Task → worker
-`/internal/strava/webhook-event`), the full import job and the weekly resync
-job store activities with `source='strava_api'`. They show in « Ma heatmap »
-but **never** reach the community map (provenance gate,
-`backend/app/services/provenance.py`).
+The Strava API sync (OAuth connect, webhook, import and resync jobs) is
+removed. The activities it stored (`source='strava_api'`) stay in the
+database: they show in « Ma heatmap » but **never** reach the community map
+(provenance gate, `backend/app/services/provenance.py`).
 
 ## 4. Build and publish
 
