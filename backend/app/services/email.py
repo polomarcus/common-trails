@@ -116,10 +116,10 @@ def render_magic_link_email(verify_url: str, locale: str = "fr") -> tuple[str, s
         button = "Sign in"
         ignore = "If you did not request this, you can safely ignore this email."
     else:
-        subject = "Votre lien de connexion Chemins Communs"
-        intro = "Cliquez sur le bouton ci-dessous pour vous connecter. Ce lien est valable 15 minutes et à usage unique."
+        subject = "Ton lien de connexion Chemins Communs"
+        intro = "Clique sur le bouton ci-dessous pour te connecter. Ce lien est valable 15 minutes et à usage unique."
         button = "Se connecter"
-        ignore = "Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer cet email."
+        ignore = "Si tu n'es pas à l'origine de cette demande, tu peux ignorer cet email."
 
     html = f"""\
 <div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#1a1a1a">
@@ -175,7 +175,7 @@ def render_archive_done_email(
     triggered, so the copy only points to "Ma heatmap". The count is NOT
     repeated in the intro — the list below already carries it.
 
-    Provider-neutral wording ("Votre archive", never "archive Strava"): the
+    Provider-neutral wording ("Ton archive", never "archive Strava"): the
     drain does not record which platform produced the .zip (pending_archives
     has no provider column; Garmin/Komoot/… exports go through the same path).
     ``skipped`` is the total; ``skipped_no_sport`` (members whose sport could
@@ -242,16 +242,16 @@ def render_archive_done_email(
         )
     else:
         if imported > 0:
-            subject = "Votre archive est importée 🚴"
+            subject = "Ton archive est importée 🚴"
             intro = (
-                "Votre archive a été traitée. Vos sorties sont visibles dès maintenant "
+                "Ton archive a été traitée. Tes sorties sont visibles dès maintenant "
                 "dans le calque <strong>Ma heatmap</strong> de la carte"
                 + (" ; la heatmap communautaire les intégrera, en général dans l'heure." if promise_public else ".")
             )
         else:
-            subject = "Votre archive a été traitée"
+            subject = "Ton archive a été traitée"
             intro = (
-                "Votre archive a été traitée, mais aucune nouvelle trace n'a été "
+                "Ton archive a été traitée, mais aucune nouvelle trace n'a été "
                 "ajoutée — elles étaient probablement déjà importées (doublons) ou hors "
                 "périmètre (sorties virtuelles, autres sports…)."
             )
@@ -271,16 +271,16 @@ def render_archive_done_email(
         if no_sport:
             lines.append(
                 f"<strong>{no_sport}</strong> sans sport identifiable — "
-                "choisissez un sport et réimportez-les"
+                "choisis un sport et réimporte-les"
             )
         if failed:
             lines.append(f"<strong>{failed}</strong> en erreur")
         button = "Voir la carte"
-        calque_title = "💡 Le saviez-vous ?"
+        calque_title = "💡 Le savais-tu ?"
         calque_body = (
-            "Vous pouvez afficher toute la heatmap communautaire en calque dans "
-            "<strong>gpx.studio</strong> ou <strong>VisuGPX</strong> et tracer votre itinéraire par-dessus — "
-            "ajoutez une couche de carte personnalisée avec cette URL de tuiles :"
+            "Tu peux afficher toute la heatmap communautaire en calque dans "
+            "<strong>gpx.studio</strong> ou <strong>VisuGPX</strong> et tracer ton itinéraire par-dessus — "
+            "ajoute une couche de carte personnalisée avec cette URL de tuiles :"
         )
 
     items = "".join(f'<li style="margin:0 0 4px">{li}</li>' for li in lines)
@@ -357,15 +357,15 @@ def render_archive_started_email(
         )
         button = "See the map"
     else:
-        subject = f"Début de votre import, estimé à {duration}"
+        subject = f"Début de ton import, estimé à {duration}"
         intro = (
-            "Le traitement de votre archive vient de commencer : "
+            "Le traitement de ton archive vient de commencer : "
             f"<strong>{members}</strong> fichier{'s' if members > 1 else ''} d'activité à importer, "
             f"durée estimée à <strong>{duration}</strong>."
         )
         detail = (
-            "Vos sorties apparaissent au fur et à mesure dans le calque "
-            "<strong>Ma heatmap</strong> de la carte. Vous recevrez un second email "
+            "Tes sorties apparaissent au fur et à mesure dans le calque "
+            "<strong>Ma heatmap</strong> de la carte. Tu recevras un second email "
             "dès que l'import sera terminé."
         )
         button = "Voir la carte"
@@ -409,16 +409,16 @@ def render_archive_failed_email(last_error: str | None, locale: str = "fr") -> t
                 f"again, or contact us at {SUPPORT_EMAIL} and we will look into it."
             )
     else:
-        subject = "Votre archive n'a pas pu être traitée"
+        subject = "Ton archive n'a pas pu être traitée"
         if too_big:
             reason = (
-                "Votre export est trop volumineux pour un seul envoi — découpez-le "
-                "en plusieurs .zip plus petits et envoyez-les un par un."
+                "Ton export est trop volumineux pour un seul envoi — découpe-le "
+                "en plusieurs .zip plus petits et envoie-les un par un."
             )
         else:
             reason = (
-                "Une erreur est survenue pendant le traitement de votre archive. "
-                f"Réessayez, ou écrivez-nous à {SUPPORT_EMAIL} et nous regarderons."
+                "Une erreur est survenue pendant le traitement de ton archive. "
+                f"Réessaie, ou écris-nous à {SUPPORT_EMAIL} et nous regarderons."
             )
 
     body = f"""\
@@ -440,7 +440,7 @@ def render_resync_reminder_email() -> tuple[str, str]:
     map; this nudges them to re-export from Strava/Garmin and re-upload. Same
     self-contained, asset-free shell as the other transactional emails.
     """
-    subject = "Vos dernières sorties manquent sur la carte 🚴 / Your latest rides are missing from the map"
+    subject = "Tes dernières sorties manquent sur la carte 🚴 / Your latest rides are missing from the map"
     map_url = "https://chemins-communs.fr/strava"
     strava_url = "https://support.strava.com/hc/en-us/articles/216918437-Exporting-your-Data-and-Bulk-Export"
     garmin_url = "https://www.garmin.com/fr-FR/account/datamanagement/exportdata"
@@ -450,12 +450,12 @@ def render_resync_reminder_email() -> tuple[str, str]:
     Bonjour,
   </p>
   <p style="font-size:15px;line-height:1.5;margin:0 0 16px">
-    La carte communautaire n'est enrichie que par les fichiers que vous
-    <strong>importez vous-même</strong> — vos sorties récentes n'y sont donc pas
-    encore. Pensez à ré-exporter vos données depuis
+    La carte communautaire n'est enrichie que par les fichiers que tu
+    <strong>importes toi-même</strong> — tes sorties récentes n'y sont donc pas
+    encore. Pense à ré-exporter tes données depuis
     <a href="{strava_url}" style="color:#2d6a4f">Strava</a> ou
     <a href="{garmin_url}" style="color:#2d6a4f">Garmin</a> et à les redéposer :
-    chaque trace partagée renforce les chemins communs (sous licence ODbL, vos
+    chaque trace partagée renforce les chemins communs (sous licence ODbL, tes
     départs et arrivées restent masqués).
   </p>
   <p style="margin:0 0 24px">
@@ -503,13 +503,13 @@ def render_email_change_email(confirm_url: str, locale: str = "fr") -> tuple[str
         button = "Confirm my email"
         ignore = "If you did not request this, you can safely ignore this email."
     else:
-        subject = "Confirmez votre email Chemins Communs"
+        subject = "Confirme ton email Chemins Communs"
         intro = (
-            "Confirmez cette adresse pour la rattacher à votre compte Chemins "
+            "Confirme cette adresse pour la rattacher à ton compte Chemins "
             "Communs. Ce lien est valable 15 minutes et à usage unique."
         )
         button = "Confirmer mon email"
-        ignore = "Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer cet email."
+        ignore = "Si tu n'es pas à l'origine de cette demande, tu peux ignorer cet email."
 
     html = f"""\
 <div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#1a1a1a">
