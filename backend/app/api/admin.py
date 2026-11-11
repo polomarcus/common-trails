@@ -13,7 +13,7 @@ from sqlalchemy import String, cast, func, text
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user
-from app.db.models import Activity, DfciEdge, HeatCell, HeatEdge, Route, User
+from app.db.models import Activity, DfciEdge, Route, User
 from app.db.session import get_db
 
 log = logging.getLogger(__name__)
@@ -28,96 +28,52 @@ def require_admin(user: Annotated[AuthenticatedUser, Depends(get_current_user)])
     return user
 
 
-def _heat_edge_stats(db: Session) -> dict:
-    """Heavy ``heat_edges`` aggregates for the admin dashboard, bounded + fail-soft.
+def _community_heatmap_facts(db: Session) -> dict:
+    """What the published community heatmap looks like — cheap, fail-soft.
 
-    On the live db-f1-micro these are full scans of the ~5 M-row ``heat_edges``
-    table. An unbounded ``SELECT count(*) FROM heat_edges`` full scan severed
-    the f1-micro connection in the ``build_pmtiles`` path (#442, "server closed
-    the connection unexpectedly"); the SAME pattern on this now-live, un-frozen
-    admin endpoint (#443) must never hang the request or drop the pooled
-    connection. Each scan runs under a ``SET LOCAL statement_timeout`` (scoped
-    to this transaction only, so it can't leak onto the next checkout — same
-    guard as the MVT tile endpoint in ``api/heatmap.py``) and inside a
-    try/except that degrades to a ``-1`` "unknown" sentinel instead of 500-ing
-    the whole dashboard. A bounded miss is strictly better than a severed
-    connection.
+    Two sources, neither of which scans anything:
+
+    * the latest ``heatmap_metrics`` row (ONE indexed ``ORDER BY captured_at
+      DESC LIMIT 1``) — written at the end of every PMTiles build, so it says
+      when the last build ran and what it contained;
+    * the PMTiles pointer JSON (``/export/heatmap`` reads the same one, 60 s
+      in-process cache) — published version + file size. ``None`` locally,
+      where no bucket is configured.
+
+    Every field degrades to ``None`` instead of failing the dashboard.
     """
-    timeout_ms = int(os.environ.get("ADMIN_STAT_TIMEOUT_MS", "15000"))
-    edges = cells = contributors = osm_tagged = -1
-    dead_ends = total_vertices = -1
-
-    try:
-        db.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
-        edges = db.query(func.count(HeatEdge.id)).scalar() or 0
-        cells = db.query(func.count(HeatCell.id)).scalar() or 0
-        contributors = db.query(func.coalesce(func.max(HeatEdge.user_count), 0)).scalar() or 0
-        # Raw SQL: osm_way_id is a migration-added column the ORM doesn't expose.
-        osm_tagged = db.execute(
-            text("SELECT count(*) FROM heat_edges WHERE osm_way_id IS NOT NULL")
-        ).scalar() or 0
-    except Exception:
-        log.warning("admin: heat_edges count scan aborted (statement_timeout / OOM guard)", exc_info=True)
-        db.rollback()
-
-    # Data quality: % of heat_edges tagged with an OSM way (good render path)
-    # vs grid-fallback rows (NULL osm_way_id). PR #247 alerting fires > 0.20.
-    if edges > 0 and osm_tagged >= 0:
-        grid_fallback = edges - osm_tagged
-        osm_way_id_pct = round(100.0 * osm_tagged / edges, 1)
-        grid_fallback_pct = round(100.0 * grid_fallback / edges, 1)
-    else:
-        grid_fallback = -1 if edges < 0 else 0
-        osm_way_id_pct = grid_fallback_pct = 0.0
-
-    # Graph health: dead-end vertices + connectivity. O(n) endpoint aggregation
-    # over the whole table — independently guarded so a slow plan here can't
-    # sever the connection either.
-    try:
-        db.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
-        dead_ends = db.execute(text("""
-            WITH endpoints AS (
-                SELECT round(ST_X(ST_StartPoint(geometry))::numeric, 5) AS x,
-                       round(ST_Y(ST_StartPoint(geometry))::numeric, 5) AS y FROM heat_edges
-                UNION ALL
-                SELECT round(ST_X(ST_EndPoint(geometry))::numeric, 5),
-                       round(ST_Y(ST_EndPoint(geometry))::numeric, 5) FROM heat_edges
-            )
-            SELECT COUNT(*) FROM (
-                SELECT x, y FROM endpoints GROUP BY x, y HAVING COUNT(*) = 1
-            ) dead
-        """)).scalar() or 0
-        total_vertices = db.execute(text("""
-            WITH endpoints AS (
-                SELECT round(ST_X(ST_StartPoint(geometry))::numeric, 5) AS x,
-                       round(ST_Y(ST_StartPoint(geometry))::numeric, 5) AS y FROM heat_edges
-                UNION ALL
-                SELECT round(ST_X(ST_EndPoint(geometry))::numeric, 5),
-                       round(ST_Y(ST_EndPoint(geometry))::numeric, 5) FROM heat_edges
-            )
-            SELECT COUNT(DISTINCT (x, y)) FROM endpoints
-        """)).scalar() or 0
-    except Exception:
-        log.warning("admin: heat_edges graph-health scan aborted (statement_timeout / OOM guard)", exc_info=True)
-        db.rollback()
-        dead_ends = total_vertices = -1
-
-    return {
-        "heatmap": {
-            "edges": edges,
-            "cells": cells,
-            "max_contributors_on_edge": contributors,
-            "osm_tagged": osm_tagged,
-            "grid_fallback": grid_fallback,
-            "osm_way_id_pct": osm_way_id_pct,
-            "grid_fallback_pct": grid_fallback_pct,
-        },
-        "graph_health": {
-            "total_vertices": total_vertices,
-            "dead_ends": dead_ends,
-            "dead_end_pct": round(dead_ends / total_vertices * 100, 1) if total_vertices > 0 else 0,
-        },
+    facts: dict = {
+        "last_build_at": None,
+        "activities": None,
+        "contributors": None,
+        "network_km": None,
+        "version": None,
+        "size_bytes": None,
     }
+    try:
+        row = db.execute(text(
+            "SELECT captured_at, activities, contributors, network_km "
+            "FROM heatmap_metrics ORDER BY captured_at DESC LIMIT 1"
+        )).first()
+        if row is not None:
+            facts["last_build_at"] = row[0].isoformat() if row[0] else None
+            facts["activities"] = int(row[1] or 0)
+            facts["contributors"] = int(row[2] or 0)
+            facts["network_km"] = float(row[3]) if row[3] is not None else 0.0
+    except Exception:
+        log.warning("admin: heatmap_metrics latest snapshot read failed", exc_info=True)
+        db.rollback()
+
+    try:
+        from app.api.export import _read_pointer_cached
+
+        pointer = _read_pointer_cached()
+        if pointer:
+            facts["version"] = pointer.get("latest")
+            facts["size_bytes"] = pointer.get("size_bytes")
+    except Exception:
+        log.warning("admin: PMTiles pointer read failed", exc_info=True)
+    return facts
 
 
 @router.get("/dashboard")
@@ -172,10 +128,8 @@ async def admin_dashboard(
     )
     routes_by_visibility = {row[0]: row[1] for row in route_vis}
 
-    # Heatmap + graph-health aggregates — the only full scans of the ~5 M-row
-    # heat_edges table on this endpoint. Bounded + fail-soft (see helper) so a
-    # pathological plan on db-f1-micro can never sever the pooled connection.
-    heat_stats = _heat_edge_stats(db)
+    # Published community heatmap (static PMTiles): last build + pointer.
+    heatmap_facts = _community_heatmap_facts(db)
 
     # DFCI
     total_dfci = db.query(func.count(DfciEdge.id)).scalar() or 0
@@ -212,8 +166,7 @@ async def admin_dashboard(
             "total": total_routes,
             "by_visibility": routes_by_visibility,
         },
-        "heatmap": heat_stats["heatmap"],
-        "graph_health": heat_stats["graph_health"],
+        "heatmap": heatmap_facts,
         "network": {
             "dfci_edges": total_dfci,
         },
@@ -231,10 +184,9 @@ async def admin_dashboard(
 def _heatmap_freshness(db: Session) -> dict:
     """Level-1 "is it alive + fresh?" panel — ALL cheap, indexed reads.
 
-    Deliberately touches only small / indexed tables (``activities``,
-    ``heat_edges_agg``) — NEVER a raw ``heat_edges`` scan (off-limits on this now-live db-f1-micro endpoint).
-    Each probe is individually fail-soft so a hiccup degrades one field to
-    ``null`` rather than 500-ing the panel.
+    Touches only ``activities`` (small beta table) and ``heatmap_metrics`` (one
+    row per PMTiles build). Each probe is individually fail-soft so a hiccup
+    degrades one field to ``null`` rather than 500-ing the panel.
     """
     def _row(sql: str):
         try:
@@ -250,16 +202,15 @@ def _heatmap_freshness(db: Session) -> dict:
     last_activity_at = r[0].isoformat() if r and r[0] else None
     last_activity_date = r[1].isoformat() if r and r[1] else None
 
-    # Heatmap rebuild freshness — reuse the /readyz agg-freshness logic.
-    r = _row("SELECT COUNT(*), MAX(updated_at) FROM heat_edges_agg")
-    heat_edges_agg = int(r[0] or 0) if r else 0
-    heat_agg_updated_at = r[1].isoformat() if r and r[1] else None
+    # Last community-heatmap build: every PMTiles build appends a
+    # heatmap_metrics snapshot when it finishes.
+    r = _row("SELECT MAX(captured_at) FROM heatmap_metrics")
+    last_rebuild_at = r[0].isoformat() if r and r[0] else None
 
     return {
         "last_activity_at": last_activity_at,
         "last_activity_date": last_activity_date,
-        "heat_agg_updated_at": heat_agg_updated_at,
-        "heat_edges_agg": heat_edges_agg,
+        "last_rebuild_at": last_rebuild_at,
     }
 
 
@@ -276,7 +227,9 @@ async def admin_heatmap_metrics(
     snapshots in CHRONOLOGICAL (ascending) order, ready to plot. Both paths are
     light on db-f1-micro: the series is an indexed ``ORDER BY captured_at DESC
     LIMIT N`` (never a scan), the freshness object touches only small/indexed
-    tables — the raw 5 M-row ``heat_edges`` table is never scanned here.
+    tables. The matched-era columns of ``heatmap_metrics`` (``heat_edges``,
+    ``agg_ways``, ``grid_fallback_pct`` — all 0 / NULL since the raw pivot) are
+    no longer exposed.
     """
     freshness = _heatmap_freshness(db)
 
@@ -284,8 +237,7 @@ async def admin_heatmap_metrics(
     try:
         rows = db.execute(
             text(
-                "SELECT captured_at, heat_edges, agg_ways, activities, "
-                "contributors, network_km, grid_fallback_pct, source "
+                "SELECT captured_at, activities, contributors, network_km, source "
                 "FROM heatmap_metrics ORDER BY captured_at DESC LIMIT :lim"
             ),
             {"lim": limit},
@@ -294,13 +246,10 @@ async def admin_heatmap_metrics(
         for row in reversed(rows):
             series.append({
                 "captured_at": row[0].isoformat() if row[0] else None,
-                "heat_edges": int(row[1] or 0),
-                "agg_ways": int(row[2] or 0),
-                "activities": int(row[3] or 0),
-                "contributors": int(row[4] or 0),
-                "network_km": float(row[5]) if row[5] is not None else 0.0,
-                "grid_fallback_pct": float(row[6]) if row[6] is not None else None,
-                "source": row[7],
+                "activities": int(row[1] or 0),
+                "contributors": int(row[2] or 0),
+                "network_km": float(row[3]) if row[3] is not None else 0.0,
+                "source": row[4],
             })
     except Exception:
         log.warning("admin: heatmap_metrics series read failed", exc_info=True)
@@ -410,12 +359,6 @@ async def admin_users(
     Efficiency (runs on db-f1-micro): the heavy `activities` table
     is touched by exactly TWO `GROUP BY user_id` scans (indexed column) — never a per-user N+1. The users table is tiny
     (friends-beta) and fully materialised.
-
-    Deliberately OMITTED: per-user grid-fallback vs OSM-matched heat_edge
-    ratio. `heat_edges` has no `user_id`; attributing rows to a user means
-    joining `heat_edge_contributors` (millions of rows) to `heat_edges` by
-    `edge_key` filtered on a per-user hash — not cheap on f1-micro. The
-    GLOBAL ratio already lives on `/admin/dashboard` (osm_way_id_pct).
     """
     # ── Users (tiny table — beta) ────────────────────────────────────────
     user_rows = db.query(

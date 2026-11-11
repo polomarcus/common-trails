@@ -442,4 +442,4 @@ class TestReadyzStillHealthy:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] in ("ok", "warming")
-        assert "heat_edges" in body
+        assert "version" in body

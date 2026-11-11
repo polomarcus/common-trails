@@ -10,6 +10,7 @@ import {
   type HeatmapMetricsResponse,
   ageMs,
   freshnessLevel,
+  fileSizeParts,
   relativeParts,
   sparklinePath,
   FRESHNESS_THRESHOLDS,
@@ -44,19 +45,15 @@ interface DashboardData {
     total: number;
     by_visibility: Record<string, number>;
   };
+  // Published community heatmap (static PMTiles): last build snapshot +
+  // pointer. Every field is null when unknown (no build yet / no bucket).
   heatmap: {
-    edges: number;
-    cells: number;
-    max_contributors_on_edge: number;
-    osm_tagged: number;
-    grid_fallback: number;
-    osm_way_id_pct: number;
-    grid_fallback_pct: number;
-  };
-  graph_health: {
-    total_vertices: number;
-    dead_ends: number;
-    dead_end_pct: number;
+    last_build_at: string | null;
+    activities: number | null;
+    contributors: number | null;
+    network_km: number | null;
+    version: string | null;
+    size_bytes: number | null;
   };
   network: {
     dfci_edges: number;
@@ -224,7 +221,7 @@ function FreshnessPanel({ freshness }: { freshness: Freshness }) {
     FRESHNESS_THRESHOLDS.activity.amber, FRESHNESS_THRESHOLDS.activity.red,
   );
   const rebuildLevel = freshnessLevel(
-    ageMs(freshness.heat_agg_updated_at, now),
+    ageMs(freshness.last_rebuild_at, now),
     FRESHNESS_THRESHOLDS.rebuild.amber, FRESHNESS_THRESHOLDS.rebuild.red,
   );
 
@@ -232,12 +229,36 @@ function FreshnessPanel({ freshness }: { freshness: Freshness }) {
     <Card title={t('admin.mon.freshness')}>
       <div data-testid="admin-freshness">
         <FreshnessRow label={t('admin.mon.lastActivity')} level={activityLevel} text={rel(freshness.last_activity_at)} />
-        <FreshnessRow
-          label={t('admin.mon.lastRebuild')}
-          level={rebuildLevel}
-          text={`${rel(freshness.heat_agg_updated_at)} · ${t('admin.mon.ways', { n: freshness.heat_edges_agg })}`}
-        />
+        <FreshnessRow label={t('admin.mon.lastRebuild')} level={rebuildLevel} text={rel(freshness.last_rebuild_at)} />
       </div>
+    </Card>
+  );
+}
+
+function HeatmapCard({ heatmap }: { heatmap: DashboardData['heatmap'] }) {
+  const { t, locale } = useI18n();
+  const p = relativeParts(ageMs(heatmap.last_build_at, Date.now()));
+  const lastBuild = p.unit === 'never' ? t('admin.mon.rel.never')
+    : p.unit === 'now' ? t('admin.mon.rel.now')
+    : t(`admin.mon.rel.${p.unit}`, { n: p.value });
+  const size = fileSizeParts(heatmap.size_bytes);
+  const sizeLabel = size
+    ? `${size.value.toLocaleString(locale === 'en' ? 'en-GB' : 'fr-FR')} ${t(`admin.unit.${size.unit}`)}`
+    : '—';
+  return (
+    <Card title={t('admin.card.heatmap')}>
+      <div data-testid="admin-heatmap-card" style={{ display: 'flex', gap: 24, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <Stat label={t('admin.stat.lastBuild')} value={lastBuild} />
+        <Stat label={t('admin.stat.publishedTraces')} value={heatmap.activities ?? '—'} />
+        <Stat label={t('admin.stat.contributors')} value={heatmap.contributors ?? '—'} />
+        <Stat label={t('admin.stat.networkKm')} value={heatmap.network_km === null ? '—' : Math.round(heatmap.network_km)} />
+        <Stat label={t('admin.stat.fileSize')} value={sizeLabel} />
+      </div>
+      {heatmap.version && (
+        <p style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginTop: 8 }}>
+          {t('admin.stat.version', { version: heatmap.version })}
+        </p>
+      )}
     </Card>
   );
 }
@@ -277,9 +298,9 @@ function EvolutionChart({ series }: { series: HeatmapMetricPoint[] }) {
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
             <Sparkline
-              values={series.map(p => p.heat_edges)} color="#dc2626"
-              label={t('admin.mon.series.heatEdges')}
-              latest={nf(last(series)?.heat_edges ?? 0)}
+              values={series.map(p => p.contributors)} color="#dc2626"
+              label={t('admin.mon.series.contributors')}
+              latest={nf(last(series)?.contributors ?? 0)}
             />
             <Sparkline
               values={series.map(p => p.activities)} color="#2563eb"
@@ -516,37 +537,8 @@ export default function AdminPage() {
                   ))}
                 </div>
               </Card>
-              <Card title={t('admin.card.heatmap')}>
-                <div style={{ display: 'flex', gap: 24, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  <Stat label={t('admin.stat.edges')} value={data.heatmap.edges} />
-                  <Stat label={t('admin.stat.cells')} value={data.heatmap.cells} />
-                  <Stat label={t('admin.stat.maxContributors')} value={data.heatmap.max_contributors_on_edge} />
-                  {/* Heatmap data quality: PR #247 alerting fires at
-                      grid_fallback_ratio > 0.20, so show in amber/red. */}
-                  <Stat
-                    label={t('admin.stat.pctOnOsm')}
-                    value={`${data.heatmap.osm_way_id_pct}%`}
-                    color={data.heatmap.osm_way_id_pct < 80 ? '#d97706' : '#16a34a'}
-                  />
-                  <Stat
-                    label={t('admin.stat.pctGridFallback')}
-                    value={`${data.heatmap.grid_fallback_pct}%`}
-                    color={data.heatmap.grid_fallback_pct > 20 ? '#dc2626' : data.heatmap.grid_fallback_pct > 5 ? '#d97706' : '#16a34a'}
-                  />
-                </div>
-              </Card>
+              <HeatmapCard heatmap={data.heatmap} />
             </div>
-
-            {/* Graph Health */}
-            <Card title={t('admin.card.graphHealth')}>
-              <div style={{ display: 'flex', gap: 24, justifyContent: 'center' }}>
-                <Stat label={t('admin.stat.vertices')} value={data.graph_health.total_vertices} />
-                <Stat label={t('admin.stat.deadEnds')} value={data.graph_health.dead_ends}
-                  color={data.graph_health.dead_end_pct > 30 ? '#dc2626' : data.graph_health.dead_end_pct > 15 ? '#d97706' : '#16a34a'} />
-                <Stat label={t('admin.stat.pctDeadEnds')} value={`${data.graph_health.dead_end_pct}%`}
-                  color={data.graph_health.dead_end_pct > 30 ? '#dc2626' : data.graph_health.dead_end_pct > 15 ? '#d97706' : '#16a34a'} />
-              </div>
-            </Card>
 
             {/* Network + DB */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>

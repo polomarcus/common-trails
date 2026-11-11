@@ -5,6 +5,7 @@ import {
   relativeParts,
   sparklinePoints,
   sparklinePath,
+  fileSizeParts,
   FRESHNESS_THRESHOLDS,
 } from '../admin-metrics';
 
@@ -79,5 +80,20 @@ describe('sparklinePoints / sparklinePath', () => {
   });
   it('path starts with a move command', () => {
     expect(sparklinePath([1, 2], 100, 20)).toMatch(/^M[\d.]+,[\d.]+ L/);
+  });
+});
+
+describe('fileSizeParts (published PMTiles size on the admin heatmap card)', () => {
+  it('is null when the size is unknown (no pointer locally)', () => {
+    expect(fileSizeParts(null)).toBeNull();
+    expect(fileSizeParts(undefined)).toBeNull();
+    expect(fileSizeParts(Number.NaN)).toBeNull();
+    expect(fileSizeParts(-1)).toBeNull();
+  });
+
+  it('scales to the largest unit with one decimal', () => {
+    expect(fileSizeParts(512)).toEqual({ value: 0.5, unit: 'kb' });
+    expect(fileSizeParts(12.34 * 1024 * 1024)).toEqual({ value: 12.3, unit: 'mb' });
+    expect(fileSizeParts(2 * 1024 * 1024 * 1024)).toEqual({ value: 2, unit: 'gb' });
   });
 });

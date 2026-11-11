@@ -14,41 +14,14 @@ router = APIRouter(tags=["health"])
 from app.main import _APP_VERSION as APP_VERSION
 
 
-def _relation_exists(db: Session, name: str) -> bool:
-    """True when a base table ``name`` exists in the connected database.
-
-    Under the raw-trace pivot (2026-07-29) the legacy community-heat read
-    models (``heat_edges`` / ``heat_edges_agg``) are being DROPPED in prod —
-    the community map is served by the static raw PMTiles, not these tables.
-    ``/readyz`` gates the CD worker healthcheck, so a missing table must
-    degrade to 0 / null and STILL return 200, never 503. Bound param, no user
-    input (same posture as ``services/activity_deletion._relation_exists``).
-    """
-    return bool(
-        db.execute(
-            text(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_name = :n)"
-            ),
-            {"n": name},
-        ).scalar()
-    )
-
-
 class HealthResponse(BaseModel):
     status: str
     version: str
 
 
 class ReadyResponse(BaseModel):
-    status: str
+    status: str  # "ok" | "warming" (startup data load still running)
     version: str
-    heat_edges: int
-    # Display aggregate freshness — lets ops see at a glance that
-    # heat_edges_agg is populated + how stale it is (powers a future
-    # "pmtiles stale > N days" alert). See migration 0057.
-    heat_edges_agg: int = 0
-    heat_edges_agg_updated_at: str | None = None
 
 
 @router.get("/healthz", response_model=HealthResponse)
@@ -72,12 +45,20 @@ async def healthz() -> HealthResponse:
 
 @router.get("/readyz", response_model=ReadyResponse)
 def readyz(db: Session = Depends(get_db)) -> ReadyResponse:
-    """Readiness probe — verifies DB connectivity and heatmap has data.
+    """Readiness probe — the DB answers and the startup data load has finished.
 
-    Uses a bounded scan (LIMIT 1) instead of COUNT(*) — was 22s on 7M rows,
-    now <5ms. The actual count is reported via pg_class.reltuples (estimate,
-    sufficient for a readiness probe). Frontend ServerWakeupBanner aborts
-    after 3s, so the COUNT version made the page show "Starting..." forever.
+    * DB unreachable / stalled → **503** (the only failure mode).
+    * DB fine, startup load (``/startup-status``) still running → 200
+      ``"warming"``.
+    * DB fine, startup load done → 200 ``"ok"``.
+
+    The community map is a static PMTiles artefact, so readiness no longer
+    depends on any heatmap table (it used to require rows in the legacy
+    ``heat_edges`` table and therefore reported ``"warming"`` forever in prod).
+
+    Both 200 states carry ``version``: the CD healthcheck requires HTTP 200 +
+    a ``"version"`` key, and the frontend ``ServerWakeupBanner`` only looks at
+    ``res.ok``.
 
     Sync ``def`` (threadpool) + a short per-transaction ``statement_timeout``
     (env ``READYZ_STATEMENT_TIMEOUT_MS``, default 2 s): under a pegged DB
@@ -91,64 +72,11 @@ def readyz(db: Session = Depends(get_db)) -> ReadyResponse:
     except Exception:
         raise HTTPException(status_code=503, detail="DB unavailable") from None
 
-    # heat_edges data probe — TOLERANT of the table being ABSENT. Under the
-    # raw-trace pivot heat_edges is dropped in prod (the community map is
-    # served by the static raw PMTiles), so a missing table must NOT 503 this
-    # probe — it gates the CD worker healthcheck. Distinguish "table gone"
-    # (→ warming, 200) from a genuine stall under load (table present but the
-    # query errors / times out → 503, preserving the 2026-07-20 fast-degrade).
-    has_data = False
-    if _relation_exists(db, "heat_edges"):
-        try:
-            has_data = db.execute(text(
-                "SELECT EXISTS (SELECT 1 FROM heat_edges LIMIT 1)"
-            )).scalar()
-        except Exception:
-            raise HTTPException(status_code=503, detail="DB unavailable") from None
-    # Used to 503 when heat_edges was empty; that gated the frontend
-    # ``ServerWakeupBanner`` forever on a fresh prod DB. Now we return
-    # 200 with ``status='warming'`` so the banner dismisses while the
-    # heatmap is still being populated. Real outages still return
-    # 503 (DB unreachable above).
-    # Display aggregate freshness (small table, exact COUNT + MAX are cheap).
-    # Wrapped so a pre-0057 DB (no table) or an empty agg never 503s the probe.
-    agg_count = 0
-    agg_updated_at: str | None = None
-    try:
-        row = db.execute(text(
-            "SELECT COUNT(*), MAX(updated_at) FROM heat_edges_agg"
-        )).first()
-        if row is not None:
-            agg_count = int(row[0] or 0)
-            agg_updated_at = row[1].isoformat() if row[1] is not None else None
-    except Exception:
-        # rollback ends the txn → SET LOCAL is gone; re-arm for the queries below.
-        db.rollback()
-        try:
-            db.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
-        except Exception:
-            raise HTTPException(status_code=503, detail="DB unavailable") from None
-
-    if not has_data:
-        return ReadyResponse(
-            status="warming", version=APP_VERSION, heat_edges=0,
-            heat_edges_agg=agg_count, heat_edges_agg_updated_at=agg_updated_at,
-        )
-
-    # Approximate count from pg_class — sums reltuples across partitions
-    try:
-        estimate = db.execute(text(
-            "SELECT COALESCE(SUM(GREATEST(reltuples, 0)), 0)::bigint FROM pg_class "
-            "WHERE relkind = 'r' AND relname LIKE 'heat_edges_%' "
-            "AND relname <> 'heat_edges_agg' "
-            "AND relname NOT LIKE '%idx%' AND relname NOT LIKE '%key%'"
-        )).scalar() or 0
-    except Exception:
-        raise HTTPException(status_code=503, detail="DB unavailable") from None
+    from app.main import startup_progress
 
     return ReadyResponse(
-        status="ok", version=APP_VERSION, heat_edges=int(estimate),
-        heat_edges_agg=agg_count, heat_edges_agg_updated_at=agg_updated_at,
+        status="ok" if startup_progress.get("done") else "warming",
+        version=APP_VERSION,
     )
 
 

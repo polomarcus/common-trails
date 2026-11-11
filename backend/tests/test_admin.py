@@ -52,7 +52,8 @@ class TestAdminDashboard:
         assert "activities" in data
         assert "routes" in data
         assert "heatmap" in data
-        assert "graph_health" in data
+        # Matched-era probes (heat_edges scans, routing-graph health) are gone.
+        assert "graph_health" not in data
 
         # New keys from the 2026-05-16 admin extension
         assert "signups_7d" in data["users"]
@@ -62,87 +63,75 @@ class TestAdminDashboard:
         assert "by_provider" in data["activities"]
         # Retired Strava API sync: no integration block any more.
         assert "integrations" not in data
-        assert "osm_way_id_pct" in data["heatmap"]
-        assert "grid_fallback_pct" in data["heatmap"]
+        # Raw-world facts about the published heatmap — exactly what the
+        # admin page reads (frontend/app/admin/page.tsx `DashboardData`).
+        assert set(data["heatmap"]) == {
+            "last_build_at", "activities", "contributors", "network_km",
+            "version", "size_bytes",
+        }
         assert "system" in data
         assert "revision" in data["system"]
-        # Types: all the percentages are numeric, never None
-        assert isinstance(data["heatmap"]["osm_way_id_pct"], int | float)
         assert isinstance(data["users"]["signups_7d"], int)
 
 
-class TestHeatEdgeStatsGuard:
-    """`_heat_edge_stats` must be fail-soft on db-f1-micro.
+class TestCommunityHeatmapFacts:
+    """`_community_heatmap_facts` — the admin "Heatmap communautaire" card.
 
-    An unbounded `SELECT count(*) FROM heat_edges` full scan of the ~5 M-row
-    table severed the f1-micro connection in the build_pmtiles path (#442).
-    The same scans back the now-live /admin dashboard (#443); if any of them
-    hangs / OOMs / raises, the helper must degrade to `-1` sentinels and roll
-    the transaction back — NEVER propagate and 500 the whole dashboard.
-
-    Drives the real helper (no inline mirror) via a MagicMock session.
+    Latest `heatmap_metrics` snapshot (written at the end of each PMTiles
+    build) + the PMTiles pointer. Cheap and fail-soft.
     """
 
-    def test_scan_failure_degrades_to_sentinels_and_rolls_back(self):
+    def test_reports_latest_snapshot_and_pointer(self, monkeypatch):
+        from sqlalchemy import text as sa_text
+
+        from app.api import export as export_api
+        from app.api.admin import _community_heatmap_facts
+        from app.db.session import SessionLocal
+
+        monkeypatch.setattr(
+            export_api, "_read_pointer_cached",
+            lambda: {"latest": "20261111T101500Z", "size_bytes": 12_345_678},
+        )
+        source = f"test-{uuid.uuid4().hex[:8]}"
+        db = SessionLocal()
+        try:
+            db.execute(sa_text(
+                "INSERT INTO heatmap_metrics "
+                "(captured_at, activities, contributors, network_km, source) "
+                "VALUES (now() + interval '1 day', 42, 7, 123.5, :s)"
+            ), {"s": source})
+            db.commit()
+
+            facts = _community_heatmap_facts(db)
+
+            assert facts["activities"] == 42
+            assert facts["contributors"] == 7
+            assert facts["network_km"] == 123.5
+            assert facts["last_build_at"] is not None
+            assert facts["version"] == "20261111T101500Z"
+            assert facts["size_bytes"] == 12_345_678
+        finally:
+            db.execute(sa_text("DELETE FROM heatmap_metrics WHERE source = :s"), {"s": source})
+            db.commit()
+            db.close()
+
+    def test_no_pointer_and_failing_db_degrade_to_nulls(self, monkeypatch):
         from unittest.mock import MagicMock
 
-        from app.api.admin import _heat_edge_stats
+        from app.api import export as export_api
+        from app.api.admin import _community_heatmap_facts
 
+        monkeypatch.setattr(export_api, "_read_pointer_cached", lambda: None)
         db = MagicMock()
-        # Every heavy read raises — SET LOCAL (execute w/o .scalar) is fine.
-        db.query.return_value.scalar.side_effect = RuntimeError("server closed the connection unexpectedly")
-        db.execute.return_value.scalar.side_effect = RuntimeError("server closed the connection unexpectedly")
+        db.execute.side_effect = RuntimeError("server closed the connection unexpectedly")
 
-        # Must not raise.
-        result = _heat_edge_stats(db)
+        facts = _community_heatmap_facts(db)  # must not raise
 
-        hm = result["heatmap"]
-        assert hm["edges"] == -1
-        assert hm["cells"] == -1
-        assert hm["max_contributors_on_edge"] == -1
-        assert hm["osm_tagged"] == -1
-        assert hm["grid_fallback"] == -1
-        # Percentages stay numeric (the frontend renders them directly).
-        assert hm["osm_way_id_pct"] == 0.0
-        assert hm["grid_fallback_pct"] == 0.0
-
-        gh = result["graph_health"]
-        assert gh["total_vertices"] == -1
-        assert gh["dead_ends"] == -1
-        assert gh["dead_end_pct"] == 0
-
-        # The transaction was rolled back so the pooled connection is reusable
-        # (once per guarded block that failed).
-        assert db.rollback.call_count >= 1
-
-    def test_happy_path_computes_real_percentages(self):
-        from unittest.mock import MagicMock
-
-        from app.api.admin import _heat_edge_stats
-
-        db = MagicMock()
-        # edges, cells, max_contributors (3 ORM count/agg .scalar() calls)
-        db.query.return_value.scalar.side_effect = [1000, 50, 7]
-        # osm_tagged, dead_ends, total_vertices (3 raw-SQL .scalar() calls;
-        # the SET LOCAL executes don't call .scalar()).
-        db.execute.return_value.scalar.side_effect = [500, 30, 100]
-
-        result = _heat_edge_stats(db)
-
-        hm = result["heatmap"]
-        assert hm["edges"] == 1000
-        assert hm["cells"] == 50
-        assert hm["max_contributors_on_edge"] == 7
-        assert hm["osm_tagged"] == 500
-        assert hm["grid_fallback"] == 500
-        assert hm["osm_way_id_pct"] == 50.0
-        assert hm["grid_fallback_pct"] == 50.0
-
-        gh = result["graph_health"]
-        assert gh["dead_ends"] == 30
-        assert gh["total_vertices"] == 100
-        assert gh["dead_end_pct"] == 30.0
-        db.rollback.assert_not_called()
+        assert facts == {
+            "last_build_at": None, "activities": None, "contributors": None,
+            "network_km": None, "version": None, "size_bytes": None,
+        }
+        db.rollback.assert_called_once()
 
 
 class TestAdminRecentRoutes:
