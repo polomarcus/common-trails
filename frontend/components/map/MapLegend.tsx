@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { MY_TRACES_COLOR } from '@/lib/constants';
+import { useHeatmapAppearance } from '@/lib/heatmap-appearance';
 import { getToken } from '@/lib/auth';
 import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import { useI18n } from '@/lib/i18n';
@@ -14,6 +14,7 @@ interface MapLegendProps {
 
 function MapLegend({ layers, waymarked }: MapLegendProps) {
   const { t } = useI18n();
+  const { myColor } = useHeatmapAppearance();
   // "Mes sorties" is for a signed-in rider only. Auth is read AFTER mount, never
   // during render: /map is a static export built logged out, so reading
   // getToken() here would make a signed-in client's first render differ from
@@ -47,7 +48,7 @@ function MapLegend({ layers, waymarked }: MapLegendProps) {
         // in a single cyan on the map (MY_TRACES_COLOR), not per sport, so they
         // read against the community ramp above when both are superposed.
         <div data-testid="legend-my-activities" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ width: 40, height: 4, borderRadius: 2, background: MY_TRACES_COLOR }} />
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: myColor }} />
           <span>{t('map.legend.myActivities')}</span>
         </div>
       )}

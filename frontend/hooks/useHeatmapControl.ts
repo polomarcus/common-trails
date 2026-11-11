@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { API_URL } from '@/lib/api-client';
+import { useHeatmapAppearance } from '@/lib/heatmap-appearance';
+import { applyUserTraceAppearance } from '@/lib/user-traces-layers';
 import {
   HEATMAP_DIM_OPACITY, HEATMAP_DEFAULT_OPACITY,
 } from '@/lib/routing-style';
@@ -59,6 +61,7 @@ export function useHeatmapControl(
   routeMode: boolean,
   routeSport: string,
 ): HeatmapControlState {
+  const appearance = useHeatmapAppearance();
   const [heatmapSport, setHeatmapSport] = useState<string>('offroad');
   const [heatmapDays, setHeatmapDays] = useState<number | null>(null);
   const [heatmapLoading, setHeatmapLoading] = useState(false);
@@ -200,7 +203,9 @@ export function useHeatmapControl(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const m = mapInstance as any;
     if (!m.getLayer('community-trails-line')) return;
-    const mult = exploreMode ? 1.0 : routeMode ? HEATMAP_DIM_OPACITY : HEATMAP_DEFAULT_OPACITY;
+    // × the rider's "opacité" setting (Calques → Apparence).
+    const mult = (exploreMode ? 1.0 : routeMode ? HEATMAP_DIM_OPACITY : HEATMAP_DEFAULT_OPACITY)
+      * appearance.communityOpacity;
     // SSOT ramps imported from community-heatmap-layers.ts; scaled by the
     // route/explore-mode multiplier through `withMult` — NOT a hand-written
     // ['*', mult, ramp]. HEAT_OPACITY_RAMP is a ZOOM ramp, and maplibre REJECTS
@@ -214,7 +219,13 @@ export function useHeatmapControl(
       m.setPaintProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'heatmap-opacity',
         withMult(HEAT_OPACITY_RAMP, mult));
     }
-  }, [mapInstance, routeMode, exploreMode]);
+  }, [mapInstance, routeMode, exploreMode, appearance.communityOpacity]);
+
+  // "Ma heatmap" colour / opacity setting → repaint the rider's traces.
+  useEffect(() => {
+    if (!mapInstance) return;
+    try { applyUserTraceAppearance(mapInstance); } catch { /* style not ready */ }
+  }, [mapInstance, appearance.myColor, appearance.myOpacity]);
 
   return {
     heatmapSport, setHeatmapSport,

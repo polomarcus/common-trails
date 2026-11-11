@@ -1000,6 +1000,10 @@ const fr: Translations = {
   // Toolbar
   'map.toolbar.heatmapLayer': 'Heatmap commune',
   'map.toolbar.myHeatmap': 'Ma heatmap',
+  'map.appearance.title': 'Apparence',
+  'map.appearance.color': 'Couleur',
+  'map.appearance.opacity': 'Opacité',
+  'map.appearance.reset': 'Réinitialiser',
   'map.toolbar.myHeatmapLoading': 'Chargement de tes traces…',
   'map.share.cta': 'Partager ma heatmap',
   'map.share.activeShort': 'Partage actif',

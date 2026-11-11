@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { useI18n } from '@/lib/i18n';
 import { BASEMAPS, WAYMARKED_LAYERS } from '@/lib/basemap-styles';
 import { getToken } from '@/lib/auth';
-import { MY_TRACES_COLOR } from '@/lib/constants';
+import { useHeatmapAppearance } from '@/lib/heatmap-appearance';
+import HeatmapAppearancePanel from '@/components/map/HeatmapAppearanceControls';
 import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import PlaceSearch from '@/components/PlaceSearch';
 import MyHeatmapShare from '@/components/map/MyHeatmapShare';
@@ -74,6 +75,7 @@ export interface MapToolbarProps {
 
 export default function MapToolbar(props: MapToolbarProps) {
   const { t } = useI18n();
+  const appearance = useHeatmapAppearance();
   const router = useRouter();
 
   const {
@@ -216,7 +218,7 @@ export default function MapToolbar(props: MapToolbarProps) {
                   onChange={() => setLayers(prev => ({ ...prev, myTraces: !prev.myTraces }))}
                   style={{ accentColor: '#2d6a4f', width: 16, height: 16, flexShrink: 0 }}
                 />
-                <span aria-hidden="true" data-testid="swatch-my-traces" style={{ width: 18, height: 5, borderRadius: 3, background: MY_TRACES_COLOR, flexShrink: 0 }} />
+                <span aria-hidden="true" data-testid="swatch-my-traces" style={{ width: 18, height: 5, borderRadius: 3, background: appearance.myColor, flexShrink: 0 }} />
                 <span>{t('map.toolbar.myHeatmap')}</span>
                 {activitiesLoading && (
                   <span
@@ -309,6 +311,9 @@ export default function MapToolbar(props: MapToolbarProps) {
                 </div>
               )}
             </div>
+            {/* Apparence — one collapsed line AFTER both heatmap toggles, so they
+                stay side by side. */}
+            <HeatmapAppearancePanel showMine={!!authToken && layers.myTraces} showCommunity={layers.heatmap} />
             {/* DFCI toggle */}
             {(
               [

@@ -26,7 +26,7 @@ import {
   DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY, DFCI_MIN_ZOOM,
 } from '@/lib/routing-style';
 import { communityPmtilesUrl, resolveCommunityPmtilesUrl } from '@/lib/cdn-cache';
-import { MY_TRACES_COLOR } from '@/lib/constants';
+import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
 import { userTraceLayerSpecs } from '@/lib/user-traces-layers';
 
 // ── Event wiring interfaces (view-only) ──────────────────────────────
@@ -271,7 +271,7 @@ function addUserLayers(m: any): void {
   // Glow (below), main line, then a wide transparent hit area that makes traces
   // easy to click/hover — specs shared with the per-user PMTiles swap
   // (lib/my-heatmap-file.ts) so both source flavours draw identically.
-  for (const spec of userTraceLayerSpecs(MY_TRACES_COLOR)) m.addLayer(spec);
+  for (const spec of userTraceLayerSpecs(getHeatmapAppearance().myColor)) m.addLayer(spec);
 
   // ③c User cell coverage — visited zoom-14 grid cells
   m.addSource('user-cells', {

@@ -31,7 +31,7 @@ import { withActivitySport } from '@/lib/activity-sport';
 import {
   fetchMyHeatmapManifest, loadMyHeatmapFile, summaryToActivityItems, setUserActivitiesSource,
 } from '@/lib/my-heatmap-file';
-import { MY_TRACES_COLOR } from '@/lib/constants';
+import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
 import { homeViewCenter, HOME_VIEW_ZOOM } from '@/lib/home-view';
 import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions, lineParts } from '@/lib/map-utils';
 
@@ -349,7 +349,7 @@ export default function MapPage() {
         const items = summaryToActivityItems(file.summary, t('map.activityDefaultName'));
         setActivities(items);
         userActivitiesGeojsonRef.current = null;
-        setUserActivitiesSource(m, MY_TRACES_COLOR, file.tilesSourceUrl);
+        setUserActivitiesSource(m, getHeatmapAppearance().myColor, file.tilesSourceUrl);
         const actParam = new URLSearchParams(window.location.search).get('activity');
         if (actParam) {
           const target = items.find((a) => a.id === actParam);
@@ -370,7 +370,7 @@ export default function MapPage() {
         return;
       }
       setActivitiesFromFile(false);
-      setUserActivitiesSource(m, MY_TRACES_COLOR, null);
+      setUserActivitiesSource(m, getHeatmapAppearance().myColor, null);
 
       const resp = await fetch(`${API_URL}/me/activities?limit=${MAP_ACTIVITIES_LIMIT}`, {
         credentials: 'include',

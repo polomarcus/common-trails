@@ -50,6 +50,7 @@ export default defineConfig({
       'lib/__tests__/notification-toasts-auth.test.tsx',
       'lib/__tests__/selected-activity-sport.test.tsx',
       'lib/__tests__/selected-activity-undated.test.tsx',
+      'lib/__tests__/heatmap-appearance.test.tsx',
       'lib/__tests__/topnav-account-link.test.tsx',
     ],
     environment: 'node',
