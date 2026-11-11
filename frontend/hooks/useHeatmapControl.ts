@@ -68,14 +68,6 @@ export function useHeatmapControl(
   const [heatmapPopup, setHeatmapPopup] = useState<HeatmapPopup | null>(null);
   const [heatHover, setHeatHover] = useState<HeatHover | null>(null);
 
-  // Register tile cache Service Worker on mount
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-      navigator.serviceWorker.register(`${basePath}/tile-cache-sw.js`).catch(() => {});
-    }
-  }, []);
-
   // Clear popup when explore mode or filters change
   useEffect(() => {
     setHeatmapPopup(null);
