@@ -6,9 +6,9 @@ OSM-matched, cross-rider ``heat_edges_agg`` aggregate. Privacy is handled by
 **endpoint masking** (``trace_privacy.mask_endpoints`` — trim home/work off
 each trace) rather than K-anonymity.
 
-Selected by ``HEATMAP_DISPLAY_SOURCE=raw`` (default ``matched`` → prod
-behaviour is byte-identical to today; this module is never touched). When
-``raw``, ``build_pmtiles`` streams the GeoJSON produced here into the SAME
+``HEATMAP_DISPLAY_SOURCE`` defaults to ``raw`` (prod has run raw only since
+2026-07-29). ``HEATMAP_DISPLAY_SOURCE=matched`` still selects the legacy
+matched pipeline until that code is deleted. When ``raw``, ``build_pmtiles`` streams the GeoJSON produced here into the SAME
 tippecanoe + GCS-upload pipeline, so the existing frontend
 (``community-heatmap-layers.ts``) renders it with NO change: features are
 ``LineString``s in the ``trails`` layer carrying ``sport`` / ``user_count`` /
@@ -670,8 +670,13 @@ _ACTIVITY_STREAM_BATCH = 200
 
 
 def raw_display_enabled() -> bool:
-    """True when ``HEATMAP_DISPLAY_SOURCE`` selects the raw-trace source."""
-    return os.environ.get("HEATMAP_DISPLAY_SOURCE", "matched").strip().lower() == "raw"
+    """True when ``HEATMAP_DISPLAY_SOURCE`` selects the raw-trace source.
+
+    Raw is the default (unset or empty). Only an explicit ``matched`` selects
+    the legacy pipeline, which is being removed slice by slice.
+    """
+    value = os.environ.get("HEATMAP_DISPLAY_SOURCE", "").strip().lower()
+    return (value or "raw") == "raw"
 
 
 def min_users() -> int:

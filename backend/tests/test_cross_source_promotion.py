@@ -123,6 +123,7 @@ def _ingest_manual(file_hash: str = "xsrc-manual-1"):
     }, contribute_heatmap=True)
 
 
+@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_strava_then_manual_promotes_single_row_and_counts_once():
     r1 = _ingest_strava()
     assert r1["status"] == "created"
@@ -145,6 +146,7 @@ def test_strava_then_manual_promotes_single_row_and_counts_once():
     assert r2["edges_indexed"] > 0
 
 
+@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_manual_then_strava_skips_without_double_count():
     r1 = _ingest_manual()
     assert r1["status"] == "created"
@@ -165,6 +167,7 @@ def test_manual_then_strava_skips_without_double_count():
     assert geom == _MANUAL_GEO
 
 
+@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_async_promotion_adopts_manual_contribute_intent():
     """ASYNC path (skip_heat_computation=True → enqueue): promotion must adopt
     the INCOMING upload's contribute_heatmap intent, not the stale twin's.

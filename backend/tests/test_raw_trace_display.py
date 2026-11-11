@@ -1,7 +1,7 @@
 """Raw-trace display source (app.services.raw_trace_display) — flag + export.
 
 Pins:
-  * ``HEATMAP_DISPLAY_SOURCE`` defaults to matched (prod unchanged on merge).
+  * ``HEATMAP_DISPLAY_SOURCE`` defaults to raw; ``matched`` is explicit (legacy).
   * raw export produces non-empty, frontend-shaped LineString features from
     seeded consented activities, with endpoint masking applied.
   * a trace shorter than 2 * mask contributes nothing (fully masked).
@@ -114,10 +114,9 @@ def _patch_build_side_effects(monkeypatch):
     return bp
 
 
-def test_build_matched_mode_calls_matched_exporter(monkeypatch, tmp_path):
-    """Default (flag unset) → build reads heat_edges_agg via export_geojson,
-    NEVER the raw exporter. Prod behaviour unchanged on merge."""
-    monkeypatch.delenv("HEATMAP_DISPLAY_SOURCE", raising=False)
+def test_build_matched_mode_calls_matched_exporter(monkeypatch, tmp_path, matched_mode):
+    """Explicit ``matched`` (legacy) → build reads heat_edges_agg via
+    export_geojson, NEVER the raw exporter."""
     bp = _patch_build_side_effects(monkeypatch)
     calls = {"matched": 0, "raw": 0}
 
@@ -276,10 +275,16 @@ def test_masked_endpoints_never_counted_toward_gate(monkeypatch, seeded_two_user
         assert riders == {_USER_A, _USER_B}
 
 
-def test_flag_defaults_to_matched(monkeypatch):
+def test_flag_defaults_to_raw(monkeypatch):
+    """Raw is the default (unset / empty); only an explicit ``matched`` selects
+    the legacy pipeline."""
     monkeypatch.delenv("HEATMAP_DISPLAY_SOURCE", raising=False)
-    assert raw_display_enabled() is False
+    assert raw_display_enabled() is True
+    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "")
+    assert raw_display_enabled() is True
     monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
+    assert raw_display_enabled() is False
+    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", " Matched ")
     assert raw_display_enabled() is False
     monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
     assert raw_display_enabled() is True

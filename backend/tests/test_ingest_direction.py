@@ -248,6 +248,7 @@ class TestGetHeatEdgesPublicDirectionFields:
     _FWD = [[-18.10000, 65.70000], [-18.09990, 65.70000]]
     _BWD = [[-18.09990, 65.70000], [-18.10000, 65.70000]]
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_direction_fields_present_in_output(self):
         # Need ≥ k=2 unique users for K-anonymity
         _update_heat_edges("u1", _SPORT, _geojson(self._FWD))
@@ -259,6 +260,7 @@ class TestGetHeatEdgesPublicDirectionFields:
         assert "backward_count" in e
         assert "ele_delta_m" in e
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_direction_counts_sum_to_pass_count(self):
         _update_heat_edges("u1", _SPORT, _geojson(self._FWD))
         _update_heat_edges("u2", _SPORT, _geojson(self._BWD))
@@ -268,6 +270,7 @@ class TestGetHeatEdgesPublicDirectionFields:
         e = edges[0]
         assert e["forward_count"] + e["backward_count"] == e["pass_count"]
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_direction_values_reflect_traversal_counts(self):
         # 2 forward (u1, u2), 1 backward (u3); 3 unique users → passes k=2
         _update_heat_edges("u1", _SPORT, _geojson(self._FWD))
@@ -473,6 +476,7 @@ class TestTimeFilteredHeatmap:
     COORDS_A = [[-17.10000, 64.70000], [-17.09990, 64.70000]]
     COORDS_B = [[-16.10000, 63.70000], [-16.09990, 63.70000]]
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_activity_date_stored_on_ingest(self):
         """AC1: activity_date is stored when provided."""
         date = datetime(2026, 3, 20, tzinfo=UTC)
@@ -485,6 +489,7 @@ class TestTimeFilteredHeatmap:
         assert contrib["activity_date"] is not None
         assert contrib["activity_date"].date() == date.date()
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_greatest_keeps_most_recent(self):
         """AC2: Same user, same edge, SAME activity, two dates → keeps the
         most recent date on the contributor row.
@@ -505,6 +510,7 @@ class TestTimeFilteredHeatmap:
         contrib = _get_time_contributor(edges[0]["edge_key"])
         assert contrib["activity_date"].date() == new_date.date()
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_greatest_handles_null_then_date(self):
         """GREATEST(NULL, date) → date. Same activity_id so the GREATEST
         path on ON CONFLICT update runs (otherwise it's two rows)."""
@@ -518,6 +524,7 @@ class TestTimeFilteredHeatmap:
         contrib = _get_time_contributor(edges[0]["edge_key"])
         assert contrib["activity_date"].date() == date.date()
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_filtered_query_returns_only_recent(self):
         """AC3: days=30 returns only edges with recent contributors."""
         now = datetime.now(UTC)
@@ -539,6 +546,7 @@ class TestTimeFilteredHeatmap:
         all_time = get_heat_edges_public(sport=_TIME_SPORT, bbox=_TIME_BBOX, k=2, days=None)
         assert len(all_time) >= 2  # both edges visible in all-time
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_all_time_returns_all(self):
         """AC4: No days param returns all edges (no regression)."""
         now = datetime.now(UTC)
@@ -550,6 +558,7 @@ class TestTimeFilteredHeatmap:
         all_time = get_heat_edges_public(sport=_TIME_SPORT, bbox=_TIME_BBOX, k=2)
         assert len(all_time) >= 2
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_k_anonymity_on_filtered_set(self):
         """AC5: Edge with 3 all-time contributors but only 1 within 30 days → hidden."""
         now = datetime.now(UTC)
@@ -566,6 +575,7 @@ class TestTimeFilteredHeatmap:
         # Only 1 recent contributor < K=2 → edge should NOT appear
         assert len(filtered) == 0
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_filtered_heat_score_uses_filtered_count(self):
         """AC: heat_score computed from filtered user_count, not all-time."""
         now = datetime.now(UTC)

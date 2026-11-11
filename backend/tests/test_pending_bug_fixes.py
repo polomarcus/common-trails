@@ -287,6 +287,7 @@ class TestBuildPmtilesLightPathNoRawScan:
         def close(self):
             pass
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_pre_build_count_reads_agg_not_raw(self):
         """No COUNT on the build path may scan the raw 5 M-row ``heat_edges``
         table (the query that dropped the f1-micro connection, #442). Cheap
@@ -328,6 +329,7 @@ class TestBuildPmtilesLightPathNoRawScan:
             "the pre-build size COUNT must read heat_edges_agg (the #441/#442 fix)"
         )
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_main_drop_grid_path_issues_zero_raw_heat_edges_scans(self):
         """End-to-end: ``main`` on the DROP-GRID path (min_uc=1,
         drop_grid_fallback=True — the ops fallback
@@ -382,6 +384,7 @@ class TestBuildPmtilesLightPathNoRawScan:
             "expected the light heat_edges_agg aggregation to run"
         )
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_upload_precedes_quality_metrics(self):
         """The PMTiles + GCS upload is the deliverable; a raise in the
         post-build quality audit must NOT prevent it. Proves the ordering

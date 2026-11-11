@@ -142,6 +142,7 @@ def _fake_update_heat_edges(way_sets: list[set[int]]):
 
 
 class TestArchiveDrainBatchesAggRecompute:
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_one_recompute_with_deduplicated_union(
         self, client, auth_headers, _no_engine_mutation
     ):
@@ -185,6 +186,7 @@ class TestArchiveDrainBatchesAggRecompute:
         finally:
             db.close()
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_recompute_chunked_over_500_ways(
         self, client, auth_headers, _no_engine_mutation
     ):
@@ -212,6 +214,7 @@ class TestArchiveDrainBatchesAggRecompute:
             seen.extend(chunk)
         assert seen == sorted(big)
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_archive_failure_midway_still_recomputes_partial_set(
         self, client, auth_headers, monkeypatch, _no_engine_mutation
     ):
@@ -258,6 +261,7 @@ class TestArchiveDrainBatchesAggRecompute:
 
 
 class TestPerMemberQueueDrainBatchesToo:
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_drain_pending_batches_once_per_run(
         self, client, auth_headers, _no_engine_mutation
     ):
@@ -297,6 +301,7 @@ class TestPerMemberQueueDrainBatchesToo:
 
 
 class TestInteractivePathKeepsIncremental:
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_imports_files_calls_maintain_heat_agg_per_activity(
         self, client, auth_headers
     ):

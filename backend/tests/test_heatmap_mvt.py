@@ -121,6 +121,7 @@ class TestMvtTileEndpoint:
         # With K=1, the single-user edge is included (non-empty response)
         # Actual K enforcement is tested via the SQL WHERE clause
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_mvt_low_zoom_returns_heat_points(self, client):
         """At z<=10, MVT returns centroid points (heat_points layer) for heatmap glow."""
         self._seed()
@@ -131,6 +132,7 @@ class TestMvtTileEndpoint:
         # Should return non-empty protobuf (aggregated centroid points)
         assert len(resp.content) > 0
 
+    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
     def test_mvt_high_zoom_returns_trails(self, client):
         """At z>=11, MVT returns line geometries (trails layer)."""
         self._seed()

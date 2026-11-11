@@ -171,7 +171,7 @@ on a small instance.
 | Variable | Dev (compose) | Prod | Purpose |
 |---|---|---|---|
 | `TEST_MODE` | `true` | `false` | Stubs all external calls |
-| `HEATMAP_DISPLAY_SOURCE` | unset → `matched` (code default) | `raw` | Raw-trace heatmap (vs. legacy matched) |
+| `HEATMAP_DISPLAY_SOURCE` | `raw` (code default) | `raw` | Raw-trace heatmap (vs. legacy matched) |
 | `HEATMAP_MIN_USERS` | unset → `1` | `1` | Per-cell distinct-user floor |
 | `TRACE_MASK_METERS` | unset → `200` | `200` | Endpoint masking (extrémités masquées) |
 | `JWT_EXPIRE_MINUTES` | `10080` (7 d) | unset → `129600` (90 d, code default) | Session lifetime |

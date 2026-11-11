@@ -31,14 +31,13 @@
  *       ever streams the live MVT endpoint (the load-bearing doctrine pin).
  * Either way the specs are green + meaningful.
  *
- * The `Heatmap MVT backend` describe below is UNCHANGED — the live
- * `/heatmap/tiles/**.mvt` endpoint is still the DB-backed FALLBACK and is tested
- * directly against the backend.
+ * The live `/heatmap/tiles/**.mvt` endpoint is legacy (matched pipeline, being
+ * removed): nothing here calls it — the only reference left is the assertion
+ * that the app never requests it.
  */
-import { test, expect, request } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3787';
-const API_URL = process.env.API_URL || 'http://localhost:8787';
 
 // The app registers `tile-cache-sw.js` (skipWaiting + clients.claim) which
 // serves heatmap requests stale-while-revalidate. Service-worker-mediated
@@ -267,102 +266,5 @@ test.describe('Community heatmap — toggle wiring (Calques)', () => {
       return m.getLayoutProperty('community-trails-heat', 'visibility') === 'visible'
         && m.getLayoutProperty('community-trails-line', 'visibility') === 'visible';
     }, undefined, { timeout: 5000 });
-  });
-});
-
-// ── Live MVT endpoint (unchanged — still the DB-backed FALLBACK) ────────────────
-
-test.describe('Heatmap MVT backend', () => {
-  test('z10 tile returns valid protobuf', async () => {
-    const apiContext = await request.newContext();
-    const resp = await apiContext.fetch(`${API_URL}/heatmap/tiles/road/10/527/373.mvt`);
-    expect(resp.status()).toBe(200);
-    expect(resp.headers()['content-type']).toContain('protobuf');
-    const body = await resp.body();
-    expect(body).toBeDefined();
-    await apiContext.dispose();
-  });
-
-  test('z12 tile returns trails layer (line geometries)', async () => {
-    const apiContext = await request.newContext();
-    const resp = await apiContext.fetch(`${API_URL}/heatmap/tiles/road/12/2108/1492.mvt`);
-    expect(resp.status()).toBe(200);
-    expect(resp.headers()['content-type']).toContain('protobuf');
-    const body = await resp.body();
-    expect(body).toBeDefined();
-    await apiContext.dispose();
-  });
-
-  test('out-of-range zoom returns 204', async () => {
-    const apiContext = await request.newContext();
-    const resp = await apiContext.fetch(`${API_URL}/heatmap/tiles/road/5/0/0.mvt`);
-    expect(resp.status()).toBe(204);
-    const resp2 = await apiContext.fetch(`${API_URL}/heatmap/tiles/road/17/0/0.mvt`);
-    expect(resp2.status()).toBe(204);
-    await apiContext.dispose();
-  });
-
-  // Requires heatmap data seeded in DB — may not exist in CI fresh DB
-  test('tile responses are gzip-compressed', async ({}, testInfo) => {
-    if (process.env.CI) { testInfo.skip(); return; }
-    const apiContext = await request.newContext();
-    // Request a tile that has data (gravel near Montpellier)
-    const resp = await apiContext.fetch(`${API_URL}/heatmap/tiles/gravel/9/263/186.mvt`);
-    expect(resp.status()).toBe(200);
-    const encoding = resp.headers()['content-encoding'];
-    expect(encoding).toBe('gzip');
-    await apiContext.dispose();
-  });
-});
-
-// ── Performance tests: heatmap tiles from the backend ───────────────────────────
-
-test.describe('Heatmap tile performance', () => {
-  test.skip(!!process.env.CI, 'Flaky in CI — measures wall-clock latency on shared runners');
-
-  test('backend serves tiles under 200ms (cold) and 10ms (warm)', async () => {
-    const apiContext = await request.newContext();
-
-    // Cold request (first hit, no cache)
-    const coldStart = Date.now();
-    const coldResp = await apiContext.fetch(`${API_URL}/heatmap/tiles/gravel/9/263/186.mvt`);
-    const coldMs = Date.now() - coldStart;
-    expect(coldResp.status()).toBe(200);
-    expect(coldMs).toBeLessThan(500); // generous for CI, typically <100ms
-
-    // Warm request (cache hit)
-    const warmStart = Date.now();
-    const warmResp = await apiContext.fetch(`${API_URL}/heatmap/tiles/gravel/9/263/186.mvt`);
-    const warmMs = Date.now() - warmStart;
-    expect(warmResp.status()).toBe(200);
-    expect(warmMs).toBeLessThan(300); // cache hit should be <10ms locally, CI runners are slower
-
-    console.log(`[perf] z9 tile: cold=${coldMs}ms, warm=${warmMs}ms`);
-    await apiContext.dispose();
-  });
-
-  test('parallel tile batch completes under 500ms', async () => {
-    const apiContext = await request.newContext();
-    // Simulate browser requesting 8 tiles at once (typical viewport at z12)
-    const tiles = [
-      [12, 2108, 1492], [12, 2108, 1495], [12, 2109, 1492], [12, 2109, 1495],
-      [12, 2110, 1492], [12, 2110, 1495], [12, 2111, 1492], [12, 2111, 1495],
-    ];
-
-    const batchStart = Date.now();
-    const results = await Promise.all(
-      tiles.map(([z, x, y]) =>
-        apiContext.fetch(`${API_URL}/heatmap/tiles/gravel/${z}/${x}/${y}.mvt`)
-      )
-    );
-    const batchMs = Date.now() - batchStart;
-
-    for (const resp of results) {
-      expect(resp.status()).toBe(200);
-    }
-    // 8 tiles in parallel should complete under 2s (cold cache, async DB)
-    expect(batchMs).toBeLessThan(2000);
-    console.log(`[perf] 8 parallel z12 tiles: ${batchMs}ms`);
-    await apiContext.dispose();
   });
 });

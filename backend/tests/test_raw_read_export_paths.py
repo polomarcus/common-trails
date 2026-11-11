@@ -169,8 +169,7 @@ def test_build_raw_mode_skips_heat_quality_metrics(monkeypatch, tmp_path):
     assert calls["n"] == 0  # no raw-heat_edges audit in raw mode
 
 
-def test_build_matched_mode_runs_heat_quality_metrics(monkeypatch, tmp_path):
-    monkeypatch.delenv("HEATMAP_DISPLAY_SOURCE", raising=False)
+def test_build_matched_mode_runs_heat_quality_metrics(monkeypatch, tmp_path, matched_mode):
     bp = _patch_build_side_effects(monkeypatch)
     monkeypatch.setattr(bp, "export_geojson", lambda *a, **k: 5)
     calls = {"n": 0}
