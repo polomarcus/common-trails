@@ -14,9 +14,7 @@ Each layer has its own gate; CI runs all of them.
 - **Each PR that touches ingest / routing / surface / elevation MUST add a test that demonstrates the new behavior.** Style: name the bug or invariant in the test name (`test_grid_fallback_assigns_null_osm_way_id`, `test_route_og_image_returns_png`).
 - **Critical-path tests** that must stay green:
   - `backend/tests/test_perf_regression.py` — endpoint latency budgets (MVT tile <5 s, area.pb <15 s).
-  - `backend/tests/test_local_dem.py` — DEM correctness (HGT parse, void detection).
   - `backend/tests/test_k_anonymity_boundary.py` — heatmap distinct-user / K gate.
-  - `backend/tests/test_pipeline_patterns.py` — heat_edges ingest invariants.
 
 ### Frontend unit (`Vitest`) / E2E (`Playwright`)
 

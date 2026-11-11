@@ -94,7 +94,7 @@ JOBS_SA="common-trails-jobs@${PROJECT}.iam.gserviceaccount.com"
 # Cloud SQL connection name = project:region:instance. The instance is the
 # fresh (2026-07) db-f1-micro "common-trails-prod" (the old 200 GB one is dead).
 CLOUDSQL_INSTANCE="${PROJECT}:${REGION}:common-trails-${ENV}"
-# GCS data bucket (DFCI cache / DEM tiles), mounted read-only at /data.
+# GCS data bucket (DFCI cache), mounted read-only at /data.
 DATA_BUCKET="${PROJECT}-common-trails-data-${ENV}"
 # USER-FACING origin (custom domain). Used ONLY for FRONTEND_URL — the URL a
 # human hits (links in emails, post-login redirects).
@@ -161,7 +161,8 @@ IMAGE="${REPO}/api:${IMAGE_TAG}"
 # ── MATCHED-ERA JOBS REMOVED (raw-trace pivot, 2026-07-29) ───────────────────
 # The community heatmap is now built from RAW GPS traces read straight out of
 # `activities`; the OSM substrate (osm_road_edges /
-# osm_ways / heat_edges_agg) was DROPPED. Seven jobs that ONLY ever operated on
+# osm_ways / heat_edges_agg) was DROPPED (migration 0072 drops the rest of the
+# matched-era tables). Seven jobs that ONLY ever operated on
 # that now-dead substrate were removed from this sync list — they are permanently
 # defunct and re-syncing their images every deploy was pure waste:
 #   import-osm, group-edges-osm, rebuild-heatmap, rebuild-heat-agg,
