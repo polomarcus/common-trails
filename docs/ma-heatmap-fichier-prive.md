@@ -56,7 +56,7 @@ déjà découpée aux trous GPS, Douglas-Peucker 2 m, 5 décimales) :
 À côté, un **résumé JSON** versionné (`summary.json`, gzip) porte la liste qui
 alimente la barre latérale : par sortie `id, name, sport, distance_m,
 elevation_gain_m, moving_time, activity_date, created_at, undated, provider,
-provider_activity_id, total_photo_count`, plus `bbox`, `center` et `start`
+provider_activity_id`, plus `bbox`, `center` et `start`
 (calculés au build, pour `fitBounds` / le saut vers la dernière sortie) — sans
 aucune coordonnée de trace. Les coordonnées complètes d'une sortie ne sont
 chargées qu'à sa sélection (`GET /me/activities/{id}`, déjà existant).
@@ -176,7 +176,7 @@ touché — ancien **et** nouveau propriétaire pour un `UPDATE` de `user_id`
 (fusion de comptes). L'`UPDATE` ne compte que si une colonne affichée change
 (`user_id, sport, name, display_geojson, distance_m,
 elevation_gain_m, moving_time, activity_date, created_at, provider,
-provider_activity_id, total_photo_count`, plus `geometry_geojson` seulement
+provider_activity_id`, plus `geometry_geojson` seulement
 quand le cache `display_geojson` est NULL — comparer deux gros textes TOAST à
 chaque UPDATE doublerait les I/O de géométrie sur db-f1-micro, et tout écrivain
 de géométrie réécrit aussi le cache).
