@@ -68,12 +68,18 @@ export function useHeatmapControl(
   const [heatmapPopup, setHeatmapPopup] = useState<HeatmapPopup | null>(null);
   const [heatHover, setHeatHover] = useState<HeatHover | null>(null);
 
-  // Register tile cache Service Worker on mount
+  // The tile-cache service worker was removed long ago, but a 404 on its
+  // update check never unregisters it: browsers that installed it still run
+  // it (stale-while-revalidate on /heatmap/tiles/). Retire it and its cache.
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
-      navigator.serviceWorker.register(`${basePath}/tile-cache-sw.js`).catch(() => {});
-    }
+    try {
+      navigator.serviceWorker?.getRegistrations?.()
+        .then((regs) => regs
+          .filter((r) => (r.active ?? r.waiting ?? r.installing)?.scriptURL.endsWith('/tile-cache-sw.js'))
+          .forEach((r) => { void r.unregister(); }))
+        .catch(() => {});
+      if (typeof caches !== 'undefined') caches.delete('ct-heatmap-tiles-v1').catch(() => {});
+    } catch { /* unsupported / blocked — nothing to retire */ }
   }, []);
 
   // Clear popup when explore mode or filters change
