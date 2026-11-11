@@ -1000,6 +1000,8 @@ const fr: Translations = {
   // Toolbar
   'map.toolbar.heatmapLayer': 'Heatmap commune',
   'map.toolbar.myHeatmap': 'Ma heatmap',
+  'map.myHeatmap.download': 'Télécharger ma heatmap (GeoJSON)',
+  'map.myHeatmap.downloadHint': 'Toutes tes sorties dans un fichier GeoJSON, à ouvrir dans QGIS, geojson.io ou un outil de tracé. Traces non masquées : ne le partage pas tel quel.',
   'map.appearance.title': 'Apparence',
   'map.appearance.color': 'Couleur',
   'map.appearance.opacity': 'Opacité',

@@ -321,3 +321,36 @@ class TestEtag:
         assert len(lines) == 1, lines
         assert "rows=2 fallbacks=1 " in lines[0] and "bytes=" in lines[0] and "elapsed_ms=" in lines[0]
         assert user_id not in lines[0]
+
+
+class TestDownloadExport:
+    """``?download=true`` — "Télécharger ma heatmap" (2026-11-11): the rider's
+    whole corpus as a GeoJSON attachment, not the map's most-recent window."""
+
+    def test_download_is_an_attachment_with_every_activity(self, client, auth_headers):
+        user_id = _decode_user_id(auth_headers)
+        _seed(user_id, [{"name": f"x{i}"} for i in range(4)])
+        # The map's windowed call honours ``limit``…
+        windowed = client.get("/me/activities?limit=2", headers=auth_headers)
+        assert windowed.json()["total"] == 2
+        # …the export ignores it and returns everything, as a file.
+        r = client.get("/me/activities?limit=2&download=true", headers=auth_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/geo+json")
+        assert r.headers["content-disposition"] == 'attachment; filename="ma-heatmap-chemins-communs.geojson"'
+        assert r.headers["cache-control"] == "private, no-store"
+        assert "etag" not in r.headers
+        body = r.json()
+        assert body["type"] == "FeatureCollection"
+        names = {f["properties"]["name"] for f in body["features"]}
+        assert {"x0", "x1", "x2", "x3"} <= names
+        assert body["total"] == len(body["features"])
+        assert all(f["geometry"]["type"] in ("LineString", "MultiLineString") for f in body["features"])
+
+    def test_download_is_never_a_304(self, client, auth_headers):
+        user_id = _decode_user_id(auth_headers)
+        _seed(user_id, [{"name": "d1"}])
+        etag = client.get("/me/activities", headers=auth_headers).headers["etag"]
+        r = client.get("/me/activities?download=true", headers={**auth_headers, "If-None-Match": etag})
+        assert r.status_code == 200 and r.content
+

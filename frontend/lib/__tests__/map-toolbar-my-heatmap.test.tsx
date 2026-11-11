@@ -155,6 +155,20 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
     expect(ramp.getAttribute('style')).toContain('linear-gradient');
   });
 
+  // "Exportable" (Paul, 2026-11-11): the rider can download his own traces.
+  it('signed in: a download link exports every trace as GeoJSON; signed out: no link', async () => {
+    auth.token = 'cookie-auth';
+    await act(async () => { root = createRoot(container); root.render(<Harness />); });
+    const link = container.querySelector('[data-testid="my-heatmap-download"]') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toMatch(/\/me\/activities\?download=true$/);
+    expect(link.hasAttribute('download')).toBe(true);
+    expect(link.textContent).toContain('Télécharger ma heatmap');
+    act(() => root?.unmount());
+    auth.token = null;
+    await act(async () => { root = createRoot(container); root.render(<Harness />); });
+    expect(container.querySelector('[data-testid="my-heatmap-download"]')).toBeNull();
+  });
+
   it('the two toggles are independent: each flips only its own layer, both can be on', async () => {
     auth.token = 'cookie-auth';
     await act(async () => { root = createRoot(container); root.render(<Harness />); });
