@@ -7,6 +7,7 @@ import { useI18n } from '@/lib/i18n';
 import { BASEMAPS, WAYMARKED_LAYERS } from '@/lib/basemap-styles';
 import { getToken } from '@/lib/auth';
 import { useHeatmapAppearance } from '@/lib/heatmap-appearance';
+import { API_URL } from '@/lib/api-client';
 import HeatmapAppearancePanel from '@/components/map/HeatmapAppearanceControls';
 import { HEAT_RAMP_CSS } from '@/lib/community-heatmap-layers';
 import PlaceSearch from '@/components/PlaceSearch';
@@ -311,6 +312,23 @@ export default function MapToolbar(props: MapToolbarProps) {
                 </div>
               )}
             </div>
+            {/* Export of the rider's OWN traces (every activity, GeoJSON). A plain
+                same-origin link: the session cookie authenticates it and the
+                browser streams the attachment straight to disk. */}
+            {authToken && (
+              <a
+                data-testid="my-heatmap-download"
+                href={`${API_URL}/me/activities?download=true`}
+                download
+                title={t('map.myHeatmap.downloadHint')}
+                style={{
+                  display: 'block', padding: '2px 14px 6px 40px', fontSize: 11, fontWeight: 600,
+                  color: '#2d6a4f', textDecoration: 'none',
+                }}
+              >
+                ⬇ {t('map.myHeatmap.download')}
+              </a>
+            )}
             {/* Apparence — one collapsed line AFTER both heatmap toggles, so they
                 stay side by side. */}
             <HeatmapAppearancePanel showMine={!!authToken && layers.myTraces} showCommunity={layers.heatmap} />

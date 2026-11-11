@@ -999,6 +999,8 @@ const en: Translations = {
   // Toolbar
   'map.toolbar.heatmapLayer': 'Community heatmap',
   'map.toolbar.myHeatmap': 'My heatmap',
+  'map.myHeatmap.download': 'Download my heatmap (GeoJSON)',
+  'map.myHeatmap.downloadHint': 'All your rides in one GeoJSON file, for QGIS, geojson.io or a route planner. Traces are not masked: do not share it as is.',
   'map.appearance.title': 'Appearance',
   'map.appearance.color': 'Colour',
   'map.appearance.opacity': 'Opacity',

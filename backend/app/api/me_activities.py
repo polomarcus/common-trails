@@ -166,11 +166,17 @@ def _etag_matches(if_none_match: str | None, etag: str) -> bool:
     return any(c.strip().removeprefix("W/") == opaque for c in if_none_match.split(","))
 
 
+# ``?download=true``: no "most recent N" window — a hard ceiling only.
+EXPORT_MAX_ACTIVITIES = 200_000
+EXPORT_FILENAME = "ma-heatmap-chemins-communs.geojson"
+
+
 @router.get("/me/activities")
 async def me_activities(
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     sport: str | None = Query(None, description="road|gravel|mtb|offroad — omit for all"),
     limit: int = Query(200, ge=1, le=5000),
+    download: bool = Query(False, description="Export: EVERY activity, as a .geojson attachment"),
     if_none_match: str | None = Header(None),
 ) -> Response:
     """Return personal activities as a GeoJSON FeatureCollection (private).
@@ -215,6 +221,15 @@ async def me_activities(
     """
     started = time.perf_counter()
     user_id = current_user.user_id
+    # ``is True``: the handler is also called directly (tests), where an omitted
+    # ``download`` is the truthy ``Query(...)`` default object, not ``False``.
+    download = download is True
+    if download:
+        # "Télécharger ma heatmap" (Calques): the rider's WHOLE corpus as a
+        # file, not the map's "most recent 5000" window. Same streamed body
+        # (O(window) memory), served as an attachment and never revalidated.
+        limit = EXPORT_MAX_ACTIVITIES
+        if_none_match = None
 
     # ``total`` is emitted at the head of the body, so it must be known before
     # the rows stream: a cheap indexed COUNT (capped at ``limit``), computed in
@@ -227,6 +242,11 @@ async def me_activities(
     total = min(count, limit)
     etag = _me_activities_etag(user_id, sport, limit, count, digest)
     cache_headers = {"ETag": etag, "Cache-Control": ME_ACTIVITIES_CACHE_CONTROL}
+    if download:
+        cache_headers = {
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f'attachment; filename="{EXPORT_FILENAME}"',
+        }
 
     if _etag_matches(if_none_match, etag):
         logger.info(
@@ -271,7 +291,11 @@ async def me_activities(
                 (time.perf_counter() - started) * 1000, complete,
             )
 
-    return StreamingResponse(_iter_body(), media_type="application/json", headers=cache_headers)
+    return StreamingResponse(
+        _iter_body(),
+        media_type="application/geo+json" if download else "application/json",
+        headers=cache_headers,
+    )
 
 
 class ContributionStatus(BaseModel):
