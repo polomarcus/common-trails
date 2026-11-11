@@ -1,8 +1,7 @@
 /**
- * CDN cache client — fetches pre-computed heatmap/graph data from Cloud Storage.
- *
- * Flow: manifest.json (60s cache) → versioned files (7d cache, immutable paths).
- * Falls back to API if CDN is unavailable or not configured.
+ * CDN cache client — resolves the community heatmap PMTiles URL (through the
+ * freshness pointer) and fetches the pre-built community stats, falling back
+ * to the API when the static objects are unreachable.
  */
 
 import { type CommunityStats, parseCommunityStats, buildStatsCandidates } from './community-stats';
@@ -54,45 +53,6 @@ async function resolvePmtilesViaPointer(stableUrl: string): Promise<string> {
   return stableUrl;
 }
 
-interface CacheManifest {
-  version: string;
-  published_at: number;
-  rollback?: boolean;
-  files: {
-    summary: string;
-    dfci?: string;
-    trails: Record<string, string>;
-    mvt_tiles?: string;
-  };
-}
-
-let _manifest: CacheManifest | null = null;
-let _manifestFetchedAt = 0;
-const MANIFEST_TTL_MS = 60_000;
-
-async function getManifest(): Promise<CacheManifest | null> {
-  // F6: always re-fetch if TTL expired (don't serve stale on error)
-  if (_manifest && Date.now() - _manifestFetchedAt < MANIFEST_TTL_MS) {
-    return _manifest;
-  }
-  if (!CDN_BASE) return null;
-  try {
-    const cacheBuster = Math.floor(Date.now() / 60000);
-    const res = await fetch(`${CDN_BASE}/api-cache/manifest.json?t=${cacheBuster}`);
-    if (res.ok) {
-      _manifest = await res.json();
-      _manifestFetchedAt = Date.now();
-    } else {
-      // F6: clear stale manifest if CDN returns error (files may be cleaned up)
-      _manifest = null;
-    }
-  } catch (e) {
-    console.warn('CDN manifest fetch failed, falling back to API:', e);
-    _manifest = null;
-  }
-  return _manifest;
-}
-
 /** F7: safe API fallback — checks r.ok before parsing JSON */
 async function apiFallback(url: string): Promise<unknown> {
   try {
@@ -106,21 +66,6 @@ async function apiFallback(url: string): Promise<unknown> {
     console.warn(`API fallback error: ${url}`, e);
     return null;
   }
-}
-
-/** Fetch trails GeoJSON from CDN, fallback to API. */
-export async function fetchTrailsCDN(sport: string): Promise<unknown> {
-  const manifest = await getManifest();
-  if (manifest?.files?.trails?.[sport]) {
-    const url = `${CDN_BASE}/api-cache/${manifest.files.trails[sport]}`;
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res.json();
-    } catch (e) {
-      console.warn(`CDN fetch failed for trails/${sport}, falling back to API:`, e);
-    }
-  }
-  return apiFallback(`${API_URL}/heatmap/trails?sport=${sport}`);
 }
 
 /**
@@ -201,40 +146,6 @@ export function getPmtilesUrl(): Promise<string | null> {
   // Don't cache failures — let next call retry
   _pmtilesUrlPromise.then((url) => { if (url === null) _pmtilesUrlPromise = null; });
   return _pmtilesUrlPromise;
-}
-
-/**
- * Get the MVT tile URL template for a given sport.
- * Falls back from PMTiles → CDN → API tiles.
- */
-export async function getMvtTileUrl(sport: string, days?: number | null): Promise<string> {
-  const manifest = await getManifest();
-  const version = manifest?.version || Date.now().toString();
-  const base = API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
-  const safeSport = sport === 'all' ? 'road' : sport;
-  const params = new URLSearchParams({ v: version });
-  if (days && days > 0) params.set('days', String(days));
-  return `${base}/heatmap/tiles/${safeSport}/{z}/{x}/{y}.mvt?${params.toString()}`;
-}
-
-/** Fetch heatmap summary from CDN, fallback to API. */
-export async function fetchSummaryCDN(): Promise<unknown> {
-  const manifest = await getManifest();
-  if (manifest?.files?.summary) {
-    const url = `${CDN_BASE}/api-cache/${manifest.files.summary}`;
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res.json();
-    } catch (e) {
-      console.warn('CDN summary fetch failed, falling back to API:', e);
-    }
-  }
-  return apiFallback(`${API_URL}/heatmap/summary`);
-}
-
-/** Check if CDN is configured and available. */
-export function isCDNEnabled(): boolean {
-  return CDN_BASE !== '';
 }
 
 /**
