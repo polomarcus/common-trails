@@ -82,7 +82,7 @@ describe('ContributionDropzone', () => {
       expect(q(container, `sport-chip-${s}`)!.getAttribute('aria-pressed')).toBe('false');
     }
     expect((q(container, 'files-input') as HTMLInputElement).disabled).toBe(true);
-    expect(q(container, 'files-sport-hint')!.textContent).toContain('Choisissez');
+    expect(q(container, 'files-sport-hint')!.textContent).toContain('Choisis');
   });
 
   it('a GPX drop without a sport uploads nothing and tells the user to pick one', async () => {

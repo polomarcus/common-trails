@@ -244,9 +244,9 @@ def test_synthetic_strava_export_full_pipeline_and_idempotent_redrop(pipeline):
     # ── Emails: start (with estimate) then end, to the owner ──
     assert [e[0] for e in first["emails"]] == [pipeline["email"]] * 2
     (_, s_subject, s_html), (_, e_subject, e_html) = first["emails"]
-    assert s_subject.startswith("Début de votre import, estimé à environ ")
+    assert s_subject.startswith("Début de ton import, estimé à environ ")
     assert f"<strong>{expected['estimate_members']}</strong> fichiers" in s_html
-    assert e_subject == "Votre archive est importée 🚴"
+    assert e_subject == "Ton archive est importée 🚴"
     assert f"<strong>{expected['imported']}</strong> importées" in e_html
     assert f"<strong>{expected['skipped']}</strong> ignorées (hors-scope / doublons)" in e_html
     assert f"<strong>{expected['failed']}</strong> en erreur" in e_html
@@ -269,7 +269,7 @@ def test_synthetic_strava_export_full_pipeline_and_idempotent_redrop(pipeline):
     assert len(_activities(pipeline["user_id"])) == expected["imported"]
     assert second["pings"] == 0  # nothing new → no rebuild
     _to, subject, html = second["emails"][-1]
-    assert subject == "Votre archive a été traitée"
+    assert subject == "Ton archive a été traitée"
     assert "aucune nouvelle trace" in html
     assert "<strong>0</strong> importée" in html
     assert f"<strong>{n_skip_again}</strong> ignorées (hors-scope / doublons)" in html
@@ -289,7 +289,7 @@ def test_synthetic_garmin_export_full_pipeline(pipeline):
     _assert_imported(pipeline["user_id"], expected)
 
     _to, subject, html = res["emails"][-1]
-    assert subject == "Votre archive est importée 🚴"
+    assert subject == "Ton archive est importée 🚴"
     assert f"<strong>{expected['imported']}</strong> importées" in html
     # The FIT with no usable sport gets its own actionable line.
     assert f"<strong>{expected['skipped_no_sport']}</strong> sans sport identifiable" in html

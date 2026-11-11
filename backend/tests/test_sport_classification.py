@@ -322,7 +322,7 @@ def test_done_email_reports_no_sport_skips_on_their_own_line():
     _subj, html = render_archive_done_email(imported=3, skipped=5, skipped_no_sport=2, failed=0)
     assert "<strong>3</strong> ignorées (hors-scope / doublons)" in html
     assert "<strong>2</strong> sans sport identifiable" in html
-    assert "choisissez un sport et réimportez-les" in html
+    assert "choisis un sport et réimporte-les" in html
     _subj, html_en = render_archive_done_email(
         imported=1,
         skipped=2,

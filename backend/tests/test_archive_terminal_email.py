@@ -5,7 +5,7 @@ ONE best-effort email when a ``pending_archives`` row reaches a terminal state:
 
   * ``done``   → summary with imported / skipped / failed counts + map link;
   * ``failed`` → a WHITELISTED user-friendly reason (the zip-bomb "too many
-    members"/"too large" class → "découpez votre export"), never a traceback.
+    members"/"too large" class → "découpe ton export"), never a traceback.
 
 Synthetic ``@strava.local`` addresses are skipped silently, and an email
 failure must never affect the row state or the drain summary.
@@ -168,7 +168,7 @@ def test_done_archive_sends_summary_email():
     send.assert_called_once()
     to, subject, html = send.call_args.args
     assert to == email
-    assert subject == "Votre archive est importée 🚴"
+    assert subject == "Ton archive est importée 🚴"
     assert "<strong>2</strong> importées" in html
     assert "https://chemins-communs.fr/map" in html
 
@@ -189,7 +189,7 @@ def test_done_archive_zero_imported_adapts_wording():
     assert summary["imported"] == 0, summary
     send.assert_called_once()
     _to, subject, html = send.call_args.args
-    assert subject == "Votre archive a été traitée"
+    assert subject == "Ton archive a été traitée"
     assert "aucune nouvelle trace" in html
 
 
@@ -231,7 +231,7 @@ def test_missing_user_is_skipped_silently():
     send.assert_not_called()
 
 
-# ── (c) failed (zip-bomb class) → friendly "découpez" copy, no leak ──────────
+# ── (c) failed (zip-bomb class) → friendly "découpe" copy, no leak ──────────
 
 
 def test_failed_too_many_members_sends_friendly_reason(monkeypatch):
@@ -253,8 +253,8 @@ def test_failed_too_many_members_sends_friendly_reason(monkeypatch):
     send.assert_called_once()
     to, subject, html = send.call_args.args
     assert to == email
-    assert subject == "Votre archive n'a pas pu être traitée"
-    assert "découpez" in html
+    assert subject == "Ton archive n'a pas pu être traitée"
+    assert "découpe" in html
     # NEVER leak internals: neither the raw stored error nor exception names.
     assert "too many members" not in html
     assert "ZipBombError" not in html
@@ -276,8 +276,8 @@ def test_failed_unknown_error_sends_generic_copy_without_leak():
     assert _row(rid)["status"] == "failed"
     send.assert_called_once()
     _to, subject, html = send.call_args.args
-    assert subject == "Votre archive n'a pas pu être traitée"
-    assert "Réessayez" in html
+    assert subject == "Ton archive n'a pas pu être traitée"
+    assert "Réessaie" in html
     assert "psycopg2" not in html and "0x7f" not in html
 
 
