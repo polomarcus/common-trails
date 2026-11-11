@@ -25,6 +25,9 @@ P="ct-import-real-$(date +%s)-$$"
 DEPS_HASH="$(cat "$REPO/backend/pyproject.toml" "$REPO/backend/Dockerfile" | shasum -a 256 | cut -c1-12)"
 IMAGE="${E2E_IMPORT_IMAGE:-ct-e2e-import-backend:$DEPS_HASH}"
 MEM="${E2E_IMPORT_MEM:-8g}"   # the prod importer job's limit
+# MAX_ARCHIVE_BYTES defaults to PROD's 2 GiB (deploy-prod.sh), not the code's
+# 512 MB dev default — otherwise a real GB-scale export is refused up front and
+# the run proves nothing about the prod import.
 
 cleanup() {
   docker rm -f "$P-db" "$P-run" >/dev/null 2>&1 || true
@@ -56,6 +59,7 @@ docker run --name "$P-run" --network "$P-net" --memory "$MEM" --memory-swap "$ME
   -e DEM_PROVIDER=none -e OVERPASS_ENABLED=false -e HEATMAP_K_ANONYMITY=1 \
   -e ARCHIVE_INTAKE_DIR=/tmp/intake -e UPLOADS_BUCKET= -e PYTHONDONTWRITEBYTECODE=1 \
   -e REDROP="${REDROP:-0}" \
+  -e MAX_ARCHIVE_BYTES="${MAX_ARCHIVE_BYTES:-2147483648}" \
   -v "$REPO/backend:/app:ro" \
   -v "$REPO/scripts/e2e_import_real_driver.py:/driver.py:ro" \
   -v "$ARCHIVE:/input/archive.zip:ro" \
