@@ -15,6 +15,18 @@ export default function BetaBanner() {
   // hydration, React #418). Storage can throw (private mode, blocked site
   // data) — the banner then simply stays visible.
   const [dismissed, setDismissed] = useState(false);
+  // Phones: one short line. The full sentence wrapped onto three lines and,
+  // with the toolbars, left about two thirds of the screen to the map.
+  // Read after mount (static export → no matchMedia during render).
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia('(max-width: 640px)');
+    const on = () => setCompact(mql.matches);
+    on();
+    mql.addEventListener?.('change', on);
+    return () => mql.removeEventListener?.('change', on);
+  }, []);
   useEffect(() => {
     try {
       if (localStorage.getItem(BETA_BANNER_DISMISSED_KEY) === '1') setDismissed(true);
@@ -71,10 +83,22 @@ export default function BetaBanner() {
         paddingBottom: 'max(8px, env(safe-area-inset-bottom))',
       }}
     >
-      {t('layout.beta')}{' '}
-      <a href="mailto:paul@epauler.fr" style={{ color: '#1d4ed8', fontWeight: 600 }}>
-        paul@epauler.fr
-      </a>
+      {compact ? (
+        <>
+          <strong>{t('layout.betaShort')}</strong>
+          <span style={{ margin: '0 8px', opacity: 0.4 }}>·</span>
+          <a href="mailto:paul@epauler.fr" data-testid="beta-banner-report" style={{ color: '#1d4ed8', fontWeight: 600 }}>
+            {t('layout.betaReport')}
+          </a>
+        </>
+      ) : (
+        <>
+          {t('layout.beta')}{' '}
+          <a href="mailto:paul@epauler.fr" style={{ color: '#1d4ed8', fontWeight: 600 }}>
+            paul@epauler.fr
+          </a>
+        </>
+      )}
       <span style={{ margin: '0 8px', opacity: 0.4 }}>·</span>
       <Link href="/privacy" style={{ color: '#1d4ed8', fontWeight: 500, textDecoration: 'underline' }}>
         {t('nav.privacy')}

@@ -35,6 +35,8 @@ def export_dir(tmp_path: Path) -> Path:
     (out / "map.html").write_text(MAP)
     (out / "stats.html").write_text("<html><body>STATS</body></html>")
     (out / "auth" / "verify.html").write_text(VERIFY)
+    (out / "me").mkdir()
+    (out / "me" / "routes.html").write_text("<html><body>MES ITINERAIRES</body></html>")
     (out / "404.html").write_text(NOT_FOUND)
     (out / "robots.txt").write_text("User-agent: *\nAllow: /\n")
     (out / "_next" / "static" / "chunks" / "app.js").write_text("console.log(1)")
@@ -78,6 +80,24 @@ def test_head_with_html_accept_on_api_colliding_page(client):
     r = client.head("/stats", headers={"accept": "text/html"})
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
+
+
+def test_nested_page_colliding_with_an_api_path_serves_the_page_to_a_browser(client):
+    """Non-regression (2026-11-11): /me/routes is both the "Mes itinéraires"
+    page and the API list endpoint — opened in a browser it displayed the raw
+    API JSON. A navigation gets the page; an API call still gets the API."""
+    nav = client.get("/me/routes", headers={"accept": "text/html,application/xhtml+xml"})
+    assert nav.status_code == 200
+    assert "text/html" in nav.headers["content-type"]
+    assert "MES ITINERAIRES" in nav.text
+    api = client.get("/me/routes", headers={"accept": "*/*"})
+    assert "application/json" in api.headers["content-type"]
+    assert api.status_code == 401
+
+
+def test_nested_html_priority_never_escapes_the_export_dir(client):
+    r = client.get("/me/..%2F..%2Fsecret", headers={"accept": "text/html"})
+    assert "nope" not in r.text
 
 
 # ── Pages + real 404 ──────────────────────────────────────────────────────────

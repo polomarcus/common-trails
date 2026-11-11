@@ -120,6 +120,12 @@ const en: Translations = {
   // ── Layout ───────────────────────────────────────────────────────────────────
   'layout.beta': 'Beta — send your bugs with as much detail and screenshots as possible to',
   'layout.betaDismiss': 'Hide the beta banner',
+  'layout.betaShort': 'Beta',
+  'layout.betaReport': 'Report a bug',
+  'notFound.title': 'This page does not exist',
+  'notFound.text': 'The link may be old or mistyped. The map is still here.',
+  'notFound.map': 'Open the map',
+  'notFound.home': 'Back to home',
   'layout.description': 'Plan your cycling, gravel and MTB routes guided by community GPS traces. Open source, open data (ODbL).',
   'layout.ogAlt': 'Chemins Communs — community cycling trace map',
 
@@ -138,7 +144,7 @@ const en: Translations = {
   'home.stats.traces': 'traces',
   'home.stats.km': 'km of paths',
   'home.community.title': "What's a heatmap, and why does it matter?",
-  'home.community.text': "A heatmap colours paths by how many cyclists actually ride them. The darker, the more popular: at a glance you see the routes locals prefer, and the ones they avoid.\n\nStrava popularised the idea but locked it behind a paywall. Here it's open and collective: every trace you import enriches the map for everyone, under the ODbL licence. Your start and end points are masked to protect your home address.",
+  'home.community.text': "A heatmap colours paths by how many cyclists actually ride them. The more a path is ridden, the more it stands out, from plum to orange: at a glance you see the routes locals prefer, and the ones they avoid.\n\nStrava popularised the idea but locked it behind a paywall. Here it's open and collective: every trace you import enriches the map for everyone, under the ODbL licence. Your start and end points are masked to protect your home address.",
   'home.elevation.title': 'Elevation profile & surfaces',
   'home.elevation.desc': 'Copernicus DEM altitude, slope-coloured profile, surface estimation with confidence index. D+ and D- on every trace.',
   'home.trails.desc': 'Forest defence tracks (DFCI) and marked trails (GR, GRP, GT, PR, EuroVelo) shown on the map.',
