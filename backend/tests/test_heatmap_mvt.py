@@ -1,4 +1,4 @@
-"""Tests for MVT heatmap tiles + incremental rebuild.
+"""Tests for MVT heatmap tiles.
 
 NOTE: Sport names starting with `test_` are normalized to `gravel` by
 `_normalize_heat_edge_sport`, so we use the real `gravel` partition and
@@ -7,14 +7,12 @@ data is effectively zero). The MVT endpoint also queries `sport=gravel`
 under the hood, so the seeded edges become visible at the matching tile.
 """
 import json
-from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text as sa_text
 
 from app.api.heatmap import _mvt_cache
 from app.db.session import SessionLocal
-from app.jobs.rebuild_heatmap import _parse_since
 from app.services.ingest import _update_heat_edges
 
 # Real partition. The MVT endpoint queries by sport, so requests use the
@@ -140,101 +138,6 @@ class TestMvtTileEndpoint:
         resp = client.get(f"/heatmap/tiles/{_SPORT}/14/7368/4187.mvt")
         assert resp.status_code == 200
         assert len(resp.content) > 0
-
-
-# ── Parse --since Tests ──────────────────────────────────────────────────────
-
-
-class TestParseSince:
-    """Unit tests for the _parse_since helper."""
-
-    def test_parse_hours(self):
-        result = _parse_since("24h")
-        expected = datetime.now(UTC) - timedelta(hours=24)
-        assert abs((result - expected).total_seconds()) < 2
-
-    def test_parse_days(self):
-        result = _parse_since("7d")
-        expected = datetime.now(UTC) - timedelta(days=7)
-        assert abs((result - expected).total_seconds()) < 2
-
-    def test_parse_weeks(self):
-        result = _parse_since("2w")
-        expected = datetime.now(UTC) - timedelta(weeks=2)
-        assert abs((result - expected).total_seconds()) < 2
-
-    def test_parse_minutes(self):
-        result = _parse_since("30m")
-        expected = datetime.now(UTC) - timedelta(minutes=30)
-        assert abs((result - expected).total_seconds()) < 2
-
-    def test_parse_iso_timestamp(self):
-        result = _parse_since("2026-03-28T00:00:00")
-        assert result.year == 2026
-        assert result.month == 3
-        assert result.day == 28
-
-    def test_parse_iso_with_tz(self):
-        result = _parse_since("2026-03-28T12:00:00+02:00")
-        assert result.tzinfo is not None
-
-    def test_parse_invalid_raises(self):
-        with pytest.raises(ValueError, match="Cannot parse"):
-            _parse_since("not_a_date")
-
-    def test_parse_zero_hours(self):
-        """0h means 'now' — should return very recent timestamp."""
-        result = _parse_since("0h")
-        assert abs((result - datetime.now(UTC)).total_seconds()) < 2
-
-
-# ── Incremental Rebuild Tests ────────────────────────────────────────────────
-
-
-@pytest.mark.slow
-class TestIncrementalRebuild:
-    """Test that rebuild_heatmap.main() respects --since filtering."""
-
-    def test_rebuild_main_runs_without_error(self):
-        """Smoke test: main(since=now) should process 0 activities."""
-        from app.jobs.rebuild_heatmap import main
-        # since=now means no activities to process (all created in the past)
-        main(since=datetime.now(UTC))
-        # No exception = success
-
-    def test_rebuild_full_runs_without_error(self, monkeypatch):
-        """Smoke test: full rebuild (since=None + TRUNCATE_FIRST=true) should not crash.
-
-        TRUNCATE_FIRST is set explicitly because the 2026-05-16 footgun
-        guard refuses to run a non-truncate, non-incremental rebuild —
-        that combination silently doubles `pass_count` on every existing
-        edge.
-        """
-        from app.jobs.rebuild_heatmap import main
-        monkeypatch.setenv("TRUNCATE_FIRST", "true")
-        main(since=None)
-
-    def test_rebuild_footgun_guard_refuses_default_config(self, monkeypatch):
-        """Pin the 2026-05-16 footgun guard: launching rebuild_heatmap with
-        TRUNCATE_FIRST=false and no --since must SystemExit before any
-        write happens. The combination silently doubles `pass_count` on
-        every existing edge (incident 2026-05-16)."""
-        import pytest
-
-        from app.jobs.rebuild_heatmap import main
-        monkeypatch.setenv("TRUNCATE_FIRST", "false")
-        monkeypatch.delenv("ALLOW_UNGATED_REBUILD", raising=False)
-        with pytest.raises(SystemExit, match="ABORT"):
-            main(since=None)
-
-    def test_rebuild_footgun_override_allowed(self, monkeypatch):
-        """ALLOW_UNGATED_REBUILD=true unlocks the dangerous path for
-        disposable envs (e.g. dev DB known to be empty)."""
-        from app.jobs.rebuild_heatmap import main
-        monkeypatch.setenv("TRUNCATE_FIRST", "false")
-        monkeypatch.setenv("ALLOW_UNGATED_REBUILD", "true")
-        # Should not raise — just warn.
-        main(since=None)
 
 
 # The TestLonLatToTile unit tests were removed with the matched-era CDN

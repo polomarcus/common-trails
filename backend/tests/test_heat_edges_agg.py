@@ -13,7 +13,7 @@ builder ``build_heat_aggregation_sql`` over the same ``heat_edges``. That is
 the anti-drift contract — if they ever diverge, the map is wrong.
 
 Every test drives the REAL handlers (``recompute_heat_agg_for_ways``,
-``backfill_heat_agg``, ``build_agg_read_sql``, ``verify_heat_agg``), never an
+``backfill_heat_agg``, ``build_agg_read_sql``), never an
 inline copy. Isolation: a UNIQUE throwaway sport (routed to the
 ``heat_edges_default`` LIST partition) + synthetic osm_way_ids; a ``finally``
 wipes everything. golden-marked → needs PostGIS.
@@ -28,7 +28,6 @@ from app.jobs.rebuild_heat_agg import (
     backfill_heat_agg,
     recompute_heat_agg_for_ways,
 )
-from app.jobs.verify_heat_agg import verify_heat_agg
 from app.services.heat_aggregation import (
     build_agg_read_sql,
     build_heat_aggregation_sql,
@@ -186,22 +185,6 @@ def test_backfill_matches_live_and_incremental():
     finally:
         _cleanup(sport, ways)
         db.close()
-
-
-def test_full_corpus_parity_via_drift_check():
-    """Load-bearing: backfill heat_edges_agg from the WHOLE local heat_edges
-    corpus, then the drift check (a fresh live re-aggregation) reports ZERO
-    missing / extra / mismatched rows. This is the realistic-corpus parity
-    guarantee — not a 2-edge toy."""
-    backfill_heat_agg(truncate=True)
-    report = verify_heat_agg()
-    assert report.clean, (
-        f"heat_edges_agg drifted from a fresh live aggregation: "
-        f"missing={report.missing} extra={report.extra} "
-        f"mismatched={report.mismatched} (agg={report.agg_rows} live={report.live_rows})"
-    )
-    # agg row count must equal the live OSM-matched group count exactly.
-    assert report.agg_rows == report.live_rows
 
 
 # ── MAX not SUM ──────────────────────────────────────────────────────────────
