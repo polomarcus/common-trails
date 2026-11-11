@@ -1,4 +1,4 @@
-.PHONY: up down logs test test-slow test-golden e2e-import-real heatmap-rebuild heat-quality backend frontend dev dev-frontend lint format dfci-download dfci-extract dfci-upload pmtiles heat-edges heatmap-deploy heatmap-status gcp-precheck prod-import-osm prod-import-osm-south import-osm-roads-local heatmap-clean-rebuild import-trails-pbf prod-import-trails-south prod-recompute-elevation-gain prod-group-edges-osm-job
+.PHONY: up down logs test test-slow test-golden e2e-import-real backend frontend dev dev-frontend lint format dfci-download dfci-extract dfci-upload pmtiles heatmap-status gcp-precheck
 
 ## GOLDEN RULE: any GCP action must verify BOTH gcloud config AND ADC
 ## (Application Default Credentials — what terraform/gsutil/google-cloud
@@ -43,60 +43,6 @@ gcp-precheck:
 	fi; \
 	echo "✅ GCP context: gcloud=$$account / $$project / ADC=$$adc_email"
 
-## Import a single Geofabrik region into prod osm_road_edges by running
-## the existing CLI in the LOCAL backend container, with DATABASE_URL
-## redirected at prod via cloud-sql-proxy. Cheaper than Cloud Run Jobs:
-## no per-run vCPU bill, no egress (ADC + cloud-sql-proxy use Google's
-## internal mesh), and the container already has the PBF cached in
-## ``/data/<region>.osm.pbf`` so we skip the Geofabrik re-download.
-##
-## Usage: make prod-import-osm REGION=occitanie
-##
-## Caveat: parsing happens on YOUR laptop. INSERT batches go over
-## the proxy → db-f1-micro. Expect ~30 min for Occitanie (262 MB
-## PBF, 6 M segments). Idempotent — re-running with the same PBF is
-## safe (ON CONFLICT DO NOTHING).
-prod-import-osm: gcp-precheck
-	@if [ -z "$(REGION)" ]; then echo "❌ Set REGION=occitanie|paca|… (see app/cli/import_osm_roads.py)"; exit 1; fi
-	@docker compose ps backend --format json 2>/dev/null | grep -q '"State":"running"' || (echo "❌ local backend container not running — make up"; exit 1)
-	@DB_PWD=$$(gcloud secrets versions access latest --secret=DATABASE_URL --project=common-trails 2>/dev/null | sed -E 's|.*://[^:]+:||; s|@.*||') ; \
-	if [ -z "$$DB_PWD" ]; then echo "❌ couldn't read db password from the DATABASE_URL secret (gcloud auth as paleclercq@gmail.com?)"; exit 1; fi ; \
-	echo "→ starting cloud-sql-proxy on host port 5433…" ; \
-	pkill -f "cloud-sql-proxy.*common-trails-prod" 2>/dev/null || true ; \
-	cloud-sql-proxy --port 5433 common-trails:europe-west1:common-trails-prod > /tmp/csqlp-prod.log 2>&1 & \
-	PROXY_PID=$$! ; \
-	sleep 4 ; \
-	echo "→ importing $(REGION) (DATABASE_URL → 127.0.0.1:5433/common_trails)…" ; \
-	docker compose exec -T \
-	    -e DATABASE_URL="postgresql://api:$$DB_PWD@host.docker.internal:5433/common_trails" \
-	    -e SKIP_OSM_FETCH=true \
-	    backend python -m app.cli.import_osm_roads $(REGION) || EXIT=$$? ; \
-	kill $$PROXY_PID 2>/dev/null || true ; \
-	exit $${EXIT:-0}
-
-## Import South-France PBFs sequentially into prod. Covers everywhere
-## the soft-launch friends are likely to ride:
-##   - occitanie  (Languedoc-Roussillon, Montpellier-Toulouse axis)
-##   - paca       (Marseille, Nice, Provence, Alpes du Sud)
-##   - ara        (Rhône-Alpes — Lyon, Annecy, Grenoble, Alpes du Nord)
-##   - auvergne   (Massif Central — Clermont, Cantal)
-##
-## ~30 min each on db-f1-micro = ~2 h total. Idempotent on retry —
-## the CLI uses ON CONFLICT DO NOTHING so re-running is safe. Sequential
-## (not parallel) to keep db-f1-micro from OOMing on concurrent INSERTs.
-##
-## ⚠️ DEPRECATED — measured ~330 ways/sec on 2026-05-15 over cloud-sql-proxy,
-## projecting whole south France at 24-30 h. The bottleneck is the
-## per-COPY-batch network round-trip. Prefer ``prod-import-osm-job``
-## which runs INSIDE GCP (db-internal connection): 10-30× faster,
-## ~$0.04 per region.
-prod-import-osm-south: gcp-precheck
-	$(MAKE) prod-import-osm REGION=occitanie
-	$(MAKE) prod-import-osm REGION=paca
-	$(MAKE) prod-import-osm REGION=ara
-	$(MAKE) prod-import-osm REGION=auvergne
-	@echo "✅ South + Alps + Massif Central imported. Sanity check: gcloud sql connect …"
-
 ## ⚠️ DESTRUCTIVE — wipe prod heat_edges, heat_edge_contributors, activities.
 ## Preserves users, integration_accounts, oauth_states (so JWTs + Strava
 ## links survive the wipe). Use before a full re-ingest from clean GPX
@@ -134,68 +80,8 @@ prod-wipe-user-data: gcp-precheck
 	kill $$PROXY_PID 2>/dev/null || true ; \
 	exit $${EXIT:-0}
 
-## Re-run group_edges_osm on prod via cloud-sql-proxy. Backfills
-## osm_way_id on heat_edges that drifted to grid-fallback during ingest.
-## Useful after a fresh OSM import populates osm_road_edges with new
-## coverage — existing heat_edges in those tiles get their osm_way_id
-## set so PMTiles aggregation collapses them onto smooth OSM ways.
-##
-## Idempotent. ~5-30 min depending on heat_edges count.
-prod-group-edges-osm: gcp-precheck
-	@docker compose ps backend --format json 2>/dev/null | grep -q '"State":"running"' || (echo "❌ local backend container not running — make up"; exit 1)
-	@DB_PWD=$$(gcloud secrets versions access latest --secret=DATABASE_URL --project=common-trails 2>/dev/null | sed -E 's|.*://[^:]+:||; s|@.*||') ; \
-	if [ -z "$$DB_PWD" ]; then echo "❌ couldn't read db password from the DATABASE_URL secret"; exit 1; fi ; \
-	echo "→ starting cloud-sql-proxy on host port 5433…" ; \
-	pkill -f "cloud-sql-proxy.*common-trails-prod" 2>/dev/null || true ; \
-	cloud-sql-proxy --port 5433 common-trails:europe-west1:common-trails-prod > /tmp/csqlp-prod.log 2>&1 & \
-	PROXY_PID=$$! ; sleep 4 ; \
-	echo "→ running group_edges_osm on prod…" ; \
-	docker compose exec -T \
-	    -e DATABASE_URL="postgresql://api:$$DB_PWD@host.docker.internal:5433/common_trails" \
-	    backend python -m app.cli.group_edges_osm || EXIT=$$? ; \
-	kill $$PROXY_PID 2>/dev/null || true ; \
-	exit $${EXIT:-0}
-
-## Re-apply Strava-style D+ smoothing to existing prod activities.
-## After PR #259 introduced the rolling median + 3 m noise threshold in
-## ``gpx.py:_smoothed_elevation_gain``, rows uploaded before that PR
-## still carry the OLD inflated naive-sum D+. This iterates prod
-## ``activities`` in batches, re-reads the z from stored
-## ``geometry_geojson`` coords, and UPDATEs only ``elevation_gain_m``.
-##
-## Crouzet-safe — never reads/writes ``geometry_geojson``. Idempotent
-## (deterministic smoothing).
-##
-## DRY_RUN=1 → preview only; USER_ID=<uuid> → scope to one user;
-## BATCH=200 → tune rows-per-commit for db-f1-micro.
-##
-## Usage:
-##   make prod-recompute-elevation-gain                    # full run
-##   make prod-recompute-elevation-gain DRY_RUN=1          # preview
-##   make prod-recompute-elevation-gain USER_ID=abc-...    # one user
-prod-recompute-elevation-gain: gcp-precheck
-	@docker compose ps backend --format json 2>/dev/null | grep -q '"State":"running"' || (echo "❌ local backend container not running — make up"; exit 1)
-	@DB_PWD=$$(gcloud secrets versions access latest --secret=DATABASE_URL --project=common-trails 2>/dev/null | sed -E 's|.*://[^:]+:||; s|@.*||') ; \
-	if [ -z "$$DB_PWD" ]; then echo "❌ couldn't read db password from the DATABASE_URL secret"; exit 1; fi ; \
-	echo "→ starting cloud-sql-proxy on host port 5433…" ; \
-	pkill -f "cloud-sql-proxy.*common-trails-prod" 2>/dev/null || true ; \
-	cloud-sql-proxy --port 5433 common-trails:europe-west1:common-trails-prod > /tmp/csqlp-prod.log 2>&1 & \
-	PROXY_PID=$$! ; sleep 4 ; \
-	ARGS="" ; \
-	[ -n "$(DRY_RUN)" ] && ARGS="$$ARGS --dry-run" ; \
-	[ -n "$(USER_ID)" ] && ARGS="$$ARGS --user-id $(USER_ID)" ; \
-	[ -n "$(BATCH)" ] && ARGS="$$ARGS --batch $(BATCH)" ; \
-	echo "→ running recompute_elevation_gain on prod ($$ARGS)…" ; \
-	docker compose exec -T \
-	    -e DATABASE_URL="postgresql://api:$$DB_PWD@host.docker.internal:5433/common_trails" \
-	    backend python -m app.cli.recompute_elevation_gain $$ARGS || EXIT=$$? ; \
-	kill $$PROXY_PID 2>/dev/null || true ; \
-	exit $${EXIT:-0}
-
 ## Re-ingest local data/gpx/*.gpx into prod activities for the
-## specified user. Use this AFTER prod-wipe-user-data + prod-import-osm
-## so each activity ingests with OSM matching available — every
-## heat_edge gets a proper osm_way_id, no grid-fallback spaghetti.
+## specified user (e.g. after prod-wipe-user-data).
 ##
 ## Required: USER_ID=<uuid> (same as prod-import-strava).
 ## SPORT=<gravel|mtb|road|offroad|running> defaults to gravel.
@@ -219,94 +105,9 @@ prod-import-gpx: gcp-precheck
 	kill $$PROXY_PID 2>/dev/null || true ; \
 	exit $${EXIT:-0}
 
-## ⚠ Long-running. Full prod heatmap rebuild from clean state:
-##   1. Wipe user heat_edges + activities (CONFIRM=YES required)
-##   2. Import OSM PBFs for south France (~2 h via cloud-sql-proxy)
-##   3. Re-ingest data/gpx/ (~30 min)
-##   4. group_edges_osm (~5 min)
-## After this, the next ingest event will trigger build_pmtiles via
-## Cloud Tasks. You can also force-rebuild via the /internal/artefacts/
-## rebuild endpoint.
-##
-## Expected total: 3-4 h. Don't run on a flaky network — cloud-sql-proxy
-## drops add hours.
-prod-rebuild-from-gpx: gcp-precheck
-	@if [ "$(CONFIRM)" != "YES" ]; then \
-	    echo "⚠  Dry-run. This would:"; \
-	    echo "   1. TRUNCATE heat_edges, heat_edge_contributors, activities on prod"; \
-	    echo "   2. Run prod-import-osm-south (Occitanie + PACA + ARA + Auvergne, ~2h)"; \
-	    echo "   3. Re-ingest data/gpx/ (~30 min) — needs USER_ID=<uuid>"; \
-	    echo "   4. Run prod-group-edges-osm (~5 min)"; \
-	    echo "   Run with CONFIRM=YES USER_ID=<uuid> to actually do it."; \
-	    exit 0; \
-	fi ; \
-	if [ -z "$(USER_ID)" ]; then echo "❌ Set USER_ID=<uuid> for the GPX ingest step"; exit 1; fi ; \
-	$(MAKE) prod-wipe-user-data CONFIRM=YES && \
-	$(MAKE) prod-import-osm-south && \
-	$(MAKE) prod-import-gpx USER_ID=$(USER_ID) && \
-	$(MAKE) prod-group-edges-osm && \
-	echo "✅ Rebuild complete. PMTiles will refresh on next ingest event via Cloud Tasks."
-
-## Run group_edges_osm via Cloud Run Job (10-30× faster than the proxy
-## path because the job runs in the same region as Cloud SQL — kills
-## the 30-50 ms RTT per row that dominated the local-proxy run).
-##
-## Use this instead of ``prod-group-edges-osm`` for production rebuilds.
-## The local-proxy target stays as a debugging convenience.
-##
-## Idempotent. Expected runtime <30 min vs 7+ h via proxy.
-##
-##   make prod-group-edges-osm-job          # full table
-##   make prod-group-edges-osm-job BBOX=3.7,43.5,4.1,43.8   # scoped
-prod-group-edges-osm-job: gcp-precheck
-	@echo "→ executing Cloud Run Job common-trails-group-edges-osm-$(or $(ENV),prod)…"
-	@ARGS_FLAG="" ; \
-	[ -n "$(BBOX)" ] && ARGS_FLAG="--args=--bbox,$(BBOX)" ; \
-	gcloud run jobs execute common-trails-group-edges-osm-$(or $(ENV),prod) \
-	    --region=$(or $(GCP_REGION),europe-west1) \
-	    $$ARGS_FLAG \
-	    --wait
-
-## Trigger the Cloud Run Job ``common-trails-import-osm-prod`` for one
-## region. The job runs INSIDE GCP with a db-internal connection —
-## no cloud-sql-proxy hop. Expected throughput is 10-30× the proxy
-## path.
-##
-##   make prod-import-osm-job REGION=occitanie
-##   make prod-import-osm-job REGION=france  # whole France (~1-2 h)
-##
-## Cost: ~$0.04 per region run (Cloud Run gen2, 2 vCPU × 2 Gi, ~30 min
-## per region). No egress.
-##
-## The job downloads the PBF from Geofabrik on first run; per-execution
-## DATA_DIR=/tmp means the cache resets per run but Geofabrik downloads
-## are cheap (~5 min for 250 MB regional PBF on Google's network).
-##
-## ``--wait`` blocks the Make target on job completion so you see exit
-## code and can chain follow-up steps.
-prod-import-osm-job: gcp-precheck
-	@if [ -z "$(REGION)" ]; then echo "❌ Set REGION=occitanie|paca|ara|auvergne|france|... (see app/cli/import_osm_roads.py REGIONS map)"; exit 1; fi
-	@echo "→ executing Cloud Run Job common-trails-import-osm-$(or $(ENV),prod) with REGION=$(REGION)…"
-	gcloud run jobs execute common-trails-import-osm-$(or $(ENV),prod) \
-	    --region=$(or $(GCP_REGION),europe-west1) \
-	    --args=$(REGION) \
-	    --wait
-
-## Same as prod-import-osm-south but via the Cloud Run Job. Sequential
-## (not parallel) to keep db-f1-micro CPU bounded — the COPY-FROM-STDIN
-## bursts are intensive enough that parallel runs would saturate the tier.
-##
-## Total cost: ~$0.16 for the 4 regions. Total time: ~1-2 h.
-prod-import-osm-job-south: gcp-precheck
-	$(MAKE) prod-import-osm-job REGION=occitanie
-	$(MAKE) prod-import-osm-job REGION=paca
-	$(MAKE) prod-import-osm-job REGION=ara
-	$(MAKE) prod-import-osm-job REGION=auvergne
-	@echo "✅ South France OSM imported via Cloud Run Job (~$$0.16)."
-
 ## Import a local Strava bulk export into prod ``activities`` (and
-## downstream heat_edges via the ingest pipeline). Same cloud-sql-proxy
-## pattern as the OSM import: parse runs locally in the backend
+## downstream heat_edges via the ingest pipeline). Cloud-sql-proxy
+## pattern: parse runs locally in the backend
 ## container, INSERTs go over the proxy to prod db-f1-micro.
 ##
 ## Required: USER_ID=<uuid of the prod user that owns these activities>.
@@ -370,46 +171,10 @@ pmtiles:
 	docker compose exec -T backend cat /tmp/stats.json > frontend/public/stats.json
 	@echo "Community stats written: $$(cat frontend/public/stats.json)"
 
-## Truncate + rebuild heat_edges + heat_edge_contributors from the
-## ``activities`` table. Use this after: changing the ingest pipeline,
-## importing a new OSM PBF, merging users, or any other mutation that
-## should change which edges exist. Doesn't touch ``activities`` —
-## those are the source of truth.
-##
-## New heat_edges get match_source = 'spatial' (or 'grid_fallback') from
-## the in-process matcher.
-##
-## SKIP_PMTILES_REBUILD=true so we don't trigger 100s of debounced display
-## rebuilds during the loop; ``make pmtiles`` runs ONCE at the end.
-## (The heat_edges_display matview was dropped June 2026 — the live MVT
-## endpoint now aggregates heat_edges directly via the shared
-## app.services.heat_aggregation builder, so there is no matview to refresh.)
-heat-edges:
-	docker compose exec -T -e TRUNCATE_FIRST=true \
-	    -e SKIP_PMTILES_REBUILD=true \
-	    backend python -m app.jobs.rebuild_heatmap
-
-## End-to-end heatmap deploy: heat_edges → PMTiles.
-##
-## Use this after any heat_edges-altering change. Doesn't run if any
-## step fails — fix and re-run; each sub-step is idempotent.
-##
-## NB: this is the ONE command to run after ingest-pipeline edits.
-## The heat_edges_display matview was dropped June 2026 — the live MVT
-## endpoint aggregates heat_edges directly, so there's no matview step.
-## (The .fgraph routing-shard step was removed with the WASM-routing
-## decommission — routing is delegated to external tools.)
-heatmap-deploy: heat-edges pmtiles
-	@echo
-	@echo "════════════════════════════════════════════════════════════════"
-	@echo "  Heatmap deploy complete."
-	@echo "  Run ``make heatmap-status`` to confirm artefacts are in sync."
-	@echo "════════════════════════════════════════════════════════════════"
-
 ## Show whether each heatmap artefact is up-to-date relative to the DB.
 ## Doesn't mutate anything. Reports row counts in DB (source of truth)
 ## + sizes/mtimes of derived files. If any derived artefact is older
-## than the most-recent activity ingest, run ``make heatmap-deploy``.
+## than the most-recent activity ingest, run ``make pmtiles``.
 heatmap-status:
 	@echo "── DB ──────────────────────────────────────"
 	@docker compose exec -T db psql -U postgres -d common_trails -tAc " \
@@ -427,7 +192,7 @@ heatmap-status:
 	   echo "PMTiles: MISSING — run 'make pmtiles'"; \
 	fi
 	@echo
-	@echo "Run 'make heatmap-deploy' to refresh everything (~25-40 min)."
+	@echo "Run 'make pmtiles' to refresh the display artefact."
 
 ## Stream logs from full stack
 logs:
@@ -468,37 +233,16 @@ e2e-import-real:
 ## (which uses the clean .env.test DB with no PBF). `-ra` prints the skip
 ## reasons so a missing PBF is VISIBLE, never a silent green.
 ##
-## Prereqs: `make up` (stack running) + the PBF imported once via
-## `make import-osm-roads-local`. If goldens report "skipped (needs PBF)",
-## that's the trap — import the PBF, don't assume they passed.
+## Prereqs: `make up` (stack running) + an `osm_road_edges` substrate already
+## in the dev DB. The OSM import CLI was removed with the matched pipeline, so
+## on a fresh DB these goldens report "skipped (needs PBF)" — a skip is NOT a
+## pass. They leave with the matched ingest code.
 test-golden:
 	@docker compose ps backend 2>/dev/null | grep -qiE "up|running" || { \
 	  echo "✗ backend not running — run 'make up' first"; exit 1; }
 	docker compose run --rm --no-deps \
 	    -v "$(PWD)/data:/app/data:ro" \
 	    backend pytest -ra -m "golden or slow" tests/
-
-## Rebuild the heatmap DISPLAY from the activities table through the CURRENT
-## ingest code, end-to-end, then drop the fresh PMTiles in place.
-## Use after any change to services/ingest.py / the matcher / K-anonymity.
-## (heat_edges → ANALYZE → pmtiles). ~20-40 min on a full corpus.
-## The heat_edges_display matview was dropped June 2026 — the live MVT
-## endpoint aggregates heat_edges directly, so there's no matview step.
-## Afterwards: `docker compose up --build frontend -d` + hard-reload the browser.
-heatmap-rebuild:
-	docker compose exec -T -e TRUNCATE_FIRST=true backend python -m app.jobs.rebuild_heatmap
-	$(MAKE) pmtiles
-	@echo "✅ heat_edges + pmtiles rebuilt. Now: docker compose up --build frontend -d"
-
-## Quick heat-edge discontinuity check ("est-ce que ça part en spaghetti ?").
-## Prints per-region grid_fallback / dangling / isolated ratios for the
-## monitored regions and exits 2 if any region crosses the alert thresholds.
-## Read-only, seconds per region. Options pass through, e.g.:
-##   make heat-quality
-##   make heat-quality ARGS="--sport gravel"
-##   make heat-quality ARGS="--bbox 3.85 43.58 3.95 43.65 --json"
-heat-quality:
-	docker compose exec -T backend python -m app.cli.heat_quality $(ARGS)
 
 ## Restore the "clean continuous heatmap from Paul's rides" local state in
 ## ~2 min (single-user, realistic pass_counts, built pmtiles)
@@ -527,98 +271,6 @@ heatmap-snapshot:
 	  | gzip > data/clean-snapshot/clean-heatmap.sql.gz
 	cp frontend/public/heatmap-display.pmtiles data/clean-snapshot/
 	@echo "✅ Clean snapshot captured → data/clean-snapshot/ ($$(du -sh data/clean-snapshot | cut -f1))"
-
-## Import OSM road segments from a local PBF into local DB. Useful after
-## ``docker compose down -v`` (fresh DB) so the spatial matcher in ingest
-## has roads to snap GPS points to. Without this, every ingest falls into
-## the 4dp grid-fallback path (good but coarser; produces NULL osm_way_id
-## rows that break the continuous-line invariant in the heatmap render).
-##
-##   make import-osm-roads-local                   # default: occitanie region (Geofabrik download, cached 24h)
-##   make import-osm-roads-local PBF=/data/foo.pbf # explicit local PBF (path inside the container)
-##
-## Default is the `occitanie` region preset (~200MB PBF, ~10-30 min) — the
-## proven local substrate. Do NOT default to france-south.osm.pbf: that
-## 2.5GB PBF (~9.8M segments) has OOM-killed the local import TWICE (once
-## dying at 700k rows and silently gutting osm_road_edges). If you really
-## need it, pass PBF=/data/france-south.osm.pbf explicitly and watch memory.
-## One-shot; subsequent runs only refresh tiles covered by the PBF (idempotent).
-##
-## Implementation note: runs detached inside the container with output
-## redirected to /tmp/osm-import.log. Without ``-d``, ``docker compose
-## exec`` ties the python's stdout/stderr to a pipe that gets SIGHUP'd
-## the moment the host shell loses the tty (long-running background
-## tasks, IDE disconnects, etc.) — the python dies silently mid-parse
-## and you end up with 0 rows in osm_road_edges with no error message.
-## See learning notes 2026-05-10 in routing-client agent doc.
-import-osm-roads-local:
-	@if [ -n "$$PBF" ]; then IMPORT_ARGS="$$PBF --no-download"; SRC="$$PBF"; \
-	else IMPORT_ARGS="occitanie"; SRC="occitanie region (Geofabrik download, cached 24h)"; fi ; \
-	echo "→ importing OSM roads from $$SRC (~10-30 min, detached)…" ; \
-	docker compose exec -T -d -e SKIP_OSM_FETCH=true backend bash -c \
-	  "python -u -m app.cli.import_osm_roads $$IMPORT_ARGS > /tmp/osm-import.log 2>&1" ; \
-	echo "→ tailing /tmp/osm-import.log inside backend container (Ctrl-C to detach; the import keeps running):" ; \
-	echo "    docker compose exec backend tail -f /tmp/osm-import.log" ; \
-	while docker compose exec -T backend bash -c "find /proc -maxdepth 2 -name cmdline 2>/dev/null -exec sh -c 'tr -d \"\\0\" < \"\$$1\" | grep -q import_osm' _ {} \\;" 2>/dev/null; do \
-	  sleep 60 ; \
-	  echo "  …still running ($$(date '+%H:%M:%S'))" ; \
-	done ; \
-	echo "→ done. Last log lines:" ; \
-	docker compose exec -T backend tail -10 /tmp/osm-import.log
-
-## Full clean-heatmap rebuild for local dev — fixes the "spaghetti" 11-m
-## criss-cross render at zoom 17+ caused by heat_edges with NULL osm_way_id.
-##
-## Sequence:
-##   1. import-osm-roads-local — populate osm_road_edges (~30 min, skip if done)
-##   2. group_edges_osm — backfill osm_way_id on heat_edges that run parallel
-##      to an OSM road within 25m (~5 min)
-##   3. build_pmtiles --keep-grid-fallback --min-uc 1 — regenerate display
-##      file (~16 min) and copy into frontend/public/
-##
-## After this, restart the frontend container so it picks up the new PMTiles
-## (the static server holds the file open):
-##   docker compose restart frontend
-heatmap-clean-rebuild: import-osm-roads-local
-	@echo "→ grouping heat_edges onto OSM ways (re-keys + propagates osm_way_id)…"
-	docker compose exec -T backend python -m app.cli.group_edges_osm
-	@echo "→ rebuilding PMTiles with grid fallback + min_uc=1…"
-	docker compose exec -T backend python -m app.jobs.build_pmtiles \
-	    --output-dir /tmp --keep-grid-fallback --min-uc 1
-	docker compose cp backend:/tmp/heatmap-display.pmtiles frontend/public/heatmap-display.pmtiles
-	@echo "✅ Run 'docker compose restart frontend' then hard-reload your browser."
-
-## Import GR/GRP/GT/PR/EV trail relations from a local PBF on disk.
-## Replaces the Overpass-based import_trails (which silently empties
-## trail_edges when Overpass is rate-limited or down). Args:
-##   PBF=path-to.pbf  (default: data/france-south.osm.pbf)
-##
-## ~2 minutes for france-south.osm.pbf (~65k trail edges).
-import-trails-pbf:
-	@PBF="$${PBF:-/data/france-south.osm.pbf}" ; \
-	echo "→ importing trails from $$PBF (replaces existing trail_edges)…" ; \
-	docker compose exec -T backend python -m app.cli.import_trails_pbf $$PBF
-
-## Import the same trail edges into prod via cloud-sql-proxy. Mirrors
-## the prod-import-osm pattern. Run AFTER prod-import-osm-south so
-## any trails-on-osm spatial join has roads to land on.
-prod-import-trails-south: gcp-precheck
-	@docker compose ps backend --format json 2>/dev/null | grep -q '"State":"running"' || (echo "❌ local backend container not running — make up"; exit 1)
-	@test -f data/france-south.osm.pbf || (echo "❌ data/france-south.osm.pbf missing — run merge-or-download first"; exit 1)
-	@DB_PWD=$$(gcloud secrets versions access latest --secret=DATABASE_URL --project=common-trails 2>/dev/null | sed -E 's|.*://[^:]+:||; s|@.*||') ; \
-	if [ -z "$$DB_PWD" ]; then echo "❌ couldn't read db password from the DATABASE_URL secret"; exit 1; fi ; \
-	echo "→ starting cloud-sql-proxy on host port 5433…" ; \
-	pkill -f "cloud-sql-proxy.*common-trails-prod" 2>/dev/null || true ; \
-	cloud-sql-proxy --port 5433 common-trails:europe-west1:common-trails-prod > /tmp/csqlp-prod.log 2>&1 & \
-	PROXY_PID=$$! ; \
-	sleep 4 ; \
-	echo "→ importing trails from data/france-south.osm.pbf into prod…" ; \
-	docker compose cp data/france-south.osm.pbf backend:/data/ 2>&1 | tail -2 ; \
-	docker compose exec -T \
-	    -e DATABASE_URL="postgresql://api:$$DB_PWD@host.docker.internal:5433/common_trails" \
-	    backend python -m app.cli.import_trails_pbf /data/france-south.osm.pbf || EXIT=$$? ; \
-	kill $$PROXY_PID 2>/dev/null || true ; \
-	exit $${EXIT:-0}
 
 ## Start backend stack only (db + backend)
 backend:
@@ -653,6 +305,7 @@ DFCI_CACHE  := backend/app/data/dfci_ign_edges.json
 
 ## Download DFCI cache from GCS (for local dev matching production)
 dfci-download:
+	@mkdir -p $(dir $(DFCI_CACHE))
 	@echo "Downloading DFCI data from gs://$(DATA_BUCKET)/ ..."
 	gsutil cp gs://$(DATA_BUCKET)/dfci_ign_edges.json $(DFCI_CACHE)
 	@echo "Done: $$(wc -c < $(DFCI_CACHE) | tr -d ' ') bytes → $(DFCI_CACHE)"
@@ -660,6 +313,7 @@ dfci-download:
 ## Extract DFCI from IGN WFS and save cache (requires geopandas)
 ## France entière: piste_dfci + categorie_dfci (~170K features, ~4 min)
 dfci-extract:
+	@mkdir -p $(dir $(DFCI_CACHE))
 	python scripts/extract_dfci_ign.py --include-categorie --edges-cache $(DFCI_CACHE)
 
 ## Upload local DFCI cache to GCS (updates production data)

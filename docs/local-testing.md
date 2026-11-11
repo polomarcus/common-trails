@@ -15,13 +15,7 @@ Open **http://localhost:3787** (demo account seeded automatically).
 
 ### Legacy only: OSM PBF for the matched-pipeline golden tests
 
-Only needed for the **legacy matched** pipeline tests (map-matching to OSM). The current raw-trace heatmap does not use OSM. Without the PBF those goldens **skip** (they don't fail — see Trap #3). Import it once if you work on them:
-
-```bash
-make import-osm-roads-local    # downloads + imports the `occitanie` PBF (~10-30 min, cached 24h)
-```
-
-This populates `osm_road_edges` (~7M rows, Hérault/Gard/Cévennes). You only redo this when the PBF coverage needs to change.
+Only needed for the **legacy matched** pipeline tests (map-matching to OSM). The current raw-trace heatmap does not use OSM. Without an `osm_road_edges` substrate those goldens **skip** (they don't fail — see Trap #3). The import CLI (`app.cli.import_osm_roads`, `make import-osm-roads-local`) was removed with the matched pipeline: the goldens only run against a dev DB that still holds the substrate, and they leave with the matched ingest code.
 
 ## 2. Running tests — which tier, which command
 
@@ -55,8 +49,6 @@ docker compose exec -T backend cat /tmp/heatmap-display.pmtiles > frontend/publi
 
 Write the host file **in place** (`cat … >`), never `docker compose cp` — see Trap #2. `make pmtiles` does the same two steps (it still passes `--min-uc ${HEATMAP_K_ANONYMITY}`, which only the legacy matched path reads).
 
-Legacy matched pipeline only: `make heatmap-rebuild` runs `rebuild_heatmap` (TRUNCATE + re-ingest every activity, then `ANALYZE`) → `make pmtiles`; `make heat-quality` prints per-region spaghetti/discontinuity ratios (exits 2 on alert).
-
 ## 4. Lint before pushing
 
 ```bash
@@ -70,8 +62,8 @@ cd frontend && npx tsc --noEmit                     # TypeScript
 |---|---|---|---|
 | 1 | **Frontend serves a snapshot of `out/`** (not bind-mounted) | code/pmtiles change doesn't show | `docker compose up --build frontend -d` — `restart` keeps the OLD build |
 | 2 | **PMTiles is a static binary** (bind-mounted by inode) | heatmap changes invisible after a data/code change, or after `docker compose cp` | rebuild it (§3) and write the host file in place (`cat … >`); the binary is NOT auto-refreshed |
-| 3 | **Legacy golden tests skip without the PBF** | `make test`/`make test-golden` green but 0 ingestion goldens ran | `make import-osm-roads-local`; read the `-ra` skip lines — a skip is **not** a pass |
-| 4 | **Stale planner stats right after a bulk reload** (legacy matched) | a normally-160ms tile query hangs for *minutes* during/after `rebuild_heatmap` | `rebuild_heatmap` runs `ANALYZE` automatically; if you reload heat_edges by hand, `ANALYZE heat_edges` yourself |
+| 3 | **Legacy golden tests skip without the PBF** | `make test`/`make test-golden` green but 0 ingestion goldens ran | read the `-ra` skip lines — a skip is **not** a pass (the import CLI is gone, see §1) |
+| 4 | **Stale planner stats right after a bulk reload** (legacy matched) | a normally-160ms tile query hangs for *minutes* after a bulk reload of heat_edges | `ANALYZE heat_edges` yourself |
 | 5 | **PostGIS volume upgrade** | weird PG init errors | `docker compose down -v` to drop the old PG data volume |
 
 See also: [`development.md`](development.md), [`configuration.md`](configuration.md), [`ci.md`](ci.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md).

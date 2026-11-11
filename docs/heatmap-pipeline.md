@@ -89,7 +89,7 @@ When a user uploads a GPX or syncs from Strava:
 **Key tables:**
 - `heat_edges` — partitioned by sport. Each row = one directed edge between two snapped points, carrying `user_count` / `pass_count` / `osm_way_id` / surface / highway. Row count scales with ingested activities (local single-user ~2.0 M; prod scales with users).
 - `heat_edge_contributors` — which user contributed to which edge (drives K-anonymity + the `?days=` time filter).
-- **`osm_road_edges` — the imported OpenStreetMap road/path network.** The reference map the matcher snaps GPS onto. Built by `app/cli/import_osm_roads.py` from a Geofabrik **PBF** (e.g. `france-south.osm.pbf`), parsed with `pyosmium`. **One row per *sub-segment* of an OSM way** (a way = a road/path, split into consecutive 2-point segments), so one road becomes many rows. Each row carries `osm_way_id` + `segment_idx` (which way + position — lets the display re-assemble the whole way), `geometry` (the 2-point sub-segment the spatial grid indexes for fast nearest-lookup), **`way_geometry`** (the *full* multi-point curve of the whole way — what Stage 4's aggregation uses to render smooth roads instead of 2-point hops), and `surface`/`highway`/`bridge_yes`/`tunnel_yes` OSM tags. **Row count depends entirely on the imported region** (it's the whole OSM road graph there, not user data): local `occitanie` ≈ **7.2 M**, `france-south` ≈ **9.8 M**, `france` ≈ 50 M (too big for a laptop). Biggest table on disk (~11 GB for france-south); **read-only reference data**, rebuilt only on a PBF re-import.
+- **`osm_road_edges` — the imported OpenStreetMap road/path network.** The reference map the matcher snaps GPS onto. Was built by `app/cli/import_osm_roads.py` (CLI removed with the matched pipeline) from a Geofabrik **PBF** (e.g. `france-south.osm.pbf`), parsed with `pyosmium`. **One row per *sub-segment* of an OSM way** (a way = a road/path, split into consecutive 2-point segments), so one road becomes many rows. Each row carries `osm_way_id` + `segment_idx` (which way + position — lets the display re-assemble the whole way), `geometry` (the 2-point sub-segment the spatial grid indexes for fast nearest-lookup), **`way_geometry`** (the *full* multi-point curve of the whole way — what Stage 4's aggregation uses to render smooth roads instead of 2-point hops), and `surface`/`highway`/`bridge_yes`/`tunnel_yes` OSM tags. **Row count depends entirely on the imported region** (it's the whole OSM road graph there, not user data): local `occitanie` ≈ **7.2 M**, `france-south` ≈ **9.8 M**, `france` ≈ 50 M (too big for a laptop). Biggest table on disk (~11 GB for france-south); **read-only reference data**, rebuilt only on a PBF re-import.
 
 ### Stage 2: Heat Edge Storage
 
@@ -202,15 +202,6 @@ see "Current: raw pipeline" above. The Service Worker tile cache was removed.)
 
 ### Operations
 
-#### Rebuild heatmap (re-process all activities)
-```bash
-docker compose exec backend python -m app.jobs.rebuild_heatmap
-# Bbox filter:
-docker compose exec backend python -m app.jobs.rebuild_heatmap --bbox "3.5,43.4,4.1,43.8"
-# Incremental (last 24h):
-docker compose exec backend python -m app.jobs.rebuild_heatmap --since 24h
-```
-
 #### Rebuild the display PMTiles (the browser-facing artefact)
 ```bash
 make pmtiles   # builds in the backend container, writes frontend/public/ in place
@@ -219,11 +210,6 @@ Prod: [`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 (The `heat_edges_display` materialized view was dropped June 2026 — the live
 MVT endpoint aggregates `heat_edges` directly, so there is no matview to
 refresh. The PMTiles binary is the primary display artefact.)
-
-#### Import OSM roads from PBF
-```bash
-docker compose exec backend python -m app.cli.import_osm_roads --region occitanie
-```
 
 #### Edge enrichment (CLI, NOT at startup — legacy matched substrate)
 
@@ -244,12 +230,12 @@ docker compose exec backend python -m app.cli.enrich_edges dangerous-highways  #
 ```
 
 **When to run:**
-- After `rebuild_heatmap` → run `heat-edges` + `surfaces` + `dangerous-highways`
+- After a full heat_edges rebuild → run `heat-edges` + `surfaces` + `dangerous-highways`
 - After a fresh DFCI/trail import → `slopes` (usually automatic — baked into import scripts)
 - After new OSM PBF import → `surfaces` (re-joins against new DFCI/trail data)
 
-**DEM slopes at import time:** `import_dfci_ign`, `import_dfci_herault`,
-and `import_trails` now call `enrich_dfci_trail_slopes(source=...)` inline
+**DEM slopes at import time:** `import_dfci_ign` and `import_dfci_herault`
+call `enrich_dfci_trail_slopes(source=...)` inline
 after inserting new edges. Subsequent startup sees `slope_grade != 0` and
 skips. No external API calls at boot.
 
@@ -711,7 +697,6 @@ Source files:
 | Source | Latency | When |
 |--------|---------|------|
 | Memory LRU | 1-5ms | After first request |
-| Disk cache | 5-10ms | After `prebuild_tiles` job |
 | PostGIS (warm buffers) | 50-800ms | First-ever request, no cache |
 | PostGIS (cold buffers) | 1-4s | After restart, no cache |
 
