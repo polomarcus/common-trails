@@ -260,6 +260,7 @@ export default function MapToolbar(props: MapToolbarProps) {
                 <div style={{ padding: '2px 14px 6px 40px', display: 'flex', gap: 3, flexWrap: 'wrap' }} data-testid="heatmap-sport-filter">
                   {(
                     [
+                      { value: 'all', label: t('map.sportFilter.all') },
                       { value: 'road', label: t('sport.road') },
                       { value: 'gravel', label: t('sport.gravel') },
                       { value: 'mtb', label: t('sport.mtb') },
@@ -284,33 +285,9 @@ export default function MapToolbar(props: MapToolbarProps) {
                   ))}
                 </div>
               )}
-              {layers.heatmap && (
-                <div style={{ padding: '2px 14px 6px 40px', display: 'flex', gap: 3, flexWrap: 'wrap' }} data-testid="heatmap-time-filter">
-                  {(
-                    [
-                      { value: null, label: t('map.toolbar.timeAll') },
-                      { value: 365, label: t('map.toolbar.time1y') },
-                      { value: 60, label: t('map.toolbar.time60d') },
-                      { value: 30, label: t('map.toolbar.time30d') },
-                    ] as { value: number | null; label: string }[]
-                  ).map(({ value, label }) => (
-                    <button
-                      key={String(value)}
-                      onClick={() => setHeatmapDays(value)}
-                      data-testid={`heatmap-time-${value ?? 'all'}`}
-                      style={{
-                        padding: '2px 8px', borderRadius: 12, border: 'none',
-                        background: heatmapDays === value ? '#e63946' : '#f0f0f0',
-                        color: heatmapDays === value ? '#fff' : '#666',
-                        cursor: 'pointer', fontSize: 11,
-                        fontWeight: heatmapDays === value ? 700 : 400,
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {/* The period chips (Tout / 1 an / 60 j / 30 j) were removed
+                  2026-11-11: the heatmap is a static PMTiles aggregate, so
+                  they changed nothing on the map — a dead control. */}
             </div>
             {/* Export of the rider's OWN traces (every activity, GeoJSON). A plain
                 same-origin link: the session cookie authenticates it and the

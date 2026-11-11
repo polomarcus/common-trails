@@ -63,6 +63,29 @@ describe('BetaBanner — dismissible + --beta-banner-h', () => {
     expect(bannerVar()).toBe('37px');
   });
 
+  // Non-régression (2026-11-11) : sur téléphone la phrase complète tenait sur
+  // trois lignes ; avec les barres d'outils il restait deux tiers d'écran à la carte.
+  it('phone width: one short line (Bêta · Signaler un bug) instead of the full sentence', async () => {
+    window.matchMedia = vi.fn().mockReturnValue({
+      matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    }) as unknown as typeof window.matchMedia;
+    await mount();
+    const banner = container.querySelector('[data-testid="beta-banner"]')!;
+    expect(banner.textContent).toContain('Bêta');
+    expect(banner.textContent).not.toContain('maximum de détails');
+    const report = container.querySelector('[data-testid="beta-banner-report"]') as HTMLAnchorElement;
+    expect(report.getAttribute('href')).toBe('mailto:paul@epauler.fr');
+    expect(report.textContent).toBe('Signaler un bug');
+    // @ts-expect-error — restore jsdom's absence of matchMedia for the other tests
+    delete window.matchMedia;
+  });
+
+  it('desktop width: the full sentence stays', async () => {
+    await mount();
+    expect(container.querySelector('[data-testid="beta-banner"]')!.textContent).toContain('maximum de détails');
+    expect(container.querySelector('[data-testid="beta-banner-report"]')).toBeNull();
+  });
+
   it('dismiss hides it, zeroes the offset and is remembered across mounts', async () => {
     await mount();
     await act(async () => {
