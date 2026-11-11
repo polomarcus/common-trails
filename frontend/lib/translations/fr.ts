@@ -1004,6 +1004,8 @@ const fr: Translations = {
   'map.share.cta': 'Partager ma heatmap',
   'map.share.activeShort': 'Partage actif',
   'map.share.create': 'Créer le lien secret',
+  'map.share.creating': 'Création du lien… (jusqu’à 30 secondes)',
+  'map.share.updating': 'Mise à jour du partage…',
   'map.share.intro': 'Crée un lien secret à coller comme calque dans gpx.studio, OsmAnd ou Locus. Départs et arrivées masqués ; sorties synchronisées depuis Strava et traces sans date exclues.',
   'map.share.active': 'Partage actif — lien créé le {date}.',
   'map.share.pending': 'Préparation de ta heatmap partagée… (environ une minute)',

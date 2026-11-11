@@ -32,10 +32,10 @@ export const USER_TRACE_GLOW_OPACITY: Expr = ['interpolate', ['linear'], ['zoom'
   9, 0, 12, 0.18,
 ];
 export const USER_TRACE_LINE_WIDTH: Expr = ['interpolate', ['exponential', 1.5], ['zoom'],
-  8, 0.6, 11, 1.2, 14, 3, 16, 4,
+  6, 0.9, 8, 1.1, 11, 1.8, 14, 3.2, 16, 4.2,
 ];
 export const USER_TRACE_LINE_OPACITY: Expr = ['interpolate', ['linear'], ['zoom'],
-  8, 0.45, 12, 0.75, 14, 0.92,
+  8, 0.75, 12, 0.85, 14, 0.92,
 ];
 
 // Dimming applied to the other traces while one activity is selected — the

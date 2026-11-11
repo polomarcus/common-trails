@@ -99,6 +99,24 @@ describe('MyHeatmapShare', () => {
     expect(container.textContent).toContain('calques personnalisés');
   });
 
+  // Non-régression (Paul, 2026-11-11) : la création prend ~30 s et le bouton
+  // ne donnait aucun retour.
+  it('while the link is being created the button shows a spinner and is disabled', async () => {
+    let finish!: (v: unknown) => void;
+    api.create.mockReturnValue(new Promise((r) => { finish = r; }));
+    await mount();
+    await click(q(container, 'my-heatmap-share-toggle'));
+    await click(q(container, 'my-heatmap-share-create'));
+    const b = q(container, 'my-heatmap-share-create') as HTMLButtonElement;
+    expect(b.disabled).toBe(true);
+    expect(b.getAttribute('aria-busy')).toBe('true');
+    expect(q(container, 'my-heatmap-share-spinner')).not.toBeNull();
+    expect(b.textContent).toContain('Création du lien');
+    await act(async () => { finish({ active: true, created_at: '2026-11-10T19:00:00Z', urls: URLS }); });
+    expect(q(container, 'my-heatmap-share-spinner')).toBeNull();
+    expect((q(container, 'my-heatmap-share-style') as HTMLInputElement).value).toBe(URLS.style);
+  });
+
   it('active on a later visit: date shown, no link (only its hash is stored), regenerate reveals a new one', async () => {
     api.status = { available: true, active: true, created_at: '2026-11-01T10:00:00Z', ready: true, activity_count: 12 };
     api.create.mockResolvedValue({ active: true, created_at: '2026-11-10T19:00:00Z', urls: URLS });

@@ -99,13 +99,17 @@ describe('user-activities paint — zoom-dependent (no low-zoom blob)', () => {
     expect(evalAtZoom(glow.paint['line-opacity'], 15)).toBeCloseTo(0.18);
   });
 
-  it('main line width / opacity are zoom ramps: hairline at z10, legacy at z15', () => {
+  // Retuned 2026-11-11 (Paul: illisible at regional zoom): still THIN at z10 so
+  // thousands of traces do not merge, but no longer a faint hairline.
+  it('main line width / opacity are zoom ramps: thin but readable at z8–10, legacy at z15', () => {
     const line = captureLayers()['user-activities-line'];
     expect(line).toBeDefined();
     expect(isZoomExpr(line.paint['line-width'])).toBe(true);
     expect(isZoomExpr(line.paint['line-opacity'])).toBe(true);
-    expect(evalAtZoom(line.paint['line-width'], 10)).toBeLessThan(1.2);
-    expect(evalAtZoom(line.paint['line-opacity'], 10)).toBeLessThan(0.7);
+    expect(evalAtZoom(line.paint['line-width'], 10)).toBeLessThan(2);
+    expect(evalAtZoom(line.paint['line-width'], 8)).toBeGreaterThanOrEqual(1);
+    expect(evalAtZoom(line.paint['line-opacity'], 8)).toBeGreaterThanOrEqual(0.7);
+    expect(evalAtZoom(line.paint['line-opacity'], 10)).toBeLessThan(0.85);
     expect(evalAtZoom(line.paint['line-width'], 15)).toBeGreaterThanOrEqual(3);
     expect(evalAtZoom(line.paint['line-opacity'], 15)).toBeCloseTo(0.92);
   });
