@@ -108,6 +108,39 @@ describe('SelectedActivityCard — sport correction', () => {
     expect(container.querySelector('[data-testid="activity-sport-error"]')).not.toBeNull();
   });
 
+  const hint = () => container.querySelector('[data-testid="activity-sport-default"]');
+
+  it('shows the « sport par défaut » hint only for a default-sport activity', () => {
+    render();
+    expect(hint()).toBeNull();
+    act(() => root?.unmount());
+    render(vi.fn(), { ...activity, sport_is_default: true });
+    expect(hint()!.textContent).toBe('sport par défaut');
+    expect(hint()!.getAttribute('title')).toContain('Strava ne précise pas');
+  });
+
+  it('the hint goes away once the rider picks a sport, and comes back if the PATCH fails', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'nope' }), { status: 500 }));
+    const saved = vi.fn();
+    root = createRoot(container);
+    act(() => root!.render(
+      <I18nProvider>
+        <SelectedActivityCard
+          activity={{ ...activity, sport_is_default: true }} dateLocale="fr-FR"
+          onClose={() => {}} onSportSaved={saved}
+        />
+      </I18nProvider>,
+    ));
+    await pick('gravel');
+    expect(hint()).not.toBeNull(); // rolled back
+    expect(saved).not.toHaveBeenCalled();
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'a1', sport: 'gravel', changed: true }), { status: 200 }));
+    await pick('gravel');
+    expect(hint()).toBeNull();
+    expect(saved).toHaveBeenCalledWith('a1');
+  });
+
   it('a legacy "offroad" activity shows it as current but cannot re-pick it', () => {
     render(vi.fn(), { ...activity, sport: 'offroad' });
     expect(select().value).toBe('offroad');

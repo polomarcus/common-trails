@@ -114,7 +114,7 @@ class TestArchiveIterationOrder:
         def fake_ingest(*, user_id, filename, raw, resolved_sport,
                         contribute_heatmap, source, skip_heat_computation,
                         collect_touched_ways=None, fallback_sport=None,
-                        fallback_date=None):
+                        fallback_date=None, stats=None):
             # The bytes the drain feeds ingest must be the member's REAL bytes.
             assert raw.lstrip().startswith(b"<?xml"), raw[:40]
             processed_order.append(filename)
