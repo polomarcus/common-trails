@@ -308,8 +308,11 @@ def _fit_sport_from_values(sport, sub_sport) -> str | None:
             # Generic "Bike" profile: road — the same reading as Strava's
             # generic "Ride" (`classify_sport`). A more specific source (CSV
             # "Gravel Ride", the user's explicit choice) still refines it via
-            # `resolve_sport_cascade`.
-            return "road"
+            # `resolve_sport_cascade`. Returned as the GENERIC marker (== "road")
+            # so the ingest can flag the activity ``sport_is_default``.
+            from app.services.strava_utils import GENERIC_ROAD
+
+            return GENERIC_ROAD
         if sub_sport is not None and isinstance(sub_sport, int):
             return None  # sub-sport newer than the fitparse profile → unknown
         return _FIT_CYCLING_SUB_SPORT.get(sub)

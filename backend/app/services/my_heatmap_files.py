@@ -372,6 +372,9 @@ def _summary_entry(act: dict, parts: list[list]) -> dict:
         "id": act["id"],
         "name": act.get("name") or "",
         "sport": act.get("sport") or "road",
+        # Files built before 0071 have no such key: readers treat a missing
+        # value as false (the notice count comes from the API, not the file).
+        "sport_is_default": bool(act.get("sport_is_default", False)),
         "distance_m": act.get("distance_m"),
         "elevation_gain_m": act.get("elevation_gain_m"),
         "moving_time": act.get("moving_time"),

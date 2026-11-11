@@ -37,6 +37,8 @@ export interface MyHeatmapSummaryEntry {
   id: string;
   name: string;
   sport: string;
+  /** Absent from files built before the flag existed → reads as false. */
+  sport_is_default?: boolean;
   distance_m: number | null;
   elevation_gain_m: number | null;
   moving_time?: number | null;
@@ -149,6 +151,7 @@ export function summaryToActivityItems(summary: MyHeatmapSummary, defaultName: s
     provider: a.provider ?? 'file',
     provider_activity_id: a.provider_activity_id ?? null,
     undated: a.undated === true,
+    sport_is_default: a.sport_is_default === true,
   }));
 }
 

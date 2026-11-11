@@ -581,7 +581,11 @@ def enqueue_archive(
         # file's own FIT/GPX sport), else NO_SPORT_HINT (member skipped when
         # its file has no sport). See split_queued_sport.
         if isinstance(csv_sport, str):
-            resolved_sport = csv_sport
+            # ``str()``: a generic "Ride" (``strava_utils.DefaultSport``) is
+            # queued as plain "road". This legacy per-member queue does not
+            # carry the "default" marker (no format change of a persisted
+            # column) — only the whole-archive drain flags ``sport_is_default``.
+            resolved_sport = str(csv_sport)
         elif fallback_sport and fallback_sport != NO_SPORT_HINT:
             resolved_sport = f"{PICK_PREFIX}{fallback_sport}"
         else:

@@ -987,6 +987,20 @@ const fr: Translations = {
   'map.activity.sportChange': 'Changer le sport de cette sortie',
   'map.activity.sportHint': 'Mauvais sport à l\'import ? Corrige-le : la heatmap communautaire sera mise à jour.',
   'map.activity.sportError': 'Le sport n\'a pas pu être modifié — réessaie.',
+  'map.activity.sportDefault': 'sport par défaut',
+  'map.activity.sportDefaultHint': 'Strava ne précise pas le type de vélo : cette sortie est classée « Route » par défaut. Choisis le bon sport.',
+  'map.defaultSport.notice': '{count} sorties vélo sont classées « Route » par défaut : Strava ne précise pas le type.',
+  'map.defaultSport.noticeOne': '1 sortie vélo est classée « Route » par défaut : Strava ne précise pas le type.',
+  'map.defaultSport.cta': 'Les reclasser',
+  'map.defaultSport.dismiss': 'Fermer',
+  'map.defaultSport.title': 'Sorties classées « Route » par défaut',
+  'map.defaultSport.intro': 'Coche les sorties gravel ou VTT, choisis leur sport, puis applique. La heatmap communautaire sera mise à jour.',
+  'map.defaultSport.selectAll': 'Tout sélectionner ({count})',
+  'map.defaultSport.others': 'et {count} autres',
+  'map.defaultSport.sportLabel': 'Reclasser en',
+  'map.defaultSport.apply': 'Appliquer ({count})',
+  'map.defaultSport.confirmRoad': 'Ce sont bien des sorties route',
+  'map.defaultSport.error': 'La modification a échoué — réessaie.',
   // Activity photo strip
 
   // ── Calque / heatmap dans gpx.studio ──────────────────────────────────────
