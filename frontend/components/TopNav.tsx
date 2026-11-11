@@ -53,11 +53,15 @@ export default function TopNav({ activeHref, breadcrumbs }: TopNavProps) {
   // its email field instead.
   const focusLoginForm = (e: React.MouseEvent) => {
     if (isLoggedIn) return;
-    const input = document.querySelector<HTMLInputElement>('[data-testid="email-login-input"]');
-    if (!input) return; // no form on this page → follow the link to the home
+    // Leave "open in a new tab" (cmd/ctrl/shift/middle click) alone.
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    // The email field — or, once the link is sent, the confirmation card.
+    const target = document.querySelector<HTMLElement>(
+      '[data-testid="email-login-input"], [data-testid="email-login-sent"]');
+    if (!target) return; // no form on this page → follow the link to the home
     e.preventDefault();
-    input.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
-    input.focus({ preventScroll: true });
+    target.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    if (target instanceof HTMLInputElement) target.focus({ preventScroll: true });
   };
 
   useEffect(() => {
