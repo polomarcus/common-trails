@@ -235,9 +235,9 @@ def _is_first_login(db: Session, user_id: str) -> bool:
         consumed = db.execute(
             sa_text(
                 "SELECT COUNT(*) FROM magic_link_tokens "
-                "WHERE user_id = :uid AND consumed_at IS NOT NULL"
+                "WHERE user_id = :uid AND consumed_at IS NOT NULL AND purpose = :purpose"
             ),
-            {"uid": user_id},
+            {"uid": user_id, "purpose": _MAGIC_LINK_PURPOSE},
         ).scalar()
     except Exception:
         logger.warning("first-login lookup failed user=%s", user_id, exc_info=True)
