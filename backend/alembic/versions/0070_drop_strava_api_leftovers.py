@@ -104,6 +104,11 @@ def _replace_update_trigger_function(columns: tuple[str, ...]) -> None:
 
 
 def upgrade() -> None:
+    # DROP COLUMN takes an ACCESS EXCLUSIVE lock on ``activities``. It is
+    # instant once granted, but if it had to WAIT behind a long read, every
+    # other query on the table would queue behind it. Give up after 5 s
+    # instead: the container entrypoint retries the migration.
+    op.execute("SET LOCAL lock_timeout = '5s'")
     # Trigger first: it must stop reading the column before the column goes.
     _replace_update_trigger_function(_DISPLAYED_COLUMNS)
 
