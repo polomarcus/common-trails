@@ -62,7 +62,7 @@ export function useHeatmapControl(
   routeSport: string,
 ): HeatmapControlState {
   const appearance = useHeatmapAppearance();
-  const [heatmapSport, setHeatmapSport] = useState<string>('offroad');
+  const [heatmapSport, setHeatmapSport] = useState<string>('all');
   const [heatmapDays, setHeatmapDays] = useState<number | null>(null);
   const [heatmapLoading, setHeatmapLoading] = useState(false);
   const [dfciCount, setDfciCount] = useState<number | null>(null);

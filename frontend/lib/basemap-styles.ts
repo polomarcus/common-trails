@@ -96,12 +96,22 @@ export const HYBRID_STYLE: Record<string, unknown> = {
 // Thumbnail tiles: z=7, x=64, y=45 — centered on south France (Massif Central area)
 const _THUMB_Z = 7, _THUMB_X = 64, _THUMB_Y = 45;
 
+// The dark basemap's thumbnail used a Carto tile, which now answers with an
+// "API KEY REQUIRED" image (seen in the picker, 2026-11-11). Inline swatch: no
+// third-party request, never broken.
+const DARK_THUMB = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#1b1f27"/>'
+  + '<path d="M-4 44 C14 30 26 52 40 34 S60 22 70 28" stroke="#3a4250" stroke-width="3" fill="none"/>'
+  + '<path d="M8 -4 C14 16 30 18 28 36 S40 58 46 70" stroke="#2c323d" stroke-width="2" fill="none"/>'
+  + '<path d="M-4 18 L24 24 L48 10 L70 16" stroke="#2c323d" stroke-width="1.5" fill="none"/></svg>',
+)}`;
+
 export const BASEMAPS: { key: string; style: string | Record<string, unknown>; label: string; title: string; thumb: string }[] = [
   // label + title are i18n KEYS (map.basemap.*) resolved via t() at the render
   // site (MapToolbar: `x.startsWith('map.') ? t(x) : x`). Keeps the picker
   // labels/tooltips locale-aware instead of hardcoded French.
   { key: 'bright', style: 'https://tiles.openfreemap.org/styles/bright', label: 'map.basemap.label.bright', title: 'map.basemap.title.bright', thumb: `https://a.tile.openstreetmap.org/${_THUMB_Z}/${_THUMB_X}/${_THUMB_Y}.png` },
-  { key: 'dark', style: 'https://tiles.openfreemap.org/styles/dark', label: 'map.basemap.label.dark', title: 'map.basemap.title.dark', thumb: `https://a.basemaps.cartocdn.com/dark_all/${_THUMB_Z}/${_THUMB_X}/${_THUMB_Y}.png` },
+  { key: 'dark', style: 'https://tiles.openfreemap.org/styles/dark', label: 'map.basemap.label.dark', title: 'map.basemap.title.dark', thumb: DARK_THUMB },
   { key: 'liberty', style: 'https://tiles.openfreemap.org/styles/liberty', label: 'map.basemap.label.liberty', title: 'map.basemap.title.liberty', thumb: `https://a.tile-cyclosm.openstreetmap.fr/cyclosm/${_THUMB_Z}/${_THUMB_X}/${_THUMB_Y}.png` },
   { key: 'cyclosm', style: CYCLOSM_STYLE, label: 'map.basemap.label.cyclosm', title: 'map.basemap.cyclOSM', thumb: `https://a.tile-cyclosm.openstreetmap.fr/cyclosm/${_THUMB_Z}/${_THUMB_X}/${_THUMB_Y}.png` },
   { key: 'ign', style: IGN_PLANV2_STYLE, label: 'map.basemap.label.ign', title: 'map.basemap.title.ign', thumb: `https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=GEOGRAPHICALGRIDSYSTEMS.PLANIGNV2&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX=${_THUMB_Z}&TILEROW=${_THUMB_Y}&TILECOL=${_THUMB_X}` },

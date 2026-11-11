@@ -120,6 +120,12 @@ const fr: Translations = {
   // ── Layout ───────────────────────────────────────────────────────────────────
   'layout.beta': 'Version bêta — envoyez vos bugs avec un maximum de détails et de screenshots à',
   'layout.betaDismiss': 'Masquer le bandeau bêta',
+  'layout.betaShort': 'Bêta',
+  'layout.betaReport': 'Signaler un bug',
+  'notFound.title': 'Cette page n’existe pas',
+  'notFound.text': 'Le lien est peut-être ancien ou mal recopié. La carte, elle, est toujours là.',
+  'notFound.map': 'Ouvrir la carte',
+  'notFound.home': 'Retour à l’accueil',
   'layout.description': 'Tracez vos itinéraires vélo, gravel et VTT guidés par les traces GPS de la communauté. Open source, données libres (ODbL).',
   'layout.ogAlt': 'Chemins Communs — carte communautaire des traces cyclistes',
 
@@ -138,7 +144,7 @@ const fr: Translations = {
   'home.stats.traces': 'traces',
   'home.stats.km': 'km de chemins',
   'home.community.title': "C'est quoi une heatmap (ou carte de popularité), et pourquoi c'est utile ?",
-  'home.community.text': "Une heatmap — ou carte de popularité — colore les chemins selon le nombre de cyclistes qui les empruntent réellement. Plus c'est foncé, plus c'est roulé : d'un coup d'œil vous voyez les itinéraires que les locaux privilégient, et ceux qu'ils évitent.\n\nStrava a popularisé cette idée mais l'a verrouillée derrière un abonnement. Ici c'est libre et collectif : chaque trace importée enrichit la carte pour tout le monde, sous licence ODbL. Vos départs et arrivées sont masqués pour protéger votre domicile.",
+  'home.community.text': "Une heatmap — ou carte de popularité — colore les chemins selon le nombre de cyclistes qui les empruntent réellement. Plus un chemin est roulé, plus il ressort, du prune vers l'orange : d'un coup d'œil vous voyez les itinéraires que les locaux privilégient, et ceux qu'ils évitent.\n\nStrava a popularisé cette idée mais l'a verrouillée derrière un abonnement. Ici c'est libre et collectif : chaque trace importée enrichit la carte pour tout le monde, sous licence ODbL. Vos départs et arrivées sont masqués pour protéger votre domicile.",
   'home.elevation.title': "Profil d'élévation & surfaces",
   'home.elevation.desc': "Altitude Copernicus DEM, profil coloré par pente, estimation des revêtements avec indice de confiance. D+ et D- sur chaque trace.",
   'home.trails.desc': 'Pistes de Défense des Forêts (DFCI) et sentiers balisés GR, GRP, GT, PR, EuroVelo affichés sur la carte.',
