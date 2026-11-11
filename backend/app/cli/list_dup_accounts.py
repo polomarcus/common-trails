@@ -9,7 +9,7 @@ WHY THIS EXISTS
       * email magic-link (``api/auth.request_magic_link``) — find-or-create
         by ``users.email`` = the real address (e.g. ``paleclercq@gmail.com``),
         ``hashed_password=NULL``;
-      * "login with Strava" (``integrations_strava._find_or_create_strava_user``)
+      * "login with Strava" (the retired Strava OAuth login, since removed)
         — find-or-create by ``integration_accounts.external_user_id`` (the
         athlete id), minting a user with a SYNTHETIC email
         ``strava_<athlete_id>@strava.local``, ``hashed_password=NULL``.

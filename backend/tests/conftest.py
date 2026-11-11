@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 # Force test mode before importing anything
 os.environ["TEST_MODE"] = "true"
-os.environ.setdefault("ENABLE_STRAVA_INTEGRATION", "true")
 os.environ["DEM_PROVIDER"] = "none"  # no HTTP calls in tests — DEM tests monkeypatch back
 os.environ["OVERPASS_ENABLED"] = "false"  # no HTTP calls in tests — overpass tests monkeypatch back
 os.environ["DFCI_ENABLED"] = "false"  # no Overpass calls for DFCI in tests

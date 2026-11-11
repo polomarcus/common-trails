@@ -55,8 +55,7 @@ def _resolve_queue_path() -> str:
     # Prefer GCP_PROJECT (the var the prod deploy actually sets) with a
     # GOOGLE_CLOUD_PROJECT fallback. deploy-prod.sh's env-file sets GCP_PROJECT
     # but NOT GOOGLE_CLOUD_PROJECT, so reading only the latter made every bare
-    # queue path raise → Strava webhook enqueue 503 + artefact-rebuild "failed".
-    # Same divergence already migrated in integrations_strava.py.
+    # queue path raise → artefact-rebuild "failed".
     project = (os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
     location = os.environ.get("CLOUD_TASKS_LOCATION", "").strip()
     if not project or not location:
@@ -298,20 +297,6 @@ def enqueue_artefact_rebuild() -> str:
     )
 
 
-# ── Strava webhook events ─────────────────────────────────────────────
-#
-# Each Strava push event (activity create/update/delete, athlete
-# deauthorize) is enqueued as a separate Cloud Task so the public
-# webhook endpoint ACKs in <100 ms and the heavy work (Strava API
-# fetch + ingest) runs from the Cloud Task worker with proper retry +
-# OIDC verification.
-#
-# Unlike matview/artefact, we do NOT dedup these by name — each event
-# is unique (different object_id / aspect_type combinations) and must
-# be processed independently. Per-task retries handle Strava 429 and
-# transient ingest failures.
-
-
 # ── Heatmap export build (Phase 3 — PRD #391) ────────────────────────
 #
 # Each /export/heatmap/request POST enqueues one Cloud Task referencing
@@ -391,115 +376,5 @@ def enqueue_export_build(request_id: str) -> str:
         logger.warning(
             "Cloud Tasks export-build enqueue FAILED request=%s",
             request_id, exc_info=True,
-        )
-        return "failed"
-
-
-async def enqueue_strava_webhook_event(payload: dict[str, Any]) -> str:
-    """Enqueue a Strava webhook event for async processing.
-
-    Falls back to inline run in TEST_MODE / unconfigured envs so unit
-    + E2E tests exercise the full path (handshake → POST → enqueue →
-    worker → ingest) without Cloud Tasks.
-
-    Async because the worker entry point (`process_strava_webhook_event`)
-    is async — the public POST handler that calls us is also async, so
-    awaiting all the way down avoids the `asyncio.run-from-running-loop`
-    trap. Cloud Task creation itself is sync (google-cloud-tasks SDK)
-    but the latency is the same.
-
-    Returns ``"queued"``, ``"inline"``, or ``"failed"``. Caller (the
-    public webhook handler) re-raises only on ``"failed"`` so Strava
-    retries; ``"queued"`` and ``"inline"`` are both acked 200.
-    """
-    queue_env = "CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE"
-    handler_url_env = "INTERNAL_STRAVA_WEBHOOK_HANDLER_URL"
-
-    if not _is_enabled_for_queue(queue_env, handler_url_env):
-        # Inline run — same module imported lazily to avoid a circular
-        # import (cloud_tasks ↔ api package).
-        try:
-            from app.api.internal_strava_webhook import process_strava_webhook_event
-            await process_strava_webhook_event(payload)
-        except Exception as exc:
-            logger.warning(
-                "Inline Strava webhook processing failed payload=%s",
-                payload, exc_info=True,
-            )
-            # Mirror the OIDC-protected worker's Sentry capture
-            # (`internal_strava_webhook.py:85-92`) — audit 2026-05-27
-            # S3.2. Without this, an accidentally-misconfigured prod
-            # (queue env unset) silently drops webhook failures.
-            try:
-                import sentry_sdk
-                sentry_sdk.set_tag("strava.phase", "webhook_inline_fallback")
-                sentry_sdk.capture_exception(exc)
-            except Exception:  # noqa: BLE001 — Sentry must never break the path
-                pass
-            return "failed"
-        return "inline"
-
-    try:
-        from google.cloud import tasks_v2  # type: ignore[attr-defined]
-    except ImportError:
-        logger.warning("google-cloud-tasks not installed; skipping Strava webhook enqueue")
-        return "failed"
-
-    handler_url = os.environ[handler_url_env]
-    invoker_sa = os.environ.get("CLOUD_TASKS_INVOKER_SA", "").strip()
-    queue_path = _resolve_queue_path_for(queue_env)
-
-    client = tasks_v2.CloudTasksClient()
-    body = json.dumps(payload).encode("utf-8")
-
-    # Per-event dedup via task name. Strava can retry the same event up
-    # to 3 times if our endpoint 5xx'd. Without a task name, all retries
-    # would enqueue + fire, each costing a Strava API call we already
-    # made. The name encodes the event identity so a duplicate enqueue
-    # collapses to AlreadyExists (Cloud Tasks dedup window). Task name
-    # chars are limited — sanitize the parts.
-    owner = str(payload.get("owner_id", "0"))
-    obj_id = str(payload.get("object_id", "0"))
-    aspect = str(payload.get("aspect_type", "x"))[:10]
-    event_time = str(payload.get("event_time", "0"))
-    task_name = f"strava-{owner}-{obj_id}-{aspect}-{event_time}"
-    # Cloud Tasks task names must match ^[A-Za-z0-9_-]+$ — strip anything else.
-    task_name = "".join(c if (c.isalnum() or c in "-_") else "-" for c in task_name)
-
-    task: dict[str, Any] = {
-        "name": f"{queue_path}/tasks/{task_name}",
-        "http_request": {
-            "http_method": tasks_v2.HttpMethod.POST,
-            "url": handler_url,
-            "headers": {"Content-Type": "application/json"},
-            "body": body,
-        },
-    }
-    if invoker_sa:
-        task["http_request"]["oidc_token"] = {
-            "service_account_email": invoker_sa,
-            "audience": handler_url,
-        }
-
-    try:
-        from google.api_core.exceptions import AlreadyExists
-    except ImportError:
-        AlreadyExists = None  # type: ignore[assignment]
-
-    try:
-        client.create_task(request={"parent": queue_path, "task": task})
-        logger.info(
-            "Strava webhook enqueue OK owner=%s object=%s/%s",
-            payload.get("owner_id"),
-            payload.get("object_type"),
-            payload.get("aspect_type"),
-        )
-        return "queued"
-    except Exception as exc:
-        if AlreadyExists is not None and isinstance(exc, AlreadyExists):
-            logger.debug("Strava webhook dedup: %s already in flight", task_name)
-            return "queued"  # same outcome from caller's PoV
-        logger.warning(
-            "Strava webhook enqueue FAILED payload=%s", payload, exc_info=True,
         )
         return "failed"
