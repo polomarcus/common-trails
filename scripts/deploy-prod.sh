@@ -309,6 +309,8 @@ MAX_ARCHIVE_BYTES: "2147483648"
 # we send from the real domain and deliver to any recipient. Revert to
 # "Chemins Communs <onboarding@resend.dev>" only if the domain is unverified.
 EMAIL_FROM: "Chemins Communs <no-reply@chemins-communs.fr>"
+# Admin notification when a new account confirms its address (first login).
+ADMIN_NOTIFY_EMAIL: "paul@epauler.fr"
 # DB connection pool — the code default is 20+10=30 connections PER instance
 # (backend/app/db/session.py). With two always-on services (WEB min=1 + WORKER)
 # under concurrent beta + ingest load that risks exhausting Cloud SQL

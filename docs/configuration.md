@@ -73,6 +73,7 @@ Les URLs `.run.app` doivent correspondre octet pour octet à l'audience OIDC
 
 | Variable | Défaut code | Dev (compose) | Prod | Rôle |
 |---|---|---|---|---|
+| `ADMIN_NOTIFY_EMAIL` | *(vide : aucune notification)* | — | `paul@epauler.fr` | Destinataire du mail « nouveau compte confirmé » (première connexion d'un compte) |
 | `EMAIL_FROM` | `Chemins Communs <onboarding@resend.dev>` | — | `Chemins Communs <no-reply@chemins-communs.fr>` | Expéditeur (services + jobs drain/rappel) |
 | `RESEND_API_KEY` | vide (envoi no-op) | — | secret | API Resend |
 

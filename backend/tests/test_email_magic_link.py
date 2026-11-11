@@ -235,6 +235,52 @@ class TestVerify:
         assert resp.status_code == 200, resp.text
         assert resp.json()["redirect"] == "/map"
 
+    def test_first_login_notifies_the_admin_once(self, client, capture_send, monkeypatch):
+        """Paul, 2026-11-11: an email to the admin when a new rider creates an
+        account. Sent at the FIRST successful login (the address is confirmed —
+        the row itself is created for any typed address), and only then."""
+        from app.services import email as email_service
+
+        monkeypatch.setattr(email_service, "ADMIN_NOTIFY_EMAIL", "admin@example.com")
+        # The notification goes through the email module's own send_email.
+        monkeypatch.setattr(email_service, "send_email", capture_send)
+        email = _unique_email()
+        ip = {"X-Forwarded-For": _unique_ip()}
+
+        def login() -> None:
+            client.post("/auth/email/request", json={"email": email}, headers=ip)
+            html = capture_send.call_args.kwargs.get("html") or capture_send.call_args.args[2]
+            assert client.post("/auth/email/verify", json={"token": _extract_token(html)}).status_code == 200
+
+        def admin_mails() -> list:
+            return [c for c in capture_send.call_args_list
+                    if (c.kwargs.get("to") or c.args[0]) == "admin@example.com"]
+
+        # Requesting a link creates the row but tells nobody.
+        client.post("/auth/email/request", json={"email": email}, headers=ip)
+        assert admin_mails() == []
+        html = capture_send.call_args.kwargs.get("html") or capture_send.call_args.args[2]
+        assert client.post("/auth/email/verify", json={"token": _extract_token(html)}).status_code == 200
+        sent = admin_mails()
+        assert len(sent) == 1
+        subject = sent[0].kwargs.get("subject") or sent[0].args[1]
+        body = sent[0].kwargs.get("html") or sent[0].args[2]
+        assert email in subject and email in body and "/admin" in body
+
+        # A returning rider logging in again is not "new".
+        login()
+        assert len(admin_mails()) == 1
+
+    def test_no_admin_address_configured_sends_nothing(self, client, capture_send, monkeypatch):
+        from app.services import email as email_service
+
+        monkeypatch.setattr(email_service, "ADMIN_NOTIFY_EMAIL", "")
+        monkeypatch.setattr(email_service, "send_email", capture_send)
+        token = self._request_and_get_token(client, capture_send)
+        before = capture_send.call_count
+        assert client.post("/auth/email/verify", json={"token": token}).status_code == 200
+        assert capture_send.call_count == before
+
     def test_verify_single_use_reuse_401(self, client, capture_send):
         token = self._request_and_get_token(client, capture_send)
         first = client.post("/auth/email/verify", json={"token": token})
