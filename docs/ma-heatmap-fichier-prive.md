@@ -271,8 +271,20 @@ s'il gêne, le paginer ou le charger après les tuiles est une suite possible.
    bucket/IAM** au déploiement.
 2. bis. Premier déploiement avec `MY_HEATMAP_FILES_ENABLED=true` (et
    `MY_HEATMAP_FILES_USERS`) : le CD crée et asserte le bucket privé.
-2. Backfill : `python -m app.cli.my_heatmap_files backfill --pace 1` (comme
-   `backfill_display_geojson`), sur le worker ou via proxy SQL.
+2. Backfill : **`backfill --enqueue`** depuis un job (les jobs tournent sous le
+   compte de service par défaut, **sans accès** au bucket privé : un build dans
+   le job échoue en 403). `--enqueue` planifie chaque reconstruction sur le
+   worker (compte de service de l'API), comme le hook ORM :
+
+   ```bash
+   gcloud run jobs execute common-trails-ingest-pending-archives-prod \
+     --region=europe-west1 --account=paleclercq@gmail.com --project=common-trails \
+     --args=-m,app.cli.my_heatmap_files,backfill,--enqueue,--pace,1 --wait
+   ```
+
+   `delete` (RGPD) et `sweep-orphans` écrivent aussi dans le bucket : depuis un
+   job ils échouent de même ; une suppression de compte par l'API (service web)
+   nettoie déjà le bucket.
 3. `MY_HEATMAP_FILES_USERS=<uuid de Paul>` → test réel sur un compte.
 4. `MY_HEATMAP_FILES_ENABLED=true` pour tous.
 
