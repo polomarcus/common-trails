@@ -19,81 +19,11 @@ after the fix; matched mode unchanged.
 """
 from __future__ import annotations
 
-BBOX = "3.80,43.55,3.92,43.65"  # ~11 km Montpellier box the local corpus covers
-BBOX_Q = "min_lon=3.80&min_lat=43.55&max_lon=3.92&max_lat=43.65"
-
-
 # NOTE: The community-EXPORT raw-vs-matched tests that used to live here were
 # removed when the export surface was reduced to PRE-COMPUTED artifacts only
-# (no on-demand /export/heatmap.{geojson,gpx,kml} builds). The READ (MVT /
-# trails / summary) + build-metrics raw/matched pins below are unaffected.
-
-
-# ── #2 Live MVT time-filter tile ──────────────────────────────────────────────
-
-
-def _clear_tile_caches():
-    import app.api.heatmap as hm
-    hm._reset_tile_caches()
-
-
-def test_mvt_time_filter_raw_mode_no_500(client, monkeypatch):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-    _clear_tile_caches()
-
-    # The time-filtered z>11 branch calls build_heat_aggregation_sql (OSM join)
-    # → 500 under a dropped substrate. Raw mode must drop the days filter and
-    # serve the safe all-time tile instead.
-    def _boom(*a, **k):
-        raise RuntimeError('relation "osm_road_edges" does not exist')
-
-    monkeypatch.setattr(
-        "app.services.heat_aggregation.build_heat_aggregation_sql", _boom
-    )
-    resp = client.get("/heatmap/tiles/gravel/14/8305/5905.mvt?days=30")
-    assert resp.status_code == 200, resp.text
-
-
-def test_mvt_time_filter_matched_mode_still_uses_osm_join(client, monkeypatch):
-    """Matched mode with ?days= still routes through the live OSM-join builder."""
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-    _clear_tile_caches()
-
-    import app.services.heat_aggregation as ha
-    real = ha.build_heat_aggregation_sql
-    calls = {"n": 0}
-
-    def _spy(*a, **k):
-        calls["n"] += 1
-        return real(*a, **k)
-
-    monkeypatch.setattr(ha, "build_heat_aggregation_sql", _spy)
-    resp = client.get("/heatmap/tiles/gravel/14/8307/5907.mvt?days=30")
-    assert resp.status_code == 200
-    assert calls["n"] >= 1  # matched days-tile still hit the OSM-join builder
-
-
-# ── #3 /heatmap/trails full-bbox OOM ──────────────────────────────────────────
-
-
-def test_trails_raw_mode_returns_410_without_scanning(client, monkeypatch):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-
-    def _must_not_run(*a, **k):
-        raise AssertionError("get_heat_edges_public scanned in raw mode")
-
-    monkeypatch.setattr(
-        "app.services.ingest.get_heat_edges_public", _must_not_run
-    )
-    resp = client.get("/heatmap/trails")  # default = whole-world bbox
-    assert resp.status_code == 410
-
-
-def test_trails_matched_mode_still_serves(client, monkeypatch):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-    resp = client.get(f"/heatmap/trails?{BBOX_Q}")
-    assert resp.status_code == 200
-    assert resp.headers.get("X-License") == "ODbL-1.0"
+# (no on-demand /export/heatmap.{geojson,gpx,kml} builds). The live MVT and
+# /heatmap/trails pins went with those routes; the summary + build-metrics
+# pins below remain.
 
 
 # ── #4 /heatmap/summary heavy + dropped heat_edge_contributors ────────────────
@@ -115,23 +45,6 @@ def test_summary_raw_mode_no_500_without_contributors(client, monkeypatch):
     assert "total_contributors" in d
     assert "total_activities" in d
     assert "total_km" in d
-
-
-def test_summary_matched_mode_uses_ingest(client, monkeypatch):
-    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
-    import app.api.heatmap as hm
-    hm._summary_cache = None
-    real = hm.ingest_service.get_heatmap_summary
-    calls = {"n": 0}
-
-    def _spy():
-        calls["n"] += 1
-        return real()
-
-    monkeypatch.setattr(hm.ingest_service, "get_heatmap_summary", _spy)
-    resp = client.get("/heatmap/summary")
-    assert resp.status_code == 200
-    assert calls["n"] == 1
 
 
 # ── #5 Routing / graph endpoints — REMOVED ────────────────────────────────────

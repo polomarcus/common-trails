@@ -28,7 +28,7 @@ dimension to those aggregate tables (which mix many users per way and
 would need per-source counts), we gate CONTRIBUTION: only
 community-eligible activities ever write to ``heat_edges``. Then
 ``heat_edges`` == "the community layer" BY CONSTRUCTION, and every reader
-(``build_pmtiles``, the live ``/heatmap/tiles`` MVT, ``heat_edges_agg``,
+(``build_pmtiles``, ``heat_edges_agg``,
 the GeoJSON/KML exports) is correct with ZERO SQL changes. The personal
 view reads the user's OWN rows from ``activities`` directly (never
 ``heat_edges``), so it still shows strava_api rides — unaffected.

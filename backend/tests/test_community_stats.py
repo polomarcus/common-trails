@@ -323,7 +323,7 @@ def test_km_raw_mode_uses_lattice_override_not_agg(monkeypatch):
 
 
 def test_km_raw_mode_without_override_uses_ridden_distance(monkeypatch):
-    """RAW mode + no override (the live /heatmap/stats fallback path): km drops
+    """RAW mode + no override (the live /heatmap/summary path): km drops
     to community-eligible ridden distance, never the heat_edges_agg sum."""
     monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
     db = SessionLocal()

@@ -64,9 +64,6 @@ services:
       GARMIN_REDIRECT_URI: ${GARMIN_REDIRECT_URI:-http://localhost:8787/integrations/garmin/callback}
       DEM_PROVIDER: ${DEM_PROVIDER:-open-meteo}
       OVERPASS_ENABLED: ${OVERPASS_ENABLED:-false}
-      # Tile generation concurrency cap — each tile uses 100-500MB peak memory.
-      # In prod with 2GB container, set to 2-4. In dev with no limit, can be higher.
-      TILE_GEN_CONCURRENCY: ${TILE_GEN_CONCURRENCY:-4}
       RATELIMIT_ENABLED: ${RATELIMIT_ENABLED:-false}
       SENTRY_DSN: ${SENTRY_DSN:-}
       PYTHONHASHSEED: "0"

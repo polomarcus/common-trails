@@ -778,29 +778,6 @@ def create_resumable_session(bucket_key: str, size: int, origin: str) -> str:
     )
 
 
-def generate_signed_get_url(
-    bucket_name: str, bucket_key: str, ttl: timedelta
-) -> str:
-    """Return a V4 signed GET URL for ``bucket_key`` in ``bucket_name``.
-
-    Used by the members-only heatmap asset gate: the community PMTiles binary
-    lives in a (soon-to-be) PRIVATE GCS bucket, and logged-in users fetch a
-    short-lived signed URL to load it. The signature binds only the GET method
-    + resource — NOT a byte range — so the PMTiles client's HTTP Range requests
-    (header, directory, tile fetches) all resolve against the same signed URL
-    for the URL's lifetime. Shares the signBlob fallback with the archive PUT
-    path via ``_generate_signed_url``.
-    """
-    client = _get_client()
-    blob = client.bucket(bucket_name).blob(bucket_key)
-    return _generate_signed_url(
-        blob,
-        version="v4",
-        expiration=ttl,
-        method="GET",
-    )
-
-
 def local_archive_path(bucket_key: str) -> str:
     """Filesystem path for a whole archive under the local fallback root."""
     return os.path.join(ARCHIVE_INTAKE_DIR, bucket_key)

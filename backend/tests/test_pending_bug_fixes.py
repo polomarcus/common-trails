@@ -652,11 +652,9 @@ class TestPMTilesContinuousHeatmap:
 
 class TestSharedAggregationContinuousHeatmap:
     """The SHARED by-OSM-way aggregation builder must apply the
-    continuous-heatmap invariants. Both display paths (the static PMTiles
-    export AND the live ``/heatmap/tiles/{sport}/{z}/{x}/{y}.mvt`` endpoint,
-    z11+) call ``build_heat_aggregation_sql`` — so a regression here breaks
-    BOTH at once instead of letting them silently drift (which is why the
-    triplicated copies were unified in June 2026; the matview was dropped).
+    continuous-heatmap invariants. It is the single aggregation definition
+    behind the matched PMTiles export (the live MVT endpoint that shared it
+    was removed).
 
     These are cheap source-of-truth string guards on the builder's OUTPUT.
     The real execute-and-assert end-to-end coverage lives in
@@ -695,31 +693,6 @@ class TestSharedAggregationContinuousHeatmap:
             "shared builder must filter solo grid-fallback "
             "(osm_way_id NULL AND user_count < 2)"
         )
-
-    def test_live_and_pmtiles_share_one_builder(self):
-        """Both display paths draw from the SAME aggregation SSOT
-        (``app.services.heat_aggregation``) — guards against a future fork
-        that reintroduces a divergent copy.
-
-        Since the ``heat_edges_agg`` incremental-aggregate refactor
-        (migration 0057) the READ side goes through ``build_agg_read_sql``
-        (reads the pre-materialised table) while the agg table is WRITTEN by
-        ``build_heat_aggregation_sql`` (backfill + per-way recompute). Both
-        functions live in the one module, so the aggregation definition is
-        still single-source; this guard checks both display paths import it."""
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[1]
-        heatmap_src = (root / "app" / "api" / "heatmap.py").read_text()
-        pmtiles_src = (root / "app" / "jobs" / "build_pmtiles.py").read_text()
-        assert "from app.services.heat_aggregation import" in heatmap_src, (
-            "live MVT endpoint must import from the shared aggregation module"
-        )
-        assert "from app.services.heat_aggregation import" in pmtiles_src, (
-            "PMTiles export must import from the shared aggregation module"
-        )
-        # The read side of both now serves from heat_edges_agg.
-        assert "build_agg_read_sql" in heatmap_src
-        assert "build_agg_read_sql" in pmtiles_src
 
 
 class TestSpaghettiFilterIngest:

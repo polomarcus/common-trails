@@ -1289,7 +1289,7 @@ def compute_community_stats(db, min_uc: int, network_m_override: float | None = 
     # to total km RIDDEN (over-counts every repeat ride). Instead the build path
     # passes ``network_m_override`` = the occupied-lattice estimate from
     # ``export_raw_geojson`` (deduped by geography — see its comment). The live
-    # ``/heatmap/stats`` fallback endpoint has no lattice → override is None and
+    # ``/heatmap/summary`` endpoint has no lattice → override is None and
     # we drop to the ridden-distance fallback below (rare; the home always reads
     # the accurate static ``stats.json`` this build wrote).
     #

@@ -146,27 +146,6 @@ class TestReadersWiring:
         sql = self._export_sql(monkeypatch, HEATMAP_KEEP_GRID_FALLBACK="false")
         assert "grid_fallback" not in sql
 
-    def test_live_mvt_branch_uses_ssot_helper(self):
-        import inspect
-
-        import app.api.heatmap as heatmap_mod
-
-        src = inspect.getsource(heatmap_mod._generate_tile)
-        assert "resolve_grid_fallback_display" in src, (
-            "the live MVT z11+ branch must resolve the desire-lines policy "
-            "via the SSOT helper (zero-drift doctrine)"
-        )
-        assert "grid_fallback_min_uc=2" not in src, (
-            "hardcoded grid_fallback_min_uc=2 reintroduced in the live MVT — "
-            "this hides single-user desire lines in the K=1 beta and drifts "
-            "from the PMTiles export"
-        )
-        assert "drop_grid_fallback=False" not in src, (
-            "hardcoded drop_grid_fallback reintroduced in the live MVT — "
-            "must come from resolve_grid_fallback_display"
-        )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Tier 2 — GOLDEN (real DB)
 # ─────────────────────────────────────────────────────────────────────────────
