@@ -94,6 +94,8 @@ SERVICE="$WEB_SERVICE"  # back-compat alias for pre-flight / messages
 REPO="${REGION}-docker.pkg.dev/${PROJECT}/${PROJECT}"
 API_SA="common-trails-api@${PROJECT}.iam.gserviceaccount.com"
 TASKS_INVOKER_SA="common-trails-tasks-invoker@${PROJECT}.iam.gserviceaccount.com"
+# Runtime SA of the Cloud Run JOBS (drain, backfill CLI, …) — NOT the API SA.
+JOBS_SA="common-trails-jobs@${PROJECT}.iam.gserviceaccount.com"
 # Cloud SQL connection name = project:region:instance. The instance is the
 # fresh (2026-07) db-f1-micro "common-trails-prod" (the old 200 GB one is dead).
 CLOUDSQL_INSTANCE="${PROJECT}:${REGION}:common-trails-${ENV}"
@@ -477,8 +479,37 @@ assert_my_heatmap_bucket() {
   fi
   echo "   ✓ private bucket asserted (UBLA, public_access_prevention=enforced, objectAdmin → ${API_SA})"
 }
+# The JOBS (archive drain after an import, `backfill --enqueue`) schedule the
+# per-user rebuild on the worker through Cloud Tasks. They run as JOBS_SA, which
+# needs — least privilege, resource-scoped, never project-wide:
+#   • roles/cloudtasks.enqueuer ON the artefact-rebuild queue only;
+#   • roles/iam.serviceAccountUser ON the tasks-invoker SA only (actAs, to mint
+#     the task's OIDC token).
+# Without them every enqueue from a job is a 403 swallowed as status=failed
+# (2026-11-11: backfill 6/6 failed; the file then only heals at the owner's
+# next visit). Idempotent + additive. NON-fatal: the web path self-heals, and
+# the deployer may lack setIamPolicy on the SA — then it is a loud warning.
+assert_my_heatmap_jobs_enqueue_iam() {
+  local queue="common-trails-artefact-rebuild-${ENV}"
+  if gcloud tasks queues add-iam-policy-binding "$queue" --project="$PROJECT" --location="$REGION" \
+        --member="serviceAccount:${JOBS_SA}" --role="roles/cloudtasks.enqueuer" >/dev/null 2>&1; then
+    echo "   ✓ ${JOBS_SA} → roles/cloudtasks.enqueuer on queue ${queue}"
+  else
+    echo "   ! enqueuer binding for ${JOBS_SA} on ${queue} FAILED — job-side rebuilds will be skipped (self-heal at next visit)" >&2
+  fi
+  if gcloud iam service-accounts get-iam-policy "$TASKS_INVOKER_SA" --project="$PROJECT" --format=json 2>/dev/null \
+      | tr -d ' \n' | grep -Eq "\"members\":\[[^]]*serviceAccount:${JOBS_SA}\"[^]]*\],\"role\":\"roles/iam.serviceAccountUser\""; then
+    echo "   ✓ ${JOBS_SA} → roles/iam.serviceAccountUser on ${TASKS_INVOKER_SA} (already bound)"
+  elif gcloud iam service-accounts add-iam-policy-binding "$TASKS_INVOKER_SA" --project="$PROJECT" \
+        --member="serviceAccount:${JOBS_SA}" --role="roles/iam.serviceAccountUser" >/dev/null 2>&1; then
+    echo "   ✓ ${JOBS_SA} → roles/iam.serviceAccountUser on ${TASKS_INVOKER_SA}"
+  else
+    echo "   ! serviceAccountUser binding for ${JOBS_SA} on ${TASKS_INVOKER_SA} is MISSING and could not be added — job-side rebuilds will be skipped (self-heal at next visit)" >&2
+  fi
+}
 if [[ "${MY_HEATMAP_FILES_ENABLED}" == "true" ]]; then
   assert_my_heatmap_bucket || true
+  assert_my_heatmap_jobs_enqueue_iam
 else
   # Flag OFF (default): ZERO bucket/IAM call — the deploy touches exactly the
   # infra it touched before this feature. The bucket is created/asserted by

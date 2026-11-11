@@ -74,6 +74,12 @@ chargées qu'à sa sélection (`GET /me/activities/{id}`, déjà existant).
   binding `allUsers` / `allAuthenticatedUsers`), et un seul binding :
   `roles/storage.objectAdmin` pour le SA runtime `common-trails-api@`.
   Le déploiement **échoue** si le bucket n'est pas `enforced`.
+- Même étape, pour que les **jobs** (drain après import, `backfill --enqueue`)
+  puissent planifier la reconstruction sur le worker : le SA `common-trails-jobs@`
+  reçoit `roles/cloudtasks.enqueuer` **sur la seule file** `artefact-rebuild` et
+  `roles/iam.serviceAccountUser` **sur le seul SA** `common-trails-tasks-invoker@`.
+  Non bloquant : en cas d'échec le déploiement avertit, et le fichier se
+  reconstruit à la prochaine visite du compte.
 - Garde-fou applicatif : le service refuse de démarrer l'écriture si
   `MY_HEATMAP_BUCKET` est égal à `HEATMAP_GCS_BUCKET` / `HEATMAP_ARTEFACTS_BUCKET`,
   n'envoie jamais `predefined_acl`, et pose `Cache-Control: private, no-store`
