@@ -62,7 +62,7 @@ class User(Base):
     hashed_password = Column(Text, nullable=True)
     is_admin = Column(Boolean, default=False, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), default=_now)
-    # Last time the 6-monthly "re-export + re-upload your data" reminder was sent
+    # Last time the yearly "re-export + re-upload your data" reminder was sent
     # (app.jobs.resync_reminder, migration 0064). NULL = never reminded.
     last_resync_reminder_at = Column(DateTime(timezone=True), nullable=True)
 

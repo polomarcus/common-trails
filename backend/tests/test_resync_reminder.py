@@ -1,4 +1,4 @@
-"""Real execute-and-assert tests for the 6-monthly re-sync reminder job
+"""Real execute-and-assert tests for the yearly re-sync reminder job
 (``app.jobs.resync_reminder``).
 
 Drives the REAL selection query + ``send_resync_reminders`` against the seeded
