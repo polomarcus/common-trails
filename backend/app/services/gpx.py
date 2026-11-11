@@ -573,7 +573,7 @@ def gpx_track_type_skip_or_sport(track_type: str | None) -> tuple[str | None, bo
     Never raises.
 
     Uses the same skip-beats-pollute bias as the Strava-CSV path
-    (`classify_strava_sport_or_skip` in `strava_utils.py`): if a hint
+    (`classify_sport` in `strava_utils.py`): if a hint
     is ambiguous fall through, if it's *explicitly* out-of-scope
     skip — never let form-sport take over on an out-of-scope file.
     """

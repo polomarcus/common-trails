@@ -7,7 +7,7 @@ fragile part is the OIDC-audience wiring — Cloud Tasks signs `audience =
 INTERNAL_<x>_HANDLER_URL` (set by the WEB) and the WORKER verifies the token's
 `aud` against the SAME env var. If a future edit points a heavy handler back at
 the WEB url, or changes the WEB url host, or drops a handler env the code still
-verifies against, the webhook/heat/artefact chain silently 401s or lands on the
+verifies against, the heat/artefact chain silently 401s or lands on the
 wrong (512Mi) service.
 
 These tests fail on exactly those regressions. They parse the real deploy
@@ -68,15 +68,11 @@ pytestmark = pytest.mark.skipif(
     reason="scripts/deploy-prod.sh not reachable here (mount ./scripts to run)",
 )
 
-# The three HEAVY Cloud Tasks handlers that MUST run on the 2Gi worker.
+# The HEAVY Cloud Tasks handlers that MUST run on the 2Gi worker.
 _HEAVY_HANDLER_ENVS = (
     "INTERNAL_HEAT_HANDLER_URL",
     "INTERNAL_ARTEFACT_HANDLER_URL",
-    "INTERNAL_STRAVA_WEBHOOK_HANDLER_URL",
 )
-# The light handler that deliberately STAYS on the web (avoids re-pointing its
-# Cloud Scheduler OIDC audience).
-_LIGHT_HANDLER_ENV = "INTERNAL_STRAVA_HEALTH_HANDLER_URL"
 
 # The live web .run.app URL is an OIDC + custom-domain anchor: it must not
 # change host when the split is introduced (only the worker is new).
@@ -100,8 +96,7 @@ def _env_value(script: str, key: str) -> str:
 
 def test_web_run_url_unchanged(deploy_sh: str):
     """RUN_URL (web) must still resolve to the exact live .run.app host —
-    that URL is the OIDC audience the health-check scheduler + the domain
-    mapping already point at. Changing its host = the 2026-06-04 401 loop."""
+    that URL is what the domain mapping already points at. Changing its host = the 2026-06-04 401 loop."""
     # The script derives it from PROJECT_NUMBER; reconstruct + compare.
     proj_num = re.search(r'PROJECT_NUMBER="(\d+)"', deploy_sh)
     assert proj_num, "PROJECT_NUMBER not defined"
@@ -110,10 +105,9 @@ def test_web_run_url_unchanged(deploy_sh: str):
         ".europe-west1.run.app"
     )
     assert expected == _WEB_RUN_URL_LITERAL, (
-        "WEB .run.app host changed — this breaks the health-check scheduler "
-        "OIDC audience + the custom-domain mapping. If Cloud Run genuinely "
-        "reassigned it, update _WEB_RUN_URL_LITERAL in this test WITH the "
-        "matching re-issue of the scheduler audience."
+        "WEB .run.app host changed — this breaks the custom-domain mapping. "
+        "If Cloud Run genuinely reassigned it, update _WEB_RUN_URL_LITERAL "
+        "in this test."
     )
 
 
@@ -130,7 +124,7 @@ def test_worker_url_derived_from_same_project_number(deploy_sh: str):
 
 @pytest.mark.parametrize("env_key", _HEAVY_HANDLER_ENVS)
 def test_heavy_handlers_point_at_worker(deploy_sh: str, env_key: str):
-    """Heat / artefact / webhook handler URLs must target WORKER_RUN_URL —
+    """Heat / artefact handler URLs must target WORKER_RUN_URL —
     Cloud Tasks binds the OIDC audience to this value, so it decides which
     service (and which memory tier) runs the heavy work."""
     value = _env_value(deploy_sh, env_key)
@@ -141,13 +135,18 @@ def test_heavy_handlers_point_at_worker(deploy_sh: str, env_key: str):
     )
 
 
-def test_health_handler_stays_on_web(deploy_sh: str):
-    """The daily health-check is light + Cloud-Scheduler-driven; it stays on
-    the web (RUN_URL) so we don't have to re-point the scheduler audience."""
-    value = _env_value(deploy_sh, _LIGHT_HANDLER_ENV)
-    assert value.startswith("${RUN_URL}/"), (
-        f"{_LIGHT_HANDLER_ENV} must stay on the WEB (RUN_URL), got {value!r}."
+def test_no_strava_api_sync_wiring_left(deploy_sh: str):
+    """The Strava API sync (OAuth connect, webhook, resync jobs) is removed:
+    the deploy must not set its env vars / secrets nor sync its jobs — the
+    entrypoints no longer exist in the image. Comments are ignored."""
+    code = "\n".join(
+        line for line in deploy_sh.splitlines() if not line.lstrip().startswith("#")
     )
+    deploy_keys = set(re.findall(r'^([A-Z0-9_]+):\s*"', code, re.MULTILINE))
+    assert not {k for k in deploy_keys if "STRAVA" in k}
+    assert not re.search(r'^SECRETS=.*STRAVA', code, re.MULTILINE | re.IGNORECASE)
+    for job in ("import-strava", "strava-subscribe", "resync-strava", "strava-health-check"):
+        assert job not in code, f"{job} still referenced by deploy-prod.sh"
 
 
 def test_both_services_deployed_with_correct_memory(deploy_sh: str):

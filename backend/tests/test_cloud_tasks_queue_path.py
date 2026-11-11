@@ -1,7 +1,7 @@
 """Queue-path resolution reads GCP_PROJECT (the var the prod deploy sets), with
 a GOOGLE_CLOUD_PROJECT fallback. Regression: it used to read ONLY
 GOOGLE_CLOUD_PROJECT — which deploy-prod.sh never sets — so every bare queue
-name raised, breaking the Strava webhook enqueue (503) + artefact-rebuild."""
+name raised, breaking the artefact-rebuild enqueue."""
 import pytest
 
 from app.services import cloud_tasks

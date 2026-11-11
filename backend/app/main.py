@@ -755,10 +755,6 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     with contextlib.suppress(asyncio.CancelledError):
         await bg_task
 
-    # Close the shared httpx client used by the Strava integration.
-    from app.services.strava_client import aclose_http_client
-    await aclose_http_client()
-
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
 from app.api.collections import collections_public_router
@@ -769,16 +765,11 @@ from app.api.gpx_upload import router as gpx_upload_router
 from app.api.health import router as health_router
 from app.api.heatmap import router as heatmap_router
 from app.api.imports import router as imports_router
-from app.api.integrations_strava import router as strava_router
-from app.api.integrations_strava_webhook import router as strava_webhook_router
 from app.api.internal_artefacts import router as internal_artefacts_router
 from app.api.internal_ingest import router as internal_ingest_router
-from app.api.internal_strava_health import router as internal_strava_health_router
-from app.api.internal_strava_webhook import router as internal_strava_webhook_router
 from app.api.me_activities import router as me_activities_router
 from app.api.me_heatmap import internal_router as internal_my_heatmap_router
 from app.api.me_heatmap import router as me_heatmap_router
-from app.api.me_photos import router as me_photos_router
 from app.api.me_stats import router as me_stats_router
 from app.api.notifications import router as notifications_router
 from app.api.routes import router as routes_router
@@ -867,10 +858,6 @@ async def add_security_headers(request, call_next):
 
 app.include_router(health_router)
 app.include_router(auth_router, prefix="/auth")
-app.include_router(strava_router, prefix="/integrations/strava")
-# Strava push webhooks — public endpoint, no auth (Strava can't send tokens).
-# The router declares its own /integrations/strava/webhook paths so no prefix.
-app.include_router(strava_webhook_router)
 app.include_router(routes_router)
 app.include_router(imports_router)
 app.include_router(heatmap_router)
@@ -879,7 +866,6 @@ app.include_router(gpx_upload_router)
 app.include_router(me_stats_router)
 app.include_router(me_activities_router)
 app.include_router(me_heatmap_router)
-app.include_router(me_photos_router)
 app.include_router(notifications_router)
 app.include_router(tags_export_router)
 app.include_router(share_router)
@@ -892,8 +878,6 @@ app.include_router(internal_ingest_router)
 app.include_router(internal_artefacts_router)
 app.include_router(internal_my_heatmap_router)
 app.include_router(export_router)
-app.include_router(internal_strava_webhook_router)
-app.include_router(internal_strava_health_router)
 
 # ── Frontend static file serving (baked into Docker image) ────────────────────
 # GET+HEAD catch-all, real 404 + 404.html, trailing slash → 308 bare path.

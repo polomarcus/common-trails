@@ -6,16 +6,15 @@ affirmation renvoie au code ; en cas de désaccord, le code a raison.
 ## Services et jobs (prod, GCP `europe-west1`)
 
 Une seule image Docker (`backend/`, export statique Next.js intégré dans
-`backend/static-frontend`) sert deux services Cloud Run et six jobs —
+`backend/static-frontend`) sert deux services Cloud Run et trois jobs —
 `scripts/deploy-prod.sh`.
 
 | Composant | Taille | Rôle |
 |---|---|---|
-| `common-trails-api-prod` (**web**) | 512Mi, min=1, max=1 | Frontend statique + API légère : auth (lien magique), `/imports/*`, OAuth Strava, `/me/*`, `/export/*` |
-| `common-trails-worker-prod` (**worker**) | 2Gi, min=0 | Handlers Cloud Tasks lourds : `/internal/ingest/heat`, `/internal/artefacts/rebuild`, `/internal/strava/webhook-event` |
+| `common-trails-api-prod` (**web**) | 512Mi, min=1, max=1 | Frontend statique + API légère : auth (lien magique), `/imports/*`, `/me/*`, `/export/*` |
+| `common-trails-worker-prod` (**worker**) | 2Gi, min=0 | Handlers Cloud Tasks lourds : `/internal/ingest/heat`, `/internal/artefacts/rebuild` |
 | Job `build-pmtiles` | 8Gi | Construit et publie la heatmap commune (`backend/app/jobs/build_pmtiles.py`) |
 | Job `ingest-pending-archives` | 8Gi | Draine les archives uploadées (`backend/app/jobs/ingest_pending_archives.py`) |
-| Jobs `import-strava`, `resync-strava`, `strava-subscribe` | 512Mi | Synchro Strava (données **personnelles** uniquement) |
 | Job `resync-reminder` | 512Mi | Email de rappel aux contributeurs inactifs : vérifié chaque mois, au plus un par an et par contributeur |
 | Cloud SQL `common-trails-prod` | db-f1-micro | Postgres 17 + PostGIS |
 | Bucket `common-trails-heatmap-prod` | — | PMTiles, pointeur, raster, GeoJSONL ; servi derrière CDN sur `https://tiles.chemins-communs.fr` |
@@ -86,8 +85,8 @@ déclenchement manqué peut laisser la carte en retard jusqu'à une semaine
 ## Confidentialité
 
 Seules les traces `manual_upload` consenties (`backend/app/services/provenance.py`)
-alimentent la carte commune ; les activités synchronisées via l'API Strava
-restent personnelles. Une trace **sans date** (`activity_date` nul — en pratique
+alimentent la carte commune ; les activités héritées de l'ancienne synchro par
+l'API Strava (supprimée) restent personnelles. Une trace **sans date** (`activity_date` nul — en pratique
 un itinéraire planifié) reste dans « Ma heatmap » mais n'alimente rien de public
 (build, stats, export) : même prédicat SSOT `community_eligible_conditions`. Pour
 une archive Strava, un fichier sans horodatage prend la date de `activities.csv`.

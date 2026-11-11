@@ -38,7 +38,6 @@ class StatsResponse(BaseModel):
     total_elevation_gain_m: float
     unique_cells: int
     sport: str | None
-    pending_gps_upgrade: int = 0  # Strava activities still on low-res polyline
 
 
 class StatsBlock(BaseModel):
@@ -61,7 +60,6 @@ class StatsBySportResponse(BaseModel):
     mtb: StatsBlock
     offroad: StatsBlock
     running: StatsBlock
-    pending_gps_upgrade: int = 0
 
 
 @router.get("/me/stats_by_sport", response_model=StatsBySportResponse)
@@ -76,7 +74,6 @@ async def me_stats_by_sport(
     """
     user_id = current_user.user_id
     blocks = ingest_service.get_user_activities_stats_by_sport(user_id)
-    pending = ingest_service.get_pending_gps_upgrade_count(user_id)
     return StatsBySportResponse(
         total=StatsBlock(**blocks["total"]),
         road=StatsBlock(**blocks["road"]),
@@ -84,7 +81,6 @@ async def me_stats_by_sport(
         mtb=StatsBlock(**blocks["mtb"]),
         offroad=StatsBlock(**blocks["offroad"]),
         running=StatsBlock(**blocks["running"]),
-        pending_gps_upgrade=pending,
     )
 
 
@@ -112,14 +108,12 @@ async def me_stats(
         return StatsResponse(**combined, sport=sport)
 
     stats = ingest_service.get_user_stats(user_id, sport=sport)
-    pending = ingest_service.get_pending_gps_upgrade_count(user_id)
     return StatsResponse(
         activity_count=stats["activity_count"],
         total_distance_m=stats["total_distance_m"],
         total_elevation_gain_m=stats["total_elevation_gain_m"],
         unique_cells=stats["unique_cells"],
         sport=sport,
-        pending_gps_upgrade=pending,
     )
 
 

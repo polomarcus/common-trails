@@ -36,7 +36,6 @@ Index de la doc. Règle : en cas de désaccord entre un document et le code,
 
 - [`strava/archive-signed-upload.md`](strava/archive-signed-upload.md) — upload d'archive par URL signée.
 - [`strava/community-contribution-ux.md`](strava/community-contribution-ux.md) — modèle UX de contribution.
-- [`strava/extended-access-application.md`](strava/extended-access-application.md) — demande d'accès API.
 - [`strava/prod-flip-runbook.md`](strava/prod-flip-runbook.md) — historique (flip exécuté).
 
 [`privacy.md`](privacy.md) n'est plus qu'un renvoi vers `privacy-model.md`.

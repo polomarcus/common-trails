@@ -19,7 +19,6 @@ from pydantic import AfterValidator, BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user
-from app.db.models import Activity, ActivityPhoto
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
 from app.services.activity_sport import change_activities_sport
@@ -479,59 +478,3 @@ async def delete_me_activity(
     if not delete_user_activity(db, current_user.user_id, activity_id):
         raise HTTPException(status_code=404, detail="Activity not found")
     return Response(status_code=204)
-
-
-class ActivityPhotoOut(BaseModel):
-    photo_id: str
-    strava_photo_id: str | None
-    thumbnail_url: str
-    full_url: str
-    lat: float | None
-    lon: float | None
-    caption: str | None
-
-
-@router.get("/me/activities/{activity_id}/photos", response_model=list[ActivityPhotoOut])
-async def me_activity_photos(
-    activity_id: str,
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> list[ActivityPhotoOut]:
-    """Return photos for a single activity (private, owner-only).
-
-    Lazy-load companion to ``/me/activities/{id}``: the activity list endpoint
-    only exposes ``total_photo_count`` so the frontend can decide whether to
-    fetch this. Photos are stored as raw Strava CDN URLs in ``ActivityPhoto``
-    (signed/time-limited URLs); freshly imported photos work fine, expired
-    URLs need a re-import (beta limitation).
-
-    Returns 404 when the activity doesn't exist OR belongs to another user —
-    same opacity as the ``/me/activities/{id}`` by-id endpoint.
-    """
-    # Owner check via the activity row itself — single query, same scoping
-    # rule as the rest of the /me/* family (Activity.user_id == current_user.user_id).
-    act = db.query(Activity).filter(
-        Activity.id == activity_id,
-        Activity.user_id == current_user.user_id,
-    ).first()
-    if not act:
-        # Don't leak existence of other users' activities — 404, not 403.
-        raise HTTPException(status_code=404, detail="Activity not found")
-
-    photos = db.query(ActivityPhoto).filter(
-        ActivityPhoto.activity_id == activity_id,
-        ActivityPhoto.user_id == current_user.user_id,
-    ).order_by(ActivityPhoto.created_at.asc()).all()
-
-    return [
-        ActivityPhotoOut(
-            photo_id=p.id,
-            strava_photo_id=p.strava_photo_id,
-            thumbnail_url=p.url_thumb,
-            full_url=p.url_medium,
-            lat=p.lat,
-            lon=p.lon,
-            caption=p.caption,
-        )
-        for p in photos
-    ]

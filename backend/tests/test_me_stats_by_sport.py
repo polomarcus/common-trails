@@ -55,7 +55,7 @@ class TestMeStatsBySport:
             assert block["total_elevation_gain_m"] == 0.0
             assert block["unique_cells"] == 0
 
-        assert data["pending_gps_upgrade"] == 0
+        assert "pending_gps_upgrade" not in data
 
     def test_requires_auth(self, client):
         resp = client.get("/me/stats_by_sport")

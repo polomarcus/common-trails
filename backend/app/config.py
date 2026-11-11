@@ -50,13 +50,6 @@ ARCHIVE_START_EMAIL_MIN_SECONDS = float(
     os.environ.get("ARCHIVE_START_EMAIL_MIN_SECONDS", "180")
 )
 
-# Fernet key (base64-urlsafe 32 bytes) used to encrypt
-# IntegrationAccount.access_token / refresh_token at rest. Empty/unset
-# means "no encryption" — fine for local dev + TEST_MODE; in prod it
-# must be wired from Secret Manager (see infra/terraform/main.tf).
-STRAVA_TOKEN_ENC_KEY = os.environ.get("STRAVA_TOKEN_ENC_KEY", "")
-
-
 def expand_sport(sport: str) -> list[str]:
     """Expand 'offroad' into its component sports for aggregation queries.
 

@@ -60,8 +60,8 @@ class TestAdminDashboard:
         assert "active_7d" in data["users"]
         assert "active_30d" in data["users"]
         assert "by_provider" in data["activities"]
-        assert "integrations" in data
-        assert "strava_connected" in data["integrations"]
+        # Retired Strava API sync: no integration block any more.
+        assert "integrations" not in data
         assert "osm_way_id_pct" in data["heatmap"]
         assert "grid_fallback_pct" in data["heatmap"]
         assert "system" in data
@@ -275,7 +275,7 @@ class TestAdminUsers:
         assert admins, "expected at least one is_admin user"
         u = body["users"][0]
         for key in ("id", "email", "username", "is_admin", "created_at",
-                    "strava", "activities"):
+                    "activities"):
             assert key in u, f"missing {key}"
         acts = u["activities"]
         for key in ("total", "total_distance_m", "by_sport", "by_provider",
@@ -283,10 +283,11 @@ class TestAdminUsers:
                     "skipped_import_count", "failed_import_count"):
             assert key in acts, f"missing activities.{key}"
 
-    def test_per_user_aggregation_and_strava(self, client):
-        """Insert a user with 2 gravel + 1 road activity and a Strava
-        account, then assert the per-user aggregation + Strava linkage
-        shape returned by the real handler."""
+    def test_per_user_aggregation(self, client):
+        """Insert a user with 2 gravel + 1 road activity, then assert the
+        per-user aggregation returned by the real handler. A leftover
+        ``integration_accounts`` row (retired Strava API sync) must not
+        surface in the response."""
         from sqlalchemy import text as sa_text
 
         from app.db.session import SessionLocal
@@ -310,8 +311,7 @@ class TestAdminUsers:
                     VALUES (:id, :uid, 'file', :sport, 'agg-act',
                         :dist, true, NOW(), NOW())
                 """), {"id": str(uuid.uuid4()), "uid": uid, "sport": sport, "dist": dist})
-            # A Strava account with a numeric athlete id + failures over the
-            # reconnect threshold (default 3) so reconnect_required flips true.
+            # Legacy linked account: still in the DB, no longer exposed.
             db.execute(sa_text("""
                 INSERT INTO integration_accounts (id, user_id, provider,
                     access_token, external_user_id, athlete_name,
@@ -338,13 +338,7 @@ class TestAdminUsers:
         assert acts["by_provider"]["file"] == 3
         assert acts["first_activity_date"] is not None
 
-        strava = row["strava"]
-        assert strava is not None
-        assert strava["athlete_id"] == "12345678"  # → strava.com/athletes/{id}
-        assert strava["athlete_name"] == "Test Athlete"
-        assert strava["sync_failures"] == 5
-        assert strava["reconnect_required"] is True  # 5 >= threshold 3
-        assert strava["token_expired"] is True  # expires_at=1 is in the past
+        assert "strava" not in row
 
 
 class TestAdminArchives:

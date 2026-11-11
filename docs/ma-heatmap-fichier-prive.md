@@ -202,11 +202,10 @@ demain. Un fichier ne peut pas être servi `ready` avec des données périmées.
 - **Hook de session SQLAlchemy** (`after_flush` → `after_commit`) : toute
   `Activity` ajoutée, modifiée (colonne affichée) ou supprimée via l'ORM
   planifie un build pour son propriétaire **après commit** (rien sur rollback).
-  Couvre : tous les ingests de `services/ingest.py` (fichier, archive, API
-  Strava, webhook), la promotion de doublon (`_promote_activity_to_community`),
+  Couvre : tous les ingests de `services/ingest.py` (fichier, archive),
+  la promotion de doublon (`_promote_activity_to_community`),
   la suppression (`activity_deletion.py`), la correction de sport
-  (`activity_sport.py`), l'upgrade de géométrie Strava
-  (`integrations_strava._gps_apply_batch`), la suppression via webhook Strava.
+  (`activity_sport.py`).
 - **Appels explicites** là où l'ORM est contourné : fusion de comptes
   (`account_merge.py` : `UPDATE` en masse + `DELETE` SQL → rebuild du
   survivant, suppression du fichier de l'absorbé), suppression RGPD (CLI,

@@ -1,10 +1,9 @@
-"""Shared Strava utilities — sport mapping + polyline decoding.
+"""Shared sport classification for uploaded files and archive imports.
 
-Used by all four Strava ingest paths:
-- `app/api/integrations_strava.py:_run_strava_import` (in-process bulk)
-- `app/jobs/import_strava.py:run_import` (Cloud Run Job)
-- `app/jobs/resync_strava.py:_resync_user` (monthly cron — being decommissioned)
-- `app/api/internal_strava_webhook.py:_ingest_strava_activity` (push)
+Historically written for the Strava ingest paths; it is now the single
+source of truth used by the file upload (`api/gpx_upload.py`), the archive
+import (`api/imports.py`, `jobs/ingest_pending_archives.py`), the GPX/FIT
+parsers and the offline scripts.
 
 ## Heatmap-pollution defense (see [[feedback_skip_beats_pollute_heatmap]])
 
@@ -14,9 +13,9 @@ Three states distinguished by the map:
 - **None as VALUE in the dict** (key present) — Yoga / Workout / Virtual
   / Indoor / Swim / Ski / etc. The CALLER MUST SKIP — never fall back
   to a default sport, that's how Zwift's Watopia coords end up on the
-  community road heatmap. Use `classify_strava_sport_or_skip(value)`
-  which returns `None` for skip *and* unknown future types.
-- **key absent** (dict.get returns None) — future Strava type we
+  community road heatmap. `classify_sport(value)` returns `None` for
+  skip *and* unknown future types.
+- **key absent** (dict.get returns None) — future activity type we
   haven't seen. Conservatively treated as skip via the helper.
 
 Bias: missing a real ride is private + fixable by user re-uploading;
@@ -234,55 +233,3 @@ def classify_sport(
         if "vtt" in n or "mtb" in n or "mountain bike" in n or "mountain" in n:
             return "mtb"
     return sport
-
-
-# Public alias kept for backwards compatibility with existing call
-# sites that import `STRAVA_SPORT_MAP` directly.
-STRAVA_SPORT_MAP: dict[str, str | None] = _STRAVA_SPORT_MAP
-
-
-def classify_strava_sport_or_skip(
-    activity_type: str | None,
-    activity_name: str | None = None,
-) -> str | None:
-    """Back-compat alias for `classify_sport`.
-
-    Kept so existing call sites keep working; new code should call
-    `classify_sport` directly. Now accepts the optional `activity_name`
-    so the four Strava live-sync paths can pass it through for the #430
-    name refinement.
-    """
-    return classify_sport(activity_type, activity_name)
-
-
-def decode_polyline(encoded: str | None) -> list[list[float]]:
-    """Decode Google encoded polyline → [[lon, lat], ...] (GeoJSON order)."""
-    if not encoded:
-        return []
-    index, lat, lng = 0, 0, 0
-    result: list[list[float]] = []
-    while index < len(encoded):
-        shift, result_val = 0, 0
-        while True:
-            b = ord(encoded[index]) - 63
-            index += 1
-            result_val |= (b & 0x1F) << shift
-            shift += 5
-            if b < 0x20:
-                break
-        dlat = ~(result_val >> 1) if result_val & 1 else result_val >> 1
-        lat += dlat
-
-        shift, result_val = 0, 0
-        while True:
-            b = ord(encoded[index]) - 63
-            index += 1
-            result_val |= (b & 0x1F) << shift
-            shift += 5
-            if b < 0x20:
-                break
-        dlng = ~(result_val >> 1) if result_val & 1 else result_val >> 1
-        lng += dlng
-
-        result.append([lng / 1e5, lat / 1e5])
-    return result

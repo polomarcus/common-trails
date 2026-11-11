@@ -5052,20 +5052,3 @@ def get_user_stats(user_id: str, sport: str | None = None) -> dict:
         }
     finally:
         db.close()
-
-
-def get_pending_gps_upgrade_count(user_id: str) -> int:
-    """Count Strava activities still on low-res polyline (not yet GPS-upgraded)."""
-    from app.db.models import Activity
-    from app.db.session import SessionLocal
-
-    db = SessionLocal()
-    try:
-        return db.query(Activity).filter(
-            Activity.user_id == user_id,
-            Activity.provider == "strava",
-            Activity.geometry_source == "polyline",
-            Activity.geometry_geojson.isnot(None),
-        ).count()
-    finally:
-        db.close()

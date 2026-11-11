@@ -50,7 +50,7 @@ dependencies = [
     "google-cloud-tasks>=2.16.0",    # Async heat compute (cloud_tasks.py)
     "google-auth>=2.30.0",           # OIDC verification on /internal/* (internal_ingest.py)
     "Pillow>=10.0.0",                # PNG og-card rendering (app/api/share.py)
-    "cryptography>=42.0.0",          # Fernet at-rest encryption (services/secrets.py)
+    "cryptography>=42.0.0",          # JWT backend (python-jose[cryptography])
 ]
 
 [project.optional-dependencies]

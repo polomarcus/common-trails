@@ -2,14 +2,12 @@
 
 The #1 ingestion-audit fix: ONE shared classifier
 (`app.services.strava_utils.classify_sport`) used by every intake — CLI
-bulk import, UI GPX/ZIP+CSV upload, and the four Strava live-sync paths
-(webhook / in-process bulk / Cloud Run Job / resync). The same activity
-MUST classify identically no matter how it arrives.
+bulk import and UI GPX/ZIP+CSV upload. The same activity MUST classify
+identically no matter how it arrives.
 
 Before this fix the gravel/mtb name-keyword refinement (#430) lived ONLY
-in `scripts/import_strava_export.py`, so the UI-upload CSV path and the
-Strava live-sync path classified a generic "Ride" named "Gravel ..." /
-"VTT ..." as `road`, starving gravel/mtb heat. These tests pin the SSOT
+in `scripts/import_strava_export.py`, so the UI-upload CSV path
+classified a generic "Ride" named "Gravel ..." / "VTT ..." as `road`, starving gravel/mtb heat. These tests pin the SSOT
 and drive the REAL entry points (no inline mirrors) to prove they agree.
 """
 from __future__ import annotations
@@ -24,10 +22,7 @@ from app.services.gpx import (
     parse_strava_activities_csv,
     parse_zip_of_gpx,
 )
-from app.services.strava_utils import (
-    classify_sport,
-    classify_strava_sport_or_skip,
-)
+from app.services.strava_utils import classify_sport
 
 # ── The SSOT classifier ──────────────────────────────────────────────
 
@@ -93,12 +88,6 @@ def test_csv_and_api_type_forms_agree() -> None:
     assert classify_sport("Trail Run") == classify_sport("TrailRun")
 
 
-def test_back_compat_alias_delegates() -> None:
-    assert classify_strava_sport_or_skip("Ride", "Gravel x") == "gravel"
-    assert classify_strava_sport_or_skip("Ride") == "road"
-    assert classify_strava_sport_or_skip("Yoga") is None
-
-
 # ── Spec table from the task ──────────────────────────────────────────
 
 _SPEC = [
@@ -155,12 +144,6 @@ def _csv_path_classify(atype: str, name: str) -> str | None:
     return out.get("activities/1.gpx")
 
 
-def _strava_sync_classify(atype: str, name: str) -> str | None:
-    """Drive the REAL Strava-sync classifier (the function all four live
-    paths call): `classify_strava_sport_or_skip(sport_type, name)`."""
-    return classify_strava_sport_or_skip(atype, name)
-
-
 _CONSISTENCY_FIXTURES = [
     ("Ride", "Gravel paradise"),
     ("Ride", "VTT vers Lacan"),
@@ -180,10 +163,9 @@ _CONSISTENCY_FIXTURES = [
 def test_all_intakes_classify_identically(atype: str, name: str) -> None:
     cli = _cli_classify(atype, name)
     csv_path = _csv_path_classify(atype, name)
-    sync = _strava_sync_classify(atype, name)
-    assert cli == csv_path == sync, (
+    assert cli == csv_path, (
         f"intake divergence for ({atype!r}, {name!r}): "
-        f"cli={cli!r} csv={csv_path!r} sync={sync!r}"
+        f"cli={cli!r} csv={csv_path!r}"
     )
 
 
