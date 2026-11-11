@@ -44,6 +44,8 @@ describe('heatmap appearance store', () => {
   it('never trusts localStorage: unknown colour, junk and out-of-range values fall back / clamp', () => {
     expect(sanitizeAppearance({ myColor: 'url(javascript:alert(1))', myOpacity: 99, communityOpacity: -3 }))
       .toEqual({ myColor: MY_TRACES_COLOR, myOpacity: 1, communityOpacity: 0.3 });
+    // Never above 100 %: opacity × ramp must stay ≤ 1.
+    expect(sanitizeAppearance({ communityOpacity: 1.3 }).communityOpacity).toBe(1);
     expect(sanitizeAppearance('nope')).toEqual(DEFAULT_APPEARANCE);
     localStorage.setItem(STORAGE_KEY, '{not json');
     expect(getHeatmapAppearance()).toEqual(DEFAULT_APPEARANCE);
@@ -116,8 +118,8 @@ describe('HeatmapAppearancePanel (Calques → Apparence)', () => {
       });
     };
     await slide('my-heatmap-opacity', '0.5');
-    await slide('community-heatmap-opacity', '1.2');
-    expect(getHeatmapAppearance()).toMatchObject({ myOpacity: 0.5, communityOpacity: 1.2 });
+    await slide('community-heatmap-opacity', '0.6');
+    expect(getHeatmapAppearance()).toMatchObject({ myOpacity: 0.5, communityOpacity: 0.6 });
     // Reset link brings the community opacity back to the default.
     await act(async () => { q('community-heatmap-opacity-reset')!.click(); });
     expect(getHeatmapAppearance().communityOpacity).toBe(1);

@@ -55,13 +55,14 @@ function MyHeatmapAppearance() {
       <div style={heading}>{t('map.toolbar.myHeatmap')}</div>
       <div style={row} role="radiogroup" aria-label={t('map.appearance.color')}>
         <span style={{ flexShrink: 0 }}>{t('map.appearance.color')}</span>
-        {MY_COLOR_CHOICES.map((c) => (
+        {MY_COLOR_CHOICES.map((c, i) => (
           <button
             key={c}
             type="button"
             role="radio"
             aria-checked={a.myColor === c}
-            aria-label={c}
+            aria-label={`${t('map.appearance.color')} ${i + 1}`}
+            title={c}
             data-testid={`my-heatmap-color-${c.slice(1)}`}
             onClick={() => setHeatmapAppearance({ myColor: c })}
             style={{

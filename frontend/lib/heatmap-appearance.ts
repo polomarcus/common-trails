@@ -28,7 +28,8 @@ export const MY_COLOR_CHOICES: readonly string[] = [
 ];
 export const OPACITY_MIN = 0.3;
 export const OPACITY_MAX = 1;
-export const COMMUNITY_OPACITY_MAX = 1.3;
+// 100 % = the tuned ramps. Nothing above: opacity × ramp must stay ≤ 1.
+export const COMMUNITY_OPACITY_MAX = 1;
 export const STORAGE_KEY = 'cc_heatmap_appearance';
 
 export const DEFAULT_APPEARANCE: HeatmapAppearance = {
