@@ -36,8 +36,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1 || [[ "${E2E_IMPORT_REBUILD:-0}" == "1" ]]; then
-  echo "▸ building $IMAGE (backend deps, no DEM bake)…"
-  docker build -q --build-arg SKIP_DEM_BAKE=1 -t "$IMAGE" "$REPO/backend" >/dev/null
+  echo "▸ building $IMAGE (backend deps)…"
+  docker build -q -t "$IMAGE" "$REPO/backend" >/dev/null
 fi
 
 echo "▸ throwaway project $P (internal network, no host port)"

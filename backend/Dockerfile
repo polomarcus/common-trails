@@ -35,32 +35,15 @@ COPY pyproject.toml .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -e ".[dev]"
 
-# Copy application code (includes data/ with GT routes, DFCI cache, trail cache)
+# Copy application code (includes data/ with GT routes and the DFCI cache)
 COPY . .
 
 # Data dir: point to the app's data directory (no separate COPY needed)
 ENV DATA_DIR=/app/data
 
-# Bake SRTM/Copernicus HGT tiles into the image so the OSM import job
-# resolves elevation locally (no Open-Meteo runtime dep). France
-# coverage = 9 viewfinder sheets ≈ 450 MB. We also bake the two
-# cross-border presets (Cataluna in NE Spain, Italia Nord-Ovest)
-# because the corresponding OSM import jobs would otherwise emit NULL
-# elevation/slope for any segment outside the France bbox (e.g.
-# Cataluna south of lat 41°). +~70 MB image. The CLI is stdlib-only
-# so it runs before the heavy Python deps complete. We tolerate
-# partial failures (one sheet 404) — local_dem.py degrades gracefully
-# to None for any tile missing on disk.
-#
-# DEM_DIR defaults to ${DATA_DIR}/dem inside local_dem.py.
-ARG SKIP_DEM_BAKE=0
-RUN if [ "$SKIP_DEM_BAKE" = "0" ]; then \
-        echo "Baking HGT tiles for France + cross-border into $DATA_DIR/dem ..." && \
-        python -m app.cli.download_dem --region france --dem-dir "$DATA_DIR/dem" && \
-        python -m app.cli.download_dem --region cataluna --dem-dir "$DATA_DIR/dem" && \
-        python -m app.cli.download_dem --region italia-nord-ovest --dem-dir "$DATA_DIR/dem" || \
-        echo "WARNING: HGT bake had errors; image still usable, missing tiles return None"; \
-    fi
+# No elevation (DEM) tiles are baked into the image any more: they only served
+# the OSM import of the retired map-matching pipeline (~520 MB, 12–14 min of
+# cold CI build). Elevation gain comes from the uploaded files themselves.
 
 # Frontend static files (populated by CI deploy workflow; empty .gitkeep for local builds)
 COPY static-frontend/ /app/static-frontend/
