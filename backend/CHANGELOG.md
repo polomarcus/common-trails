@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.66.0](https://github.com/polomarcus/common-trails/compare/backend-v0.65.0...backend-v0.66.0) (2026-11-11)
+
+
+### Features
+
+* **activities:** corriger le sport d'une sortie après import ([#43](https://github.com/polomarcus/common-trails/issues/43)) ([c628ad7](https://github.com/polomarcus/common-trails/commit/c628ad796612d03abf35c566ef5f0d322454c9f3))
+* **admin:** email à l'admin quand un nouveau compte confirme son adresse ([#74](https://github.com/polomarcus/common-trails/issues/74)) ([14bec16](https://github.com/polomarcus/common-trails/commit/14bec16d4fa601df5343be17a85452e4f7204c73))
+* **heatmap:** lisibilité aux zooms région et rue ([#62](https://github.com/polomarcus/common-trails/issues/62)) ([82ad5b7](https://github.com/polomarcus/common-trails/commit/82ad5b7b782695e3e56e92abe1868ca03b6338c3))
+* **home:** hero dit ce qu'est la heatmap — communautaire, pour tracer de vrais parcours ([#15](https://github.com/polomarcus/common-trails/issues/15)) ([5071d2c](https://github.com/polomarcus/common-trails/commit/5071d2c237ed9ea45ef48720b730d7254a46dfd6))
+* **import:** envoi d'archive reprenable (session GCS resumable, chunks 16 Mio) ([#35](https://github.com/polomarcus/common-trails/issues/35)) ([abce601](https://github.com/polomarcus/common-trails/commit/abce601113dfb7940c6430611c796fc7eb17f8a5))
+* **map:** « Ma heatmap » en fichier PMTiles privé par utilisateur (derrière flag) ([#51](https://github.com/polomarcus/common-trails/issues/51)) ([fe8600a](https://github.com/polomarcus/common-trails/commit/fe8600ab6a3642493271640e29d9db2bc3523eb0))
+* **map:** partager « Ma heatmap » par lien à jeton (opt-in, révocable) ([#53](https://github.com/polomarcus/common-trails/issues/53)) ([ab56606](https://github.com/polomarcus/common-trails/commit/ab566068504fb7a474bc3cae1fb01358a888abee))
+* **map:** télécharger sa propre heatmap en GeoJSON ([#66](https://github.com/polomarcus/common-trails/issues/66)) ([0c10c6b](https://github.com/polomarcus/common-trails/commit/0c10c6b6fd44c2f22090631ef43d05fb97384e3d))
+* **sport:** signaler les sorties classées « Route » par défaut et les reclasser en lot ([#79](https://github.com/polomarcus/common-trails/issues/79)) ([020b076](https://github.com/polomarcus/common-trails/commit/020b07621971900524eb22963a23dd56372ca6e5))
+
+
+### Bug Fixes
+
+* **api:** push /me/activities filter/order/limit into SQL (OOM fix) ([#20](https://github.com/polomarcus/common-trails/issues/20)) ([a512f9e](https://github.com/polomarcus/common-trails/commit/a512f9e067fde8438e5c050da78227564b782acb))
+* **emails:** rappel de resynchronisation au plus une fois par an ([#67](https://github.com/polomarcus/common-trails/issues/67)) ([ed807d6](https://github.com/polomarcus/common-trails/commit/ed807d61f0ef5b53c0765d2fee6450d0a252b23f))
+* **fit:** repli tolérant fitdecode quand fitparse rejette un FIT ([#41](https://github.com/polomarcus/common-trails/issues/41)) ([d8518bc](https://github.com/polomarcus/common-trails/commit/d8518bceddca8f40b5d7a5520fdce3f13a331c68))
+* **frontend:** P0 audit — géoloc auto, HEAD/404, heatmap indisponible, modale export ([#38](https://github.com/polomarcus/common-trails/issues/38)) ([92e349e](https://github.com/polomarcus/common-trails/commit/92e349ed5d67814a9c730dbbba0652bf0682f391))
+* **heatmap:** les traces sans date ne sont plus publiques ([#47](https://github.com/polomarcus/common-trails/issues/47)) ([3cb015e](https://github.com/polomarcus/common-trails/commit/3cb015e2d58d6b7affd734f1fd6740ddbf25a63c))
+* **import:** ignorer les itinéraires routes/ d'un export Strava + email de début d'import ([#45](https://github.com/polomarcus/common-trails/issues/45)) ([1f08742](https://github.com/polomarcus/common-trails/commit/1f08742a5d2cb54d02ca00d50cd1e98f447bd9ca))
+* **import:** l'email « archive importée » ne part plus avant la demande de rebuild de la heatmap ([#29](https://github.com/polomarcus/common-trails/issues/29)) ([24277ce](https://github.com/polomarcus/common-trails/commit/24277cec4912a7d6674a7caf555ffa32d9ab22ee))
+* **import:** sport des traces importées — sub_sport FIT, CSV prioritaire, plus aucun sport par défaut ([#42](https://github.com/polomarcus/common-trails/issues/42)) ([3a059d3](https://github.com/polomarcus/common-trails/commit/3a059d3c3e874f9e04717e2b60dd05064096e06f))
+* **ingestion:** hygiene round — reap abandoned inits, husk guard, dedup index, raw-mode presort skip ([#21](https://github.com/polomarcus/common-trails/issues/21)) ([5789e7a](https://github.com/polomarcus/common-trails/commit/5789e7a6976047371a976243362f511adda31f31))
+* **map:** « Mes traces » lisibles à faible zoom et sans traits droits à travers la mer ([#31](https://github.com/polomarcus/common-trails/issues/31)) ([5e823b0](https://github.com/polomarcus/common-trails/commit/5e823b03441b956df907ab16b7814db628543ebf))
+* **map:** /map entièrement blanche quand le devicePixelRatio est fractionnaire (+ déblocage CI) ([#27](https://github.com/polomarcus/common-trails/issues/27)) ([ccb41df](https://github.com/polomarcus/common-trails/commit/ccb41df08cbd49e184e9041efaa0e2112df41d95))
+* **my-heatmap:** backfill --enqueue, planifié sur le worker (les jobs n'ont pas accès au bucket privé) ([#56](https://github.com/polomarcus/common-trails/issues/56)) ([aadb06f](https://github.com/polomarcus/common-trails/commit/aadb06fceffff4286c71f7dbc8eb349a431f3941))
+* **onboarding:** lève les frictions du premier import (sport requis, 2 Go, magic link, état vide, mobile) ([#33](https://github.com/polomarcus/common-trails/issues/33)) ([17ecdc1](https://github.com/polomarcus/common-trails/commit/17ecdc19a816ed416099101ca4962f6d437873df))
+* **ops:** répare les schedulers prod (IAM run.invoker sur les jobs, audience OIDC du health-check) + healthcheck CD sur /readyz ([#37](https://github.com/polomarcus/common-trails/issues/37)) ([9cb1d0a](https://github.com/polomarcus/common-trails/commit/9cb1d0a7dd6eaf970e7f4c0100a75916580250a6))
+* **parcours connecté:** arrivée sur la carte, zone habituelle, « Ma heatmap » lisible, retour du lien secret ([#64](https://github.com/polomarcus/common-trails/issues/64)) ([a10cf69](https://github.com/polomarcus/common-trails/commit/a10cf694a02bfa811fc1b543b720ca593ceb6fe6))
+* **privacy:** masque radial des extrémités + exclusion des FIT virtuels/indoor ([#36](https://github.com/polomarcus/common-trails/issues/36)) ([b8380fc](https://github.com/polomarcus/common-trails/commit/b8380fcbb778b56ebe25115889b099d381e427be))
+* **strava:** callback OAuth — branche stub réservée au TEST_MODE ([#34](https://github.com/polomarcus/common-trails/issues/34)) ([3a1d9d2](https://github.com/polomarcus/common-trails/commit/3a1d9d2558b9d9cb944c274ed7d4f04e2add4f39))
+* **ux:** lot de corrections issues de l'analyse du site ([#70](https://github.com/polomarcus/common-trails/issues/70)) ([11690c4](https://github.com/polomarcus/common-trails/commit/11690c47c6364bef42c720a0c546397b6308fb1c))
+
+
+### Miscellaneous
+
+* **pipeline:** l'image n'embarque plus les tuiles d'altitude — tranche E ([#84](https://github.com/polomarcus/common-trails/issues/84)) ([3b08ec9](https://github.com/polomarcus/common-trails/commit/3b08ec99b3fd51d606ebf3f3c3d6f33a1b5317f5))
+* **pipeline:** retire le code de correspondance OSM — tranche D, un seul mode dans le code ([#83](https://github.com/polomarcus/common-trails/issues/83)) ([00b19fa](https://github.com/polomarcus/common-trails/commit/00b19fafdb213578a5f602906a33634429fa2249))
+* **pipeline:** retire les anciennes routes, le saut inutile vers le worker et les sondes mortes — tranche C ([#82](https://github.com/polomarcus/common-trails/issues/82)) ([95f4088](https://github.com/polomarcus/common-trails/commit/95f40881e5f29737a81975ad3849e22d5745846a))
+* **pipeline:** retire les modules, jobs et outils sans appelant — tranche B ([#81](https://github.com/polomarcus/common-trails/issues/81)) ([65c6421](https://github.com/polomarcus/common-trails/commit/65c6421af1bdb0621269d64e811250155a7d08f3))
+* **pipeline:** supprime les tables de l'ancien pipeline — tranche F ([#85](https://github.com/polomarcus/common-trails/issues/85)) ([854bee8](https://github.com/polomarcus/common-trails/commit/854bee80536e87eb7a77b11cead3c7c662a6c2c6))
+* **pipeline:** traces brutes par défaut partout — tranche A du retrait de l'ancien pipeline ([#80](https://github.com/polomarcus/common-trails/issues/80)) ([eda4e31](https://github.com/polomarcus/common-trails/commit/eda4e31912002561f242cc114096461979b4d905))
+* **strava:** 3/3 (b) — migration 0070, supprime les tables et la colonne de l'API Strava ([#78](https://github.com/polomarcus/common-trails/issues/78)) ([402201a](https://github.com/polomarcus/common-trails/commit/402201a825454e313f2b32e14e3d356daddd7e60))
+* **strava:** retire la connexion Strava en direct — 2/3, backend ([#75](https://github.com/polomarcus/common-trails/issues/75)) ([c41dad9](https://github.com/polomarcus/common-trails/commit/c41dad901d3fa70339daa9eee4e00cd52841a7b4))
+* **strava:** retire la connexion Strava en direct — 3/3 (a), le code n'utilise plus les tables ([#77](https://github.com/polomarcus/common-trails/issues/77)) ([4878c68](https://github.com/polomarcus/common-trails/commit/4878c685d77bc3d1d7b081483d820de2ed536f59))
+* **textes:** tutoiement partout ([#76](https://github.com/polomarcus/common-trails/issues/76)) ([d6fc6e2](https://github.com/polomarcus/common-trails/commit/d6fc6e2e4bc175a503217f17c5191df033eb0751))
+
 ## [0.65.0](https://github.com/polomarcus/common-trails/compare/backend-v0.64.0...backend-v0.65.0) (2026-09-05)
 
 
