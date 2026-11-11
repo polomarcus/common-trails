@@ -52,7 +52,7 @@ RASTER_MAX_ZOOM = 18
 _TILE_RATE = "600/minute"
 _DOC_RATE = "120/minute"
 _TILE_LAYER = mhf.TILE_LAYER
-_COLOR = "#06b6d4"  # MY_TRACES_COLOR (frontend/lib/constants.ts)
+_COLOR = "#1447e6"  # MY_TRACES_COLOR (frontend/lib/constants.ts)
 
 _transparent_png: bytes | None = None
 

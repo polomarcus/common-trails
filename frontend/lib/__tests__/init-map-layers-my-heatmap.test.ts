@@ -68,7 +68,7 @@ describe('/map — "Ma heatmap" layers vs the community heatmap', () => {
       // A literal colour, not a ['get', 'color'] per-feature (per-sport) expression.
       expect(spec!.paint!['line-color']).toBe(MY_TRACES_COLOR);
     }
-    expect(MY_TRACES_COLOR).toBe('#06b6d4');
+    expect(MY_TRACES_COLOR).toBe('#1447e6');
   });
 
   it('the cyan is distinct from every community ramp stop and every sport colour', () => {
