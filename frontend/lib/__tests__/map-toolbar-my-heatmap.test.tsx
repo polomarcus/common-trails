@@ -148,9 +148,9 @@ describe('MapToolbar — Ma heatmap / Heatmap commune', () => {
     expect(mine.nextElementSibling?.contains(community)).toBe(true);
 
     const swatch = container.querySelector('[data-testid="swatch-my-traces"]') as HTMLElement;
-    // jsdom normalises hex → rgb(); #06b6d4 = rgb(6, 182, 212).
-    expect(swatch.style.background).toMatch(/rgb\(6, 182, 212\)|#06b6d4/i);
-    expect(MY_TRACES_COLOR).toBe('#06b6d4');
+    // jsdom normalises hex → rgb(); #1447e6 = rgb(20, 71, 230).
+    expect(swatch.style.background).toMatch(/rgb\(20, 71, 230\)|#1447e6/i);
+    expect(MY_TRACES_COLOR).toBe('#1447e6');
     const ramp = container.querySelector('[data-testid="swatch-community"]') as HTMLElement;
     expect(ramp.getAttribute('style')).toContain('linear-gradient');
   });
@@ -338,8 +338,8 @@ describe('MapLegend — one cyan "Ma heatmap" entry next to the community ramp, 
     // ORDER: "Ma heatmap" is the very next legend row after the community ramp.
     expect(community!.nextElementSibling).toBe(mine);
     const swatch = mine!.firstElementChild as HTMLElement;
-    expect(swatch.style.background).toMatch(/rgb\(6, 182, 212\)|#06b6d4/i);
-    expect(MY_TRACES_COLOR).toBe('#06b6d4');
+    expect(swatch.style.background).toMatch(/rgb\(20, 71, 230\)|#1447e6/i);
+    expect(MY_TRACES_COLOR).toBe('#1447e6');
   });
 
   it('signed in but "Ma heatmap" off: no "Ma heatmap"', async () => {

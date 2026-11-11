@@ -32,6 +32,7 @@ import {
   fetchMyHeatmapManifest, loadMyHeatmapFile, summaryToActivityItems, setUserActivitiesSource,
 } from '@/lib/my-heatmap-file';
 import { MY_TRACES_COLOR } from '@/lib/constants';
+import { homeViewCenter, HOME_VIEW_ZOOM } from '@/lib/home-view';
 import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions, lineParts } from '@/lib/map-utils';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
@@ -359,9 +360,11 @@ export default function MapPage() {
           }
         }
         const hasPositionParam = new URLSearchParams(window.location.search).get('lat') !== null;
-        const newest = file.summary.activities[file.summary.activities.length - 1];
-        if (!actParam && !hasPositionParam && newest) {
-          m.jumpTo({ center: newest.start, zoom: 13 });
+        // Open on the rider's home area (where most rides start), not on
+        // the latest ride — see lib/home-view.ts.
+        const home = homeViewCenter(file.summary.activities.map((a) => a.start));
+        if (!actParam && !hasPositionParam && home) {
+          m.jumpTo({ center: home, zoom: HOME_VIEW_ZOOM });
         }
         loadUserCells(m);
         return;
@@ -431,14 +434,14 @@ export default function MapPage() {
 
       loadUserCells(m);
 
-      // Jump to the most recent activity (only if no specific activity/position requested)
+      // Open on the rider's home area (only if no specific activity/position
+      // requested) — see lib/home-view.ts.
       const hasPositionParam = new URLSearchParams(window.location.search).get('lat') !== null;
-      if (!actParam && !hasPositionParam && geojson.features.length > 0) {
-        const first = geojson.features[geojson.features.length - 1];
-        const coords = lineParts(first?.geometry).flat();
-        if (coords.length > 0) {
-          m.jumpTo({ center: coords[0], zoom: 13 });
-        }
+      if (!actParam && !hasPositionParam) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const home = homeViewCenter(geojson.features.map((f: any) =>
+          lineParts(f?.geometry)[0]?.[0] as [number, number] | undefined));
+        if (home) m.jumpTo({ center: home, zoom: HOME_VIEW_ZOOM });
       }
     } catch (e) {
       // Non-fatal — the map still works — but no longer silent: surface it so a

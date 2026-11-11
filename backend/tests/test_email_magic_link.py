@@ -207,6 +207,34 @@ class TestVerify:
         assert session["email"] == data["email"]
         assert session.get("purpose") is None  # a session token, not a magic-link one
 
+    def test_verify_new_account_lands_on_import_page(self, client, capture_send):
+        token = self._request_and_get_token(client, capture_send)
+        resp = client.post("/auth/email/verify", json={"token": token})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["redirect"] == "/strava"
+
+    def test_verify_returning_rider_lands_on_the_map(self, client, capture_send):
+        """Non-regression (2026-11-11): a user who had already imported traces
+        was sent to the import page (/strava) after logging in."""
+        from sqlalchemy import text as sa_text
+
+        token = self._request_and_get_token(client, capture_send)
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        db = SessionLocal()
+        try:
+            db.execute(sa_text("""
+                INSERT INTO activities (id, user_id, provider, sport, name,
+                    distance_m, elevation_gain_m, contribute_heatmap, created_at)
+                VALUES (:id, :uid, 'file', 'gravel', 'returning-rider-activity',
+                    12345, 234, true, NOW())
+            """), {"id": str(uuid.uuid4()), "uid": payload["sub"]})
+            db.commit()
+        finally:
+            db.close()
+        resp = client.post("/auth/email/verify", json={"token": token})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["redirect"] == "/map"
+
     def test_verify_single_use_reuse_401(self, client, capture_send):
         token = self._request_and_get_token(client, capture_send)
         first = client.post("/auth/email/verify", json={"token": token})

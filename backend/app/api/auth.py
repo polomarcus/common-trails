@@ -207,6 +207,23 @@ def _create_token(user_id: str, email: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def _default_post_login_path(db: Session, user_id: str) -> str:
+    """Where a login lands when the link carries no ``redirect``: a rider who
+    already has traces goes to THEIR MAP; only an account with nothing imported
+    yet is sent to the import page (Paul, 2026-11-11: a returning user was
+    dropped on /strava). Best-effort — any DB error keeps the import page."""
+    try:
+        has_traces = db.execute(
+            sa_text("SELECT EXISTS (SELECT 1 FROM activities WHERE user_id = :uid)"),
+            {"uid": user_id},
+        ).scalar()
+    except Exception:
+        logger.warning("post-login path lookup failed user=%s", user_id, exc_info=True)
+        db.rollback()
+        return "/strava"
+    return "/map" if has_traces else "/strava"
+
+
 def _safe_redirect(raw: str | None) -> str | None:
     """Return ``raw`` if it is a same-origin RELATIVE path, else ``None``.
 
@@ -594,7 +611,9 @@ async def verify_magic_link(
 
     session_token = _create_token(user.id, user.email)
     _set_auth_cookie(response, session_token)
-    return MagicLinkVerifyResponse(user_id=user.id, email=user.email)
+    return MagicLinkVerifyResponse(
+        user_id=user.id, email=user.email, redirect=_default_post_login_path(db, user.id),
+    )
 
 
 @router.get("/me", response_model=UserOut)

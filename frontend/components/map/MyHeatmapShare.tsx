@@ -23,6 +23,27 @@ const btn: React.CSSProperties = {
   color: '#444', cursor: 'pointer', fontSize: 11, fontWeight: 500,
 };
 
+const busyBtn: React.CSSProperties = { cursor: 'progress', opacity: 0.85 };
+
+/** Creating the link can take ~30 s (the masked copy is built first): without
+ *  feedback the button looked dead (Paul, 2026-11-11). */
+function Spinner() {
+  return (
+    <>
+      <style>{'@keyframes mhs-spin { to { transform: rotate(360deg); } }'}</style>
+      <span
+        aria-hidden="true"
+        data-testid="my-heatmap-share-spinner"
+        style={{
+          display: 'inline-block', width: 10, height: 10, verticalAlign: '-1px',
+          border: '2px solid #cbd5e1', borderTopColor: '#2d6a4f', borderRadius: '50%',
+          animation: 'mhs-spin 0.8s linear infinite',
+        }}
+      />
+    </>
+  );
+}
+
 function CopyField({ label, value, testId }: { label: string; value: string; testId: string }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -121,8 +142,8 @@ export default function MyHeatmapShare({ dateLocale }: { dateLocale: string }) {
       {!open ? null : !status.active ? (
         <>
           <div style={{ marginTop: 4 }}>{t('map.share.intro')}</div>
-          <button type="button" onClick={() => void create()} disabled={busy} style={{ ...btn, marginTop: 6 }} data-testid="my-heatmap-share-create">
-            {t('map.share.create')}
+          <button type="button" onClick={() => void create()} disabled={busy} aria-busy={busy} style={{ ...btn, marginTop: 6, ...(busy ? busyBtn : null) }} data-testid="my-heatmap-share-create">
+            {busy ? <><Spinner /> {t('map.share.creating')}</> : t('map.share.create')}
           </button>
         </>
       ) : (
@@ -153,6 +174,11 @@ export default function MyHeatmapShare({ dateLocale }: { dateLocale: string }) {
             </button>
           </div>
         </>
+      )}
+      {busy && status.active && (
+        <div role="status" data-testid="my-heatmap-share-busy" style={{ marginTop: 4 }}>
+          <Spinner /> {t('map.share.updating')}
+        </div>
       )}
       {error && <div role="alert" style={{ color: '#b42318', marginTop: 4 }}>{t('map.share.error')}</div>}
     </div>

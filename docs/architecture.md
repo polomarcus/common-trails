@@ -68,7 +68,7 @@ flowchart LR
    (`frontend/lib/cdn-cache.ts`) et dessinent les couches de
    `frontend/lib/community-heatmap-layers.ts`. **« Ma heatmap »** ne passe pas
    par les PMTiles : elle vient en direct de `GET /me/activities`
-   (`backend/app/api/me_activities.py`), en cyan, immédiatement après l'import.
+   (`backend/app/api/me_activities.py`), en bleu, immédiatement après l'import.
    Elle sert une version allégée de chaque trace (`activities.display_geojson`,
    calculée à l'import ; anciennes lignes via backfill) — sinon un gros compte
    télécharge des centaines de Mo : voir
