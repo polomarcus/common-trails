@@ -166,7 +166,18 @@ def _refresh_my_heatmap_file(db: Session, user_id: str) -> None:
 
 # ── Default-sport activities ("Ride" → road with no finer signal) ───────────
 
-_DEFAULT_SPORT_CHUNK = 200
+# Matched mode only: a ``from_default`` call that must CHANGE the sport of more
+# rows than this is refused (same ceiling as the explicit id list).
+DEFAULT_SPORT_MATCHED_MAX = 500
+
+
+class TooManyDefaultSportActivities(Exception):
+    """``from_default`` would re-write heat for too many activities at once
+    (matched display mode only)."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(count)
+        self.count = count
 
 
 def count_default_sport(db: Session, user_id: str) -> int:
@@ -209,11 +220,24 @@ def resolve_default_sport(db: Session, user_id: str, sport: str) -> tuple[int, l
     """Apply ``sport`` to EVERY default-sport activity of ``user_id`` and clear
     their flag. Returns ``(matched, changed_ids)``.
 
-    ``sport`` equal to the current one (in practice ``road``: "ce sont bien des
-    sorties route") is a pure confirmation — one UPDATE of the flag, nothing
-    re-written. A different sport goes through ``change_activities_sport`` in
-    bounded chunks (it loads full rows; a rider can have thousands).
+    RAW display mode (prod): nothing but ``activities.sport`` feeds the
+    community layer, so the whole set — thousands of rows — is ONE statement in
+    ONE transaction: no row is loaded, no geometry read. The "Ma heatmap"
+    staleness is bumped once (by the statement-level trigger when a sport
+    changed, by hand for a pure confirmation), its rebuild scheduled once, and
+    ONE debounced community rebuild is requested if a changed row is
+    community-eligible.
+
+    MATCHED mode (legacy): changing a sport re-writes the activity's heat
+    edges, which is slow and commits on its own. A pure confirmation (every
+    flagged row already has ``sport``) is still one UPDATE; otherwise the set
+    goes through ``change_activities_sport`` in ONE call — the id-list path,
+    same ceiling — and a larger set raises ``TooManyDefaultSportActivities``
+    BEFORE anything is written (the client then sends explicit id batches).
     """
+    if raw_display_enabled():
+        return _resolve_default_sport_raw(db, user_id, sport)
+
     ids = [
         str(r[0])
         for r in db.execute(
@@ -224,13 +248,13 @@ def resolve_default_sport(db: Session, user_id: str, sport: str) -> tuple[int, l
             {"u": user_id, "s": sport},
         ).fetchall()
     ]
+    if len(ids) > DEFAULT_SPORT_MATCHED_MAX:
+        raise TooManyDefaultSportActivities(len(ids))
     matched = 0
     changed: list[str] = []
-    for i in range(0, len(ids), _DEFAULT_SPORT_CHUNK):
-        found, done = change_activities_sport(db, user_id, ids[i : i + _DEFAULT_SPORT_CHUNK], sport)
-        matched += len(found)
-        changed.extend(done)
-        db.expunge_all()  # bound memory: full rows (geometry) were loaded
+    if ids:
+        found, changed = change_activities_sport(db, user_id, ids, sport)
+        matched = len(found)
     confirmed = db.execute(
         sa_text(
             "UPDATE activities SET sport_is_default = false "
@@ -242,3 +266,58 @@ def resolve_default_sport(db: Session, user_id: str, sport: str) -> tuple[int, l
         _refresh_my_heatmap_file(db, user_id)
     db.commit()
     return matched + int(confirmed or 0), changed
+
+
+def _resolve_default_sport_raw(db: Session, user_id: str, sport: str) -> tuple[int, list[str]]:
+    from app.services import my_heatmap_files
+    from app.services.provenance import community_eligible_conditions
+
+    conds, params = community_eligible_conditions()
+    rows = db.execute(
+        sa_text(
+            f"""
+            WITH target AS (
+                SELECT id, sport AS old_sport, ({" AND ".join(conds)}) AS eligible
+                  FROM activities
+                 WHERE user_id = :u AND sport_is_default
+                   FOR UPDATE
+            )
+            UPDATE activities a
+               SET sport = :s, sport_is_default = false
+              FROM target t
+             WHERE a.id = t.id
+            RETURNING a.id, t.old_sport, t.eligible
+            """
+        ),
+        {**params, "u": user_id, "s": sport},
+    ).fetchall()
+    changed = [str(r[0]) for r in rows if r[1] != sport]
+    any_community = any(r[2] for r in rows if r[1] != sport)
+    if rows:
+        if changed:
+            # The trigger saw ``sport`` change and marked the file stale —
+            # once for the statement; only the prompt rebuild is left to ask.
+            my_heatmap_files.mark_dirty(db, user_id)
+        else:
+            _refresh_my_heatmap_file(db, user_id)
+    db.commit()
+    if changed:
+        logger.info(
+            "default-sport activities re-classified: user=%s -> %s changed=%d matched=%d",
+            user_id, sport, len(changed), len(rows),
+        )
+    if any_community:
+        _request_community_rebuild()
+    return len(rows), changed
+
+
+def _request_community_rebuild() -> None:
+    try:
+        from app.services.run_jobs import build_pmtiles_debounce_ok, trigger_build_pmtiles_job
+
+        if build_pmtiles_debounce_ok():
+            trigger_build_pmtiles_job()
+        else:
+            logger.info("build-pmtiles trigger debounced after sport change")
+    except Exception:  # pragma: no cover - defense in depth
+        logger.warning("build-pmtiles trigger failed after sport change", exc_info=True)

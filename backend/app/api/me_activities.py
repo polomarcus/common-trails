@@ -22,6 +22,7 @@ from app.api.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.services.activity_deletion import delete_user_activity
 from app.services.activity_sport import (
+    TooManyDefaultSportActivities,
     change_activities_sport,
     count_default_sport,
     list_default_sport,
@@ -477,7 +478,16 @@ def bulk_update_me_activities_sport(
     """
     user_id = current_user.user_id
     if body.from_default:
-        matched, changed = resolve_default_sport(db, user_id, body.sport)
+        try:
+            matched, changed = resolve_default_sport(db, user_id, body.sport)
+        except TooManyDefaultSportActivities as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{exc.count} activities to re-classify at once is too many here: "
+                    f"send them as activity_ids, at most {BULK_SPORT_MAX_IDS} per request"
+                ),
+            ) from exc
     else:
         ids = _valid_uuids(list(dict.fromkeys(body.activity_ids or [])))
         found, changed = change_activities_sport(db, user_id, ids, body.sport)

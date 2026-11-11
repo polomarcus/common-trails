@@ -318,7 +318,15 @@ def test_bulk_ids_clear_the_flag(client, auth_headers):
     assert (_flag(a), _flag(b), _flag(c)) == (False, False, True)
 
 
-def test_bulk_from_default_reclassifies_all(client, auth_headers):
+@pytest.fixture(params=["raw", "matched"])
+def display_mode(request, monkeypatch):
+    """Both display modes: raw (prod — one statement) and matched (legacy —
+    per-activity heat re-write through the id-list path)."""
+    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", request.param)
+    return request.param
+
+
+def test_bulk_from_default_reclassifies_all(client, auth_headers, display_mode):
     uid = _user_id(client, auth_headers)
     ids = _seed(uid, 4)
     (other,) = _seed(uid, 1, default=False)  # a road ride the rider already confirmed
@@ -346,7 +354,7 @@ def test_bulk_from_default_reclassifies_all(client, auth_headers):
     assert _flag(theirs) is True  # someone else's stays untouched
 
 
-def test_bulk_from_default_confirm_road_only_clears_the_flag(client, auth_headers):
+def test_bulk_from_default_confirm_road_only_clears_the_flag(client, auth_headers, display_mode):
     uid = _user_id(client, auth_headers)
     ids = _seed(uid, 3)
     r = client.patch(
@@ -357,6 +365,143 @@ def test_bulk_from_default_confirm_road_only_clears_the_flag(client, auth_header
     assert (body["matched"], body["updated"], body["updated_ids"]) == (3, 0, [])
     assert body["default_sport_count"] == 0
     assert [_flag(i) for i in ids] == [False] * 3
+
+
+def _seed_many(user_id: str, n: int) -> None:
+    """``n`` community-eligible default-sport road rides, in one INSERT."""
+    db = SessionLocal()
+    try:
+        db.execute(
+            sa_text(
+                """
+                INSERT INTO activities (id, user_id, provider, source, sport, sport_is_default, name,
+                                        geometry_geojson, contribute_heatmap, activity_date, created_at)
+                SELECT gen_random_uuid(), :u, 'file', 'manual_upload', 'road', true, 'Ride ' || g,
+                       '{"type":"LineString","coordinates":[[-170.0,-50.0],[-170.01,-50.01]]}', true,
+                       now() - g * interval '1 hour', now()
+                  FROM generate_series(1, :n) g
+                """
+            ),
+            {"u": user_id, "n": n},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+@pytest.fixture
+def many_user(client, auth_headers):
+    uid = _user_id(client, auth_headers)
+    yield uid
+    db = SessionLocal()
+    try:
+        db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": uid})
+        db.commit()
+    finally:
+        db.close()
+
+
+def _user_rows(user_id: str) -> list[tuple[str, bool]]:
+    db = SessionLocal()
+    try:
+        return [
+            tuple(r)
+            for r in db.execute(
+                sa_text(
+                    "SELECT sport, sport_is_default FROM activities WHERE user_id = :u "
+                    "GROUP BY 1, 2 ORDER BY 1, 2"
+                ),
+                {"u": user_id},
+            ).fetchall()
+        ]
+    finally:
+        db.close()
+
+
+def test_bulk_from_default_large_set_is_one_statement_in_raw_mode(
+    client, auth_headers, many_user, triggers_on, monkeypatch
+):
+    """1,200 rides at once (a real archive): ONE UPDATE in ONE transaction, the
+    private file marked stale ONCE, ONE community rebuild request."""
+    from unittest.mock import MagicMock, patch
+
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    from app.services.run_jobs import reset_build_pmtiles_debounce
+
+    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
+    monkeypatch.setenv("BUILD_PMTILES_DEBOUNCE_S", "0")
+    reset_build_pmtiles_debounce()
+    _seed_many(many_user, 1200)
+    db = SessionLocal()
+    try:
+        rev = _data_rev(db, many_user)
+    finally:
+        db.close()
+
+    writes: list[str] = []
+    commits: list[int] = []
+
+    def _on_execute(_conn, _cur, statement, _params, _ctx, _many):
+        if "UPDATE activities" in statement:
+            writes.append(statement)
+
+    def _on_commit(_conn):
+        if writes:
+            commits.append(len(writes))
+
+    # On the Engine CLASS: whichever engine the request's session is bound to.
+    event.listen(Engine, "before_cursor_execute", _on_execute)
+    event.listen(Engine, "commit", _on_commit)
+    fake = MagicMock(return_value=True)
+    try:
+        with patch("app.services.run_jobs.trigger_build_pmtiles_job", fake):
+            r = client.patch(
+                "/me/activities/sport", headers=auth_headers, json={"from_default": True, "sport": "gravel"}
+            )
+    finally:
+        event.remove(Engine, "before_cursor_execute", _on_execute)
+        event.remove(Engine, "commit", _on_commit)
+        reset_build_pmtiles_debounce()
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["matched"], body["updated"], len(body["updated_ids"])) == (1200, 1200, 1200)
+    assert body["default_sport_count"] == 0
+    assert len(writes) == 1  # one statement for the whole set…
+    assert commits[:1] == [1]  # …committed once, right after it
+    fake.assert_called_once()
+    assert _user_rows(many_user) == [("gravel", False)]
+    db = SessionLocal()
+    try:
+        assert _data_rev(db, many_user) == rev + 1
+    finally:
+        db.close()
+    assert _status(client, auth_headers)["count"] == 0
+
+
+def test_bulk_from_default_too_many_in_matched_mode_is_refused_untouched(
+    client, auth_headers, many_user, monkeypatch
+):
+    """Matched mode re-writes heat per activity: beyond the id-list ceiling the
+    call is refused BEFORE anything is written — never a half-done set."""
+    from app.services.activity_sport import DEFAULT_SPORT_MATCHED_MAX
+
+    monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "matched")
+    _seed_many(many_user, DEFAULT_SPORT_MATCHED_MAX + 1)
+    r = client.patch(
+        "/me/activities/sport", headers=auth_headers, json={"from_default": True, "sport": "gravel"}
+    )
+    assert r.status_code == 422, r.text
+    assert "activity_ids" in r.json()["detail"]
+    assert _user_rows(many_user) == [("road", True)]
+    # Confirming them as road changes no sport → no heat re-write → allowed.
+    r = client.patch(
+        "/me/activities/sport", headers=auth_headers, json={"from_default": True, "sport": "road"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["default_sport_count"] == 0
+    assert _user_rows(many_user) == [("road", False)]
 
 
 @pytest.mark.parametrize(
@@ -511,30 +656,74 @@ def test_migration_0071_up_down_up_and_backfill():
     MigrationContext, Operations = _real_alembic()
     mod = _migration()
     assert (mod.revision, mod.down_revision) == ("0071", "0070")
-    uid = str(uuid.uuid4())
-    # (sport, source, provider, geometry_source) → expected flag after backfill
-    cases = {
-        "archive road": (("road", "manual_upload", "file", "polyline"), True),
-        "archive road, no geometry_source": (("road", "manual_upload", "file", None), True),
-        "archive gravel": (("gravel", "manual_upload", "file", "polyline"), False),
-        "dropzone road (sport picked)": (("road", "manual_upload", "file", "stream"), False),
-        "strava api road": (("road", "strava_api", "strava", "polyline"), False),
-        "promoted api twin": (("road", "manual_upload", "strava", "stream"), False),
-        "archive running": (("running", "manual_upload", "file", "polyline"), False),
+    t0 = datetime(2026, 5, 1, 9, 0, tzinfo=UTC)
+    users = {k: str(uuid.uuid4()) for k in "ABCDEF"}
+    uid = users["A"]
+    hour, day = timedelta(hours=1), timedelta(days=1)
+    # user → (status, created_at, updated_at, imported) of their archive
+    archives = {
+        "A": ("done", t0, t0 + 3 * hour, 5),
+        "C": ("failed", t0, t0 + 3 * hour, 0),
+        "D": ("done", t0, t0 + 5 * day, 5),  # requeued long after: window too wide
+        "E": ("done", t0, t0 + 3 * hour, 0),  # imported nothing
     }
+    # name → ((user, sport, source, provider, created_at), expected flag)
+    cases = {
+        "archive member road": (("A", "road", "manual_upload", "file", t0 + hour), True),
+        "archive member, last second": (("A", "road", "manual_upload", "file", t0 + 3 * hour), True),
+        "archive member gravel": (("A", "gravel", "manual_upload", "file", t0 + hour), False),
+        "archive member running": (("A", "running", "manual_upload", "file", t0 + hour), False),
+        "loose road before the archive": (("A", "road", "manual_upload", "file", t0 - 2 * day), False),
+        "loose road after the archive": (("A", "road", "manual_upload", "file", t0 + day), False),
+        "api twin promoted in the window": (("A", "road", "manual_upload", "strava", t0 + hour), False),
+        "strava api road in the window": (("A", "road", "strava_api", "strava", t0 + hour), False),
+        # /imports/files with "Route" picked, no archive at all: an explicit pick.
+        "explicit pick, no archive": (("B", "road", "manual_upload", "file", t0 + hour), False),
+        "failed archive": (("C", "road", "manual_upload", "file", t0 + hour), False),
+        "archive alive for days": (("D", "road", "manual_upload", "file", t0 + hour), False),
+        "archive that imported nothing": (("E", "road", "manual_upload", "file", t0 + hour), False),
+        "legacy queue member, csv road": (("F", "road", "manual_upload", "file", t0 + hour), True),
+        "legacy queue member, picked road": (("F", "road", "manual_upload", "file", t0 + 2 * hour), False),
+    }
+    queued = {"legacy queue member, csv road": "road", "legacy queue member, picked road": "pick:road"}
+    all_users = list(users.values())
     with engine.connect() as conn:
         trans = conn.begin()
         try:
-            conn.execute(sa_text("SET LOCAL lock_timeout = '20s'"))
+            # Take the table lock the migration needs up front, with a generous
+            # wait: the migration's own 5 s ``lock_timeout`` then never has to
+            # wait for anything (the lock is already ours) and cannot flake.
+            conn.execute(sa_text("SET LOCAL lock_timeout = '120s'"))
+            conn.execute(sa_text("LOCK TABLE activities IN ACCESS EXCLUSIVE MODE"))
             conn.execute(sa_text("UPDATE my_heatmap_config SET enabled = true WHERE id = 1"))
-            for name, ((sport, source, provider, gsrc), _exp) in cases.items():
+            for key, (status, created, updated, imported) in archives.items():
                 conn.execute(
                     sa_text(
-                        "INSERT INTO activities (id, user_id, provider, source, sport, name, geometry_source) "
-                        "VALUES (:id, :u, :p, :s, :sp, :n, :g)"
+                        "INSERT INTO pending_archives (id, user_id, source, storage_backend, bucket_key, "
+                        "fallback_sport, contribute_heatmap, status, attempts, imported, skipped, failed, "
+                        "created_at, updated_at) VALUES (:id, :u, 'manual_upload', 'local', 'k', 'unknown', "
+                        "true, :st, 1, :imp, 0, 0, :c, :up)"
                     ),
-                    {"id": str(uuid.uuid4()), "u": uid, "p": provider, "s": source, "sp": sport, "n": name, "g": gsrc},
+                    {"id": str(uuid.uuid4()), "u": users[key], "st": status, "imp": imported, "c": created, "up": updated},
                 )
+            for name, ((key, sport, source, provider, created), _exp) in cases.items():
+                aid = str(uuid.uuid4())
+                conn.execute(
+                    sa_text(
+                        "INSERT INTO activities (id, user_id, provider, source, sport, name, created_at) "
+                        "VALUES (:id, :u, :p, :s, :sp, :n, :c)"
+                    ),
+                    {"id": aid, "u": users[key], "p": provider, "s": source, "sp": sport, "n": name, "c": created},
+                )
+                if name in queued:
+                    conn.execute(
+                        sa_text(
+                            "INSERT INTO pending_archive_files (id, user_id, source, storage_backend, "
+                            "storage_key, sport, contribute_heatmap, status, attempts, activity_id) "
+                            "VALUES (:id, :u, 'manual_upload', 'local', 'k', :sp, true, 'done', 1, :a)"
+                        ),
+                        {"id": str(uuid.uuid4()), "u": users[key], "sp": queued[name], "a": aid},
+                    )
             rev = conn.execute(
                 sa_text("SELECT data_rev FROM my_heatmap_files WHERE user_id = :u"), {"u": uid}
             ).scalar()
@@ -542,13 +731,15 @@ def test_migration_0071_up_down_up_and_backfill():
             def flags() -> dict:
                 return dict(
                     conn.execute(
-                        sa_text("SELECT name, sport_is_default FROM activities WHERE user_id = :u"), {"u": uid}
+                        sa_text("SELECT name, sport_is_default FROM activities WHERE user_id = ANY(:u)"), {"u": all_users}
                     ).fetchall()
                 )
 
             def sports() -> dict:
                 return dict(
-                    conn.execute(sa_text("SELECT name, sport FROM activities WHERE user_id = :u"), {"u": uid}).fetchall()
+                    conn.execute(
+                        sa_text("SELECT name, sport FROM activities WHERE user_id = ANY(:u)"), {"u": all_users}
+                    ).fetchall()
                 )
 
             before = sports()

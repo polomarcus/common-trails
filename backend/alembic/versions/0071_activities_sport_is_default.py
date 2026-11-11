@@ -8,14 +8,29 @@ so the rider can be asked to classify those rides (and do it in bulk).
 
 * New rows: set at ingest by the sport cascade
   (``strava_utils.resolve_sport_cascade_with_default``).
-* Existing rows — conservative backfill: TRUE for ``sport = 'road'`` rows that
-  came from a file IMPORT (archive / zip / folder): ``source =
-  'manual_upload'``, ``provider = 'file'`` and ``geometry_source`` other than
-  ``'stream'``. Nothing links an activity back to its archive (the archive
-  tables keep no reliable activity id), but the single-file dropzone
-  (``/gpx/upload``, where the rider picks the sport) and the CLI folder
-  import stamp ``geometry_source = 'stream'`` while the archive drain and
-  ``/imports/files`` leave the column default — that is the discriminator.
+* Existing rows — conservative backfill. An explicit pick is never a default,
+  and loose files posted to ``/imports/files`` WITH the sport the rider chose
+  look exactly like archive members on the row itself (same ``source``,
+  ``provider`` and ``geometry_source``), so the row alone cannot tell them
+  apart. TRUE is therefore set only for ``sport = 'road'`` file activities
+  (``source = 'manual_upload'``, ``provider = 'file'``) that are TIED TO AN
+  ARCHIVE:
+
+  - whole-archive drain (``pending_archives``): the owner has a ``done``
+    archive that imported something, and ``activities.created_at`` falls
+    inside that archive's life — from its ``created_at`` (``/init``, before
+    the upload) to its ``updated_at`` (the terminal transition, stamped by the
+    drain) + 1 minute of clock margin. Archives whose life exceeds 48 h
+    (requeued long after, stuck) are ignored: a wide window would catch
+    unrelated uploads;
+  - legacy per-member queue (``pending_archive_files``): the exact
+    ``activity_id`` link, when the queued activities.csv sport was ``road``.
+
+  What this can still get wrong: a loose file the rider uploaded with "Route"
+  picked WHILE their own archive was being uploaded / drained (flagged by
+  mistake — one click confirms it), and archives outside the 48 h rule (not
+  flagged). No stored column says whether a past ``road`` came from a generic
+  "Ride" or from a FIT ``sub_sport = road``; both are flagged.
   ``sport`` itself is never touched.
 
 "Ma heatmap" files: the column is NOT in the staleness trigger's watched list
@@ -39,10 +54,24 @@ depends_on = None
 
 _TRIGGER = "activities_my_heatmap_upd"
 
-BACKFILL_WHERE = (
-    "sport = 'road' AND source = 'manual_upload' AND provider = 'file' "
-    "AND geometry_source IS DISTINCT FROM 'stream'"
-)
+BACKFILL_WHERE = """
+    a.sport = 'road' AND a.source = 'manual_upload' AND a.provider = 'file'
+    AND (
+      EXISTS (
+        SELECT 1 FROM pending_archives pa
+         WHERE pa.user_id = a.user_id
+           AND pa.status = 'done'
+           AND pa.imported > 0
+           AND pa.updated_at - pa.created_at <= interval '48 hours'
+           AND a.created_at >= pa.created_at
+           AND a.created_at <= pa.updated_at + interval '1 minute'
+      )
+      OR EXISTS (
+        SELECT 1 FROM pending_archive_files f
+         WHERE f.activity_id = a.id AND f.status = 'done' AND f.sport = 'road'
+      )
+    )
+"""
 
 
 def _set_update_trigger(enabled: bool) -> None:
@@ -72,7 +101,7 @@ def upgrade() -> None:
         "boolean NOT NULL DEFAULT false"
     )
     _set_update_trigger(False)
-    op.execute(f"UPDATE activities SET sport_is_default = true WHERE {BACKFILL_WHERE}")
+    op.execute(f"UPDATE activities a SET sport_is_default = true WHERE {BACKFILL_WHERE}")
     _set_update_trigger(True)
     # Count + list of a rider's default-sport activities (GET
     # /me/activities/default-sport, on every /map visit): tiny partial index.
