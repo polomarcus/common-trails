@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enrich DFCI/trail cache JSON files with DEM-derived slope_grade.
+"""Enrich the DFCI cache JSON file with DEM-derived slope_grade.
 
 Downloads SRTM tiles (30m or 90m resolution) from Mapzen's public S3 bucket,
 caches them locally, and computes slope_grade for each edge based on
@@ -39,7 +39,6 @@ SRTM_SAMPLES = 1201  # SRTM3; use 3601 for SRTM1
 # Cache file locations
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "backend", "data")
 DFCI_CACHE = os.path.join(DATA_DIR, "dfci_ign_edges.json")
-TRAIL_CACHE = os.path.join(DATA_DIR, "trail_edges.json")
 
 
 # ── SRTM tile reader ─────────────────────────────────────────────────────────
@@ -206,13 +205,11 @@ def enrich_file(path: str, label: str) -> None:
 
 
 def main() -> None:
-    print("=== Enriching DFCI/trail cache files with SRTM DEM slopes ===")
+    print("=== Enriching the DFCI cache file with SRTM DEM slopes ===")
     print(f"SRTM cache: {SRTM_CACHE_DIR}")
     print()
 
     enrich_file(DFCI_CACHE, "DFCI IGN")
-    print()
-    enrich_file(TRAIL_CACHE, "Trails")
 
     print()
     print("Done. Cache files now contain slope_grade for each edge.")

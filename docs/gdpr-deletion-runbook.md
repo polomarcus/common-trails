@@ -124,8 +124,7 @@ COMMIT;
 ```
 
 Note: `pass_count` on surviving heat_cells is not per-user attributable
-(known approximation on a legacy layer; disappears entirely on the next full
-`rebuild_heatmap`).
+(known approximation on a legacy layer).
 
 ## 4. Delete the user's private rows
 

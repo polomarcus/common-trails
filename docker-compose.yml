@@ -48,7 +48,6 @@ services:
       # being removed; overridable only until that code is gone).
       HEATMAP_DISPLAY_SOURCE: ${HEATMAP_DISPLAY_SOURCE:-raw}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
-      ROUTING_EXTERNAL: ${ROUTING_EXTERNAL:-false}
       SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
       SKIP_OSM_ENRICHMENT: ${SKIP_OSM_ENRICHMENT:-true}
       ENABLE_GARMIN_INTEGRATION: ${ENABLE_GARMIN_INTEGRATION:-true}

@@ -55,11 +55,11 @@ The reader should be able to read the code, hit a surprise, and find the comment
 Every script in `backend/app/cli/` starts with a docstring covering:
 
 1. **What it does** in 2-3 sentences.
-2. **Usage** examples (`python -m app.cli.import_osm_roads occitanie --no-download`).
+2. **Usage** examples (`python -m app.cli.merge_dup_accounts --apply`).
 3. **Idempotency claim** — "safe to re-run; ON CONFLICT DO NOTHING" or "destructive, requires CONFIRM=YES".
 4. **Crouzet invariant** statement when relevant (*"never modifies stored GPX coords; only writes `elevation_gain_m`"*).
 
-See [`backend/app/cli/recompute_elevation_gain.py`](../backend/app/cli/recompute_elevation_gain.py) for the canonical shape.
+See [`backend/app/cli/merge_dup_accounts.py`](../backend/app/cli/merge_dup_accounts.py) for the canonical shape.
 
 ### Decision records
 

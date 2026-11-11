@@ -10,9 +10,7 @@ os.environ["DEM_PROVIDER"] = "none"  # no HTTP calls in tests — DEM tests monk
 os.environ["OVERPASS_ENABLED"] = "false"  # no HTTP calls in tests — overpass tests monkeypatch back
 os.environ["DFCI_ENABLED"] = "false"  # no Overpass calls for DFCI in tests
 os.environ["DFCI_HERAULT_ENABLED"] = "false"  # no API calls for DFCI Hérault in tests
-os.environ["TRAILS_ENABLED"] = "false"  # no Overpass/cache calls for trails in tests
 os.environ["SKIP_BACKGROUND_LOAD"] = "true"  # skip entire _background_data_load in TestClient lifespan
-os.environ["ROUTING_EXTERNAL"] = "false"  # no OSRM/BRouter calls in tests
 os.environ["RATELIMIT_ENABLED"] = "false"  # disable rate limiting in tests (test_security.py re-enables explicitly)
 os.environ.setdefault("JWT_SECRET", "test-secret-do-not-use-in-prod")
 os.environ.setdefault(

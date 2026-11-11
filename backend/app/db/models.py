@@ -523,7 +523,7 @@ class HeatEdgeContributor(Base):
     PK is `(edge_key, user_id_hash, activity_id)` since migration 0052.
     The activity_id triple lets us distinguish "same user, same edge,
     different activity" (real new pass — bump pass_count) from "same
-    activity re-ingested" (rebuild_heatmap / fixture bootstrap path —
+    activity re-ingested" (full rebuild / fixture bootstrap path —
     pass_count must stay put). See migration 0052 for the why.
     """
     __tablename__ = "heat_edge_contributors"
@@ -650,7 +650,7 @@ class OsmRoadEdge(Base):
 
     Migration 0056 (substrate slim) recreated this table PARTITIONED
     ``BY LIST (region)`` — partitions are created on demand by
-    ``app.cli.import_osm_roads`` (one per Geofabrik region) plus a DEFAULT
+    the OSM import CLI (removed with the matched pipeline; one per Geofabrik region) plus a DEFAULT
     partition for ``region='adhoc'`` rows (tests, dev-only Overpass fetch,
     fixture loads). Same migration moved the full-way polyline to the
     ``osm_ways`` side-table (was duplicated ×13.5 per segment = 15 GB),
@@ -703,7 +703,7 @@ class OsmWay(Base):
 class OsmImportMeta(Base):
     """Per-region OSM import bookkeeping (migration 0056).
 
-    Written by the import guard in ``app.cli.import_osm_roads`` after a
+    Was written by the import guard of the (removed) OSM import CLI after a
     successful region import; the >60 %-of-previous-count sanity check reads
     it. Replaces the dropped per-row ``fetched_at``.
     """

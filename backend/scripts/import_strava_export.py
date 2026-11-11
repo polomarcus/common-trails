@@ -246,7 +246,7 @@ def main():
     elapsed = time.time() - t0
     log.info("Done: %d imported, %d skipped, %d failed in %.0fs (%.1f files/s)",
              imported, skipped, failed, elapsed, total / elapsed if elapsed > 0 else 0)
-    log.info("Heatmap computation was skipped — run rebuild_heatmap job to generate edges.")
+    log.info("Heatmap computation was skipped.")
     log.info(
         "Display artefacts were skipped during the loop. Rebuild the heatmap "
         "PMTiles once with `make pmtiles` (or `python -m app.jobs.build_pmtiles`) "

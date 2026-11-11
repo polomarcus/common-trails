@@ -9,12 +9,10 @@ stores the GPX internal <name>, NOT the CSV Activity Name, so this must
 read the CSV and key on Activity ID → activities.provider_activity_id.
 
 Only refines CYCLING rides currently classified 'road' → gravel/mtb;
-never touches running/other. Run AFTER import, BEFORE rebuild_heatmap:
+never touches running/other. Run AFTER import:
 
     docker compose run --rm --no-deps -v "$PWD/data:/app/data:ro" \
         backend python -m scripts.reclassify_strava_sport /app/data/strava-export
-
-Then: make heatmap-rebuild (regenerates heat_edges with the new sports).
 """
 import csv
 import os

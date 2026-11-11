@@ -555,7 +555,6 @@ const en: Translations = {
   'admin.stat.deadEnds': 'dead-ends',
   'admin.stat.pctDeadEnds': '% dead-ends',
   'admin.stat.dfciTracks': 'DFCI tracks',
-  'admin.stat.markedTrails': 'marked trails',
   'admin.stat.size': 'size',
   'admin.provider.gpxUpload': 'GPX upload',
   'admin.col.name': 'Name',

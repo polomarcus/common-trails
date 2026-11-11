@@ -60,7 +60,6 @@ interface DashboardData {
   };
   network: {
     dfci_edges: number;
-    trail_edges: number;
   };
   database: {
     size: string;
@@ -554,7 +553,6 @@ export default function AdminPage() {
               <Card title={t('admin.card.network')}>
                 <div style={{ display: 'flex', gap: 24, justifyContent: 'center' }}>
                   <Stat label={t('admin.stat.dfciTracks')} value={data.network.dfci_edges} color="#cc0000" />
-                  <Stat label={t('admin.stat.markedTrails')} value={data.network.trail_edges} color="#388e3c" />
                 </div>
               </Card>
               <Card title={t('admin.card.database')}>
