@@ -791,6 +791,8 @@ def test_deploy_flag_off_makes_no_bucket_or_iam_call(tmp_path):
     assert "my-heatmap" not in calls.replace("/internal/my-heatmap/rebuild", "")
     assert "storage buckets create" not in calls
     assert "storage buckets add-iam-policy-binding" not in calls
+    assert "tasks queues add-iam-policy-binding" not in calls
+    assert "iam service-accounts add-iam-policy-binding" not in calls
 
 
 def test_deploy_flag_on_aborts_on_unverified_bucket(tmp_path):
