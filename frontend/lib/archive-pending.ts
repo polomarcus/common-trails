@@ -3,7 +3,7 @@
  *
  * The drain runs in a background job (minutes to ~1 h for a big export), so
  * right after a successful upload /map still has 0 activities. Without this
- * marker the empty-state card told the rider to « Importez vos traces » —
+ * marker the empty-state card told the rider to « Importe tes traces » —
  * which they had just done. The dropzone stamps the time; for
  * ARCHIVE_PENDING_WINDOW_MS afterwards /map shows a "processing" variant.
  *

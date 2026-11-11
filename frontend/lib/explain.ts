@@ -5,12 +5,12 @@ const SENTENCES: Record<string, string> = {
   heatmap_trail: "Sentiers balisés ({trail_types}) + heatmap {heat_sport} ({heat_pct}%).",
   heatmap_trail_official: "Itinéraire officiel {trail_types} — heatmap {heat_sport} ({heat_pct}%).",
   heatmap_detour: "Détour +{detour_pct}% pour suivre la heatmap {heat_sport} ({heat_pct}%).",
-  personal: "Construit avec vos traces personnelles.",
+  personal: "Construit avec tes traces personnelles.",
   trail: "Suit un sentier balisé.",
   trail_official: "Suit l'itinéraire officiel {trail_types}.",
   direct: "Itinéraire le plus direct ({surface_summary}).",
   no_data: "Pas de données communautaires — tracé de repli.",
-  no_graph_path: "Aucun chemin routable trouvé. Ajoutez un point intermédiaire.",
+  no_graph_path: "Aucun chemin routable trouvé. Ajoute un point intermédiaire.",
   no_heatmap: "Pas de données heatmap dans cette zone.",
 };
 

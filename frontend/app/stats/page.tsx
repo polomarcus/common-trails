@@ -377,7 +377,7 @@ export default function StatsPage() {
                       if (rec.category === 'longest') {
                         return (
                           <>
-                            <strong>&laquo;{rec.label}&raquo;</strong> est votre plus long{' '}
+                            <strong>&laquo;{rec.label}&raquo;</strong> est ton plus long{' '}
                             {sportLabel} avec <strong>{rec.formatted}</strong>
                           </>
                         );
@@ -385,7 +385,7 @@ export default function StatsPage() {
                       if (rec.category === 'most_elevation') {
                         return (
                           <>
-                            <strong>&laquo;{rec.label}&raquo;</strong> est votre {sportLabel} avec le plus de D+ :{' '}
+                            <strong>&laquo;{rec.label}&raquo;</strong> est ta sortie {sportLabel} avec le plus de D+ :{' '}
                             <strong>{rec.formatted}</strong>
                           </>
                         );
@@ -393,7 +393,7 @@ export default function StatsPage() {
                       if (rec.category === 'fastest') {
                         return (
                           <>
-                            <strong>&laquo;{rec.label}&raquo;</strong> est votre meilleur {sportLabel} avec une moyenne de{' '}
+                            <strong>&laquo;{rec.label}&raquo;</strong> est ton meilleur {sportLabel} avec une moyenne de{' '}
                             <strong>{rec.formatted}</strong>
                           </>
                         );

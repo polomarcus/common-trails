@@ -145,7 +145,7 @@ export default function ContributionDropzone() {
         onProgress: (f) => { setPhase('uploading'); setFraction(f); },
         onStage: (s) => setPhase(phaseForStage(s)),
       });
-      // /map then shows "processing…" instead of « Importez vos traces »
+      // /map then shows "processing…" instead of « Importe tes traces »
       // while the background drain runs.
       markArchivePending();
       setPhase('done');

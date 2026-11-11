@@ -15,7 +15,7 @@ import { requestMagicLink } from '@/lib/email-auth';
  *
  * `intro` is the host's heading/pitch above the form ("Créer un compte…"). It
  * is rendered HERE so it disappears once the link is sent: the card then shows
- * only "Vérifiez votre boîte mail" (Paul, 2026-11-11 — the leftover pitch
+ * only "Vérifie ta boîte mail" (Paul, 2026-11-11 — the leftover pitch
  * above the confirmation read as clutter).
  */
 export default function EmailLoginForm({ variant = 'dark', intro }: {

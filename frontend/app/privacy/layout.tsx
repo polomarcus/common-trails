@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 const TITLE = 'Politique de confidentialité — Chemins communs';
-const DESCRIPTION = 'Comment Chemins Communs protège vos données personnelles et vos traces GPS.';
+const DESCRIPTION = 'Comment Chemins Communs protège tes données personnelles et tes traces GPS.';
 
 export const metadata: Metadata = {
   title: 'Politique de confidentialité',
