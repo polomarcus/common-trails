@@ -1,17 +1,15 @@
-"""GPX upload API — fast async upload with background heatmap computation.
+"""GPX upload API — fast upload, community map refreshed out-of-band.
 
 POST /gpx/upload — uploads a single GPX file.
-Activity is stored immediately (fast), heatmap edges computed in background.
 
-Production path (Cloud Run + Cloud Tasks):
+Production path (Cloud Run):
     1. Parse GPX, ``ingest_activity(skip_heat_computation=True)`` — stores
-       the Activity row, no heat-edge work yet (~200 ms).
-    2. ``cloud_tasks.enqueue_heat_compute(activity_id, user_id)`` — pushes
-       a task to the ``heat-compute`` queue, which calls back into
-       ``POST /internal/ingest/heat`` to do the 5–30 s work.
+       the Activity row (~200 ms).
+    2. ``cloud_tasks.request_community_rebuild()`` — asks for the debounced
+       PMTiles rebuild (one constant-named Cloud Task: a burst of uploads
+       collapses to a single rebuild) so the new trace reaches the map.
 
-TEST_MODE path: heat computation runs inline so existing tests
-(``test_pending_bug_fixes.py``, ``test_heatmap.py``) keep their
+TEST_MODE path: the ingest runs inline and nothing is enqueued, so tests keep
 deterministic single-request semantics.
 """
 import logging
@@ -27,7 +25,7 @@ from app.config import VALID_SPORTS
 from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
-from app.services.cloud_tasks import enqueue_heat_compute
+from app.services.cloud_tasks import request_community_rebuild
 from app.services.gpx import _sanitize_track_type
 from app.services.gpx_archive import archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
@@ -235,7 +233,8 @@ async def gpx_upload(
             heatmap_status="done",
         )
 
-    # Production: store activity immediately, heatmap via Cloud Tasks.
+    # Production: store the activity immediately; the community map rebuild
+    # is requested below, out-of-band.
     # Sync DB calls offloaded to threadpool (same reason as TEST_MODE above).
     result = await run_in_threadpool(
         ingest_service.ingest_activity,
@@ -261,23 +260,25 @@ async def gpx_upload(
             backup_gpx, current_user.user_id, parsed["file_hash"], content,
         )
 
-    # Enqueue heat-compute Cloud Task. The handler at /internal/ingest/heat
-    # will load the activity row + run _update_heat_edges off the request
-    # path. Heatmap_status reflects the enqueue outcome:
-    #   queued — Cloud Task created, work runs out-of-band
-    #   inline — Cloud Tasks not configured, ran in this process
-    #   skipped — user opted out
-    #   failed — enqueue raised; activity is stored but heat skipped
+    # Ask for the community map (static PMTiles) to be rebuilt with the new
+    # trace — the debounced ``artefact-rebuild`` Cloud Task, requested directly
+    # (the per-activity heat-compute task that used to sit in between is gone).
+    # heatmap_status reflects the outcome:
+    #   queued — a rebuild is pending (task created, or one was already queued)
+    #   inline — Cloud Tasks not configured (dev): nothing to enqueue
+    #   skipped — not community-eligible (opt-out, undated) or nothing new
+    #   failed — the request failed; the activity is stored, the display
+    #            catches up on the next rebuild
     heatmap_status = "skipped"
     response_status = result["status"]
-    if community_ok and result["status"] in ("created", "promoted"):
-        heatmap_status = enqueue_heat_compute(
-            activity_id=result["activity_id"],
-            user_id=current_user.user_id,
-        )
-        # Frontend can poll /me/activities to see the heatmap arrive; we
-        # surface "processing" when the task is queued so the UI can show
-        # an indeterminate spinner instead of a final "done" badge.
+    if (
+        community_ok
+        and result["status"] in ("created", "promoted")
+        and parsed.get("activity_date") is not None
+    ):
+        heatmap_status = request_community_rebuild()
+        # We surface "processing" while the rebuild is pending so the UI can
+        # show an indeterminate spinner instead of a final "done" badge.
         if heatmap_status == "queued":
             response_status = "processing"
 

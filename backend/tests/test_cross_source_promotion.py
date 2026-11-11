@@ -167,21 +167,16 @@ def test_manual_then_strava_skips_without_double_count():
     assert geom == _MANUAL_GEO
 
 
-@pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
 def test_async_promotion_adopts_manual_contribute_intent():
-    """ASYNC path (skip_heat_computation=True → enqueue): promotion must adopt
-    the INCOMING upload's contribute_heatmap intent, not the stale twin's.
+    """ASYNC path (skip_heat_computation=True): promotion must adopt the
+    INCOMING upload's contribute_heatmap intent, not the stale twin's.
 
     Regression: the pre-existing strava_api twin is opted OUT
-    (contribute_heatmap=False) while the manual upload intends IN (True). On
-    the async path the enqueued ``process_heat_compute`` re-reads the row's
-    ``contribute_heatmap`` from the DB; if promotion left it False the promoted
-    ride would silently never reach the community. FAILS on the pre-fix code
-    (``_promote_activity_to_community`` didn't set contribute_heatmap → noop),
-    PASSES after.
+    (contribute_heatmap=False) while the manual upload intends IN (True). The
+    community build reads the row's ``contribute_heatmap`` from the DB; if
+    promotion left it False the promoted ride would silently never reach the
+    community.
     """
-    from app.api.internal_ingest import process_heat_compute
-
     # 1. Pre-existing Strava-API twin, opted OUT, stored WITHOUT heat (async).
     r1 = ingest_activity(_USER, {
         "provider": "strava", "provider_activity_id": "xsrc-async-strava",
@@ -191,10 +186,8 @@ def test_async_promotion_adopts_manual_contribute_intent():
     }, contribute_heatmap=False, skip_heat_computation=True)
     assert r1["status"] == "created"
     assert _contribute_of(r1["activity_id"]) is False
-    assert _count_edges() == 0
 
-    # 2. Manual upload of the SAME ride, opted IN, via the ASYNC path
-    #    (skip_heat_computation=True → nothing computed inline, just promoted).
+    # 2. Manual upload of the SAME ride, opted IN, via the ASYNC path.
     r2 = ingest_activity(_USER, {
         "provider": "file", "provider_activity_id": None,
         "source": COMMUNITY_SOURCE, "sport": "mtb",
@@ -204,16 +197,8 @@ def test_async_promotion_adopts_manual_contribute_intent():
     }, contribute_heatmap=True, skip_heat_computation=True)
     assert r2["status"] == "promoted"
     assert r2["activity_id"] == r1["activity_id"]
-    assert r2["edges_indexed"] == 0, "async path defers heat to the enqueued task"
-    assert _count_edges() == 0, "no inline heat on the async path yet"
     # The promoted row adopts the manual upload's opt-IN intent.
     assert _contribute_of(r1["activity_id"]) is True
-
-    # 3. The enqueued task runs — re-reading contribute_heatmap from the DB.
-    res = process_heat_compute(r1["activity_id"], _USER)
-    assert res["status"] == "ok", f"promoted ride must reach the community; got {res}"
-    assert res["edges_indexed"] > 0
-    assert _count_edges() > 0
 
 
 def test_promotion_then_reupload_is_idempotent():

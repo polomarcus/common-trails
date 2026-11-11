@@ -4,7 +4,7 @@ renders precise GPS traces straight from ``activities``, and the matcher
 substrate (``osm_road_edges`` / ``osm_ways``) is DROPPED in prod.
 
 These drive the REAL handlers (``ingest.ingest_activity``,
-``internal_ingest.process_heat_compute``, ``activity_deletion.delete_user_activity``)
+``activity_deletion.delete_user_activity``)
 — no inline mirrors.
 
 FAIL on the pre-change code:
@@ -136,28 +136,6 @@ class TestRawSkipsMatchedIngest:
         assert promo["status"] == "promoted", "should hit the cross-source promote path"
         assert promo["edges_indexed"] == 0, "raw mode must not run the matched heat path on promote"
         assert _count_edges() == before, "raw promote must not write heat_edges"
-
-    def test_raw_process_heat_compute_is_noop(self, monkeypatch):
-        """The prod async chokepoint (single-GPX / /imports/files async both flow
-        through process_heat_compute). Under raw it writes no heat_edges."""
-        from app.api.internal_ingest import process_heat_compute
-
-        # Store the activity in matched-off state via skip_heat_computation so no
-        # inline heat runs; then invoke the async compute under raw.
-        monkeypatch.setenv("HEATMAP_DISPLAY_SOURCE", "raw")
-        stored = ingest_activity(_USER, {
-            "provider": "file", "provider_activity_id": None,
-            "source": COMMUNITY_SOURCE, "sport": "mtb",
-            "geometry_geojson": _geo(), "distance_m": 5000,
-            "file_hash": "raw-phc-manual",
-            "activity_date": datetime(2025, 6, 4, 8, 0, tzinfo=UTC),
-        }, contribute_heatmap=True, skip_heat_computation=True)
-        assert stored["status"] == "created"
-        before = _count_edges()
-        r = process_heat_compute(stored["activity_id"], _USER)
-        assert r["edges_indexed"] == 0, "raw process_heat_compute must not run matched heat"
-        assert _count_edges() == before, "raw process_heat_compute must not write heat_edges"
-
 
 class _AbsentHeatTablesExecute:
     """Instance-level ``Session.execute`` shim that makes the heat tables look

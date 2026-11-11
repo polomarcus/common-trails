@@ -1,25 +1,29 @@
 """Cloud Tasks client — enqueue background jobs for the API service.
 
-Used by the synchronous GPX upload path to defer heat-edge computation off
-the user-facing HTTP request. Cloud Run charges for the full request
-duration, so a 5–30 s heat compute on every upload is real money.
+Two kinds of tasks, both POSTed to the worker service with an OIDC token:
+
+* the debounced community-artefact rebuild (``enqueue_artefact_rebuild`` /
+  ``request_community_rebuild``) — one constant task name, so a burst of
+  uploads collapses to a single PMTiles rebuild;
+* the per-request heatmap export build (``enqueue_export_build``).
 
 Behavior:
-- TEST_MODE / no Cloud Tasks env config → execute the work synchronously
-  (so dev + tests behave exactly like the legacy sync path).
-- Production → POST a Cloud Task to the configured queue. The task body is
-  the same shape the internal endpoint expects.
+- TEST_MODE / no Cloud Tasks env config → nothing is enqueued (``"inline"``).
+- Production → a Cloud Task is created on the configured queue.
 
 Env vars:
-- ``CLOUD_TASKS_QUEUE`` — fully-qualified queue name
-  (``projects/{p}/locations/{r}/queues/{q}``) **or** the bare queue id
-  (in which case ``GOOGLE_CLOUD_PROJECT`` and ``CLOUD_TASKS_LOCATION``
-  must be set so we can build the full path).
-- ``INTERNAL_HEAT_HANDLER_URL`` — full HTTPS URL the task should hit, e.g.
-  ``https://common-trails-api-prod-xxx.run.app/internal/ingest/heat``.
-- ``CLOUD_TASKS_INVOKER_SA`` — service-account email used as the OIDC
-  audience identity. Cloud Tasks signs the OIDC token; the API verifies
-  the signature + audience on receipt.
+- ``CLOUD_TASKS_ARTEFACT_QUEUE`` / ``INTERNAL_ARTEFACT_HANDLER_URL`` and
+  ``CLOUD_TASKS_EXPORT_QUEUE`` / ``INTERNAL_EXPORT_BUILD_HANDLER_URL`` — queue
+  (fully-qualified ``projects/{p}/locations/{r}/queues/{q}`` **or** a bare
+  queue id, in which case ``GCP_PROJECT`` and ``CLOUD_TASKS_LOCATION`` must be
+  set) and the full HTTPS handler URL for each task type.
+- ``CLOUD_TASKS_INVOKER_SA`` — service-account email Cloud Tasks signs the
+  OIDC token as; the receiver verifies signature + audience.
+
+(The per-activity ``heat-compute`` task — ``enqueue_heat_compute`` →
+``/internal/ingest/heat`` — was removed with the matched pipeline: uploads now
+request the rebuild directly. ``CLOUD_TASKS_QUEUE`` / ``INTERNAL_HEAT_HANDLER_URL``
+are no longer read here.)
 """
 from __future__ import annotations
 
@@ -31,131 +35,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _is_enabled() -> bool:
-    """True iff Cloud Tasks is configured AND we are not in TEST_MODE."""
-    if os.environ.get("TEST_MODE", "false").lower() == "true":
-        return False
-    if not os.environ.get("CLOUD_TASKS_QUEUE"):
-        return False
-    return bool(os.environ.get("INTERNAL_HEAT_HANDLER_URL"))
-
-
-def _resolve_queue_path() -> str:
-    """Return the fully-qualified queue path for the Cloud Tasks API.
-
-    Accepts either a full ``projects/.../queues/...`` path or a bare queue
-    id; in the latter case we reconstruct the path from
-    ``GOOGLE_CLOUD_PROJECT`` and ``CLOUD_TASKS_LOCATION``.
-    """
-    raw = os.environ.get("CLOUD_TASKS_QUEUE", "").strip()
-    if not raw:
-        raise RuntimeError("CLOUD_TASKS_QUEUE not set")
-    if raw.startswith("projects/"):
-        return raw
-    # Prefer GCP_PROJECT (the var the prod deploy actually sets) with a
-    # GOOGLE_CLOUD_PROJECT fallback. deploy-prod.sh's env-file sets GCP_PROJECT
-    # but NOT GOOGLE_CLOUD_PROJECT, so reading only the latter made every bare
-    # queue path raise → artefact-rebuild "failed".
-    project = (os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
-    location = os.environ.get("CLOUD_TASKS_LOCATION", "").strip()
-    if not project or not location:
-        raise RuntimeError(
-            "CLOUD_TASKS_QUEUE is bare; set GCP_PROJECT and "
-            "CLOUD_TASKS_LOCATION or pass a fully-qualified queue path"
-        )
-    return f"projects/{project}/locations/{location}/queues/{raw}"
-
-
-def _enqueue_via_sdk(payload: dict[str, Any]) -> None:
-    """Create a Cloud Task with an OIDC-authenticated HTTP target.
-
-    Imports the SDK lazily so dev / test environments without the
-    ``google-cloud-tasks`` extra don't fail to import this module.
-    """
-    from google.cloud import tasks_v2  # type: ignore[attr-defined]
-
-    handler_url = os.environ["INTERNAL_HEAT_HANDLER_URL"]
-    invoker_sa = os.environ.get("CLOUD_TASKS_INVOKER_SA", "").strip()
-    queue_path = _resolve_queue_path()
-
-    client = tasks_v2.CloudTasksClient()
-    body = json.dumps(payload).encode("utf-8")
-
-    task: dict[str, Any] = {
-        "http_request": {
-            "http_method": tasks_v2.HttpMethod.POST,
-            "url": handler_url,
-            "headers": {"Content-Type": "application/json"},
-            "body": body,
-        }
-    }
-    if invoker_sa:
-        # OIDC token: Cloud Tasks signs as ``invoker_sa`` with audience =
-        # the handler URL. The receiver verifies signature + audience.
-        task["http_request"]["oidc_token"] = {
-            "service_account_email": invoker_sa,
-            "audience": handler_url,
-        }
-
-    client.create_task(request={"parent": queue_path, "task": task})
-
-
-def _run_inline(payload: dict[str, Any]) -> None:
-    """Execute the heat-compute work in-process (TEST_MODE / dev fallback).
-
-    Mirrors the real handler so the dev path is identical end-to-end.
-    """
-    from app.api.internal_ingest import process_heat_compute
-
-    process_heat_compute(payload["activity_id"], payload["user_id"])
-
-
-def enqueue_heat_compute(activity_id: str, user_id: str) -> str:
-    """Enqueue (or run inline) a heat-edge computation task for an activity.
-
-    Returns:
-        ``"queued"`` if a Cloud Task was created, ``"inline"`` if executed
-        synchronously (TEST_MODE or unconfigured), ``"failed"`` if the
-        enqueue raised — the activity is still stored, the heatmap
-        contribution is just deferred to the next manual rebuild.
-    """
-    payload = {"activity_id": activity_id, "user_id": user_id}
-
-    if not _is_enabled():
-        try:
-            _run_inline(payload)
-        except Exception:
-            logger.warning(
-                "Inline heat-compute failed for activity=%s user=%s",
-                activity_id, user_id, exc_info=True,
-            )
-            return "failed"
-        return "inline"
-
-    try:
-        _enqueue_via_sdk(payload)
-        logger.info(
-            "Cloud Tasks enqueue OK activity=%s user=%s",
-            activity_id, user_id,
-        )
-        return "queued"
-    except Exception:
-        logger.warning(
-            "Cloud Tasks enqueue FAILED activity=%s user=%s — "
-            "activity stored, heat compute skipped",
-            activity_id, user_id, exc_info=True,
-        )
-        return "failed"
-
-
-# ── Matview + artefact rebuild dispatch ──────────────────────────────
+# ── Artefact rebuild dispatch ────────────────────────────────────────
 #
-# The post-ingest rebuilds (matview refresh, PMTiles rebuild, .fgraph
-# rebuild) use the SAME enqueue pattern as heat-compute, with two key
-# differences:
+# The post-ingest PMTiles rebuild is a Cloud Task with:
 #
-#   1. **Different queue + handler URL** per task type. The receiving
-#      endpoint is on the same api-prod service; only the path differs.
+#   1. **Its own queue + handler URL** (the worker service's
+#      ``/internal/artefacts/rebuild``).
 #   2. **Constant ``task_name``** so Cloud Tasks dedupes new enqueues
 #      onto the same task. A burst of 50 ingests in 5 min → exactly
 #      ONE rebuild fires (after the schedule time of the first task).
@@ -257,21 +142,28 @@ def _enqueue_with_const_name(
 
 
 def _is_enabled_for_queue(queue_env: str, handler_url_env: str) -> bool:
-    """Same gate as ``_is_enabled`` but for an arbitrary queue+handler pair."""
+    """True iff the queue+handler pair is configured AND we are not in TEST_MODE."""
     if os.environ.get("TEST_MODE", "false").lower() == "true":
         return False
     return bool(os.environ.get(queue_env)) and bool(os.environ.get(handler_url_env))
 
 
 def _resolve_queue_path_for(queue_env: str) -> str:
-    """Same as ``_resolve_queue_path`` but for an arbitrary queue env var."""
+    """Return the fully-qualified queue path for the Cloud Tasks API.
+
+    Accepts either a full ``projects/.../queues/...`` path or a bare queue
+    id; in the latter case the path is rebuilt from ``GCP_PROJECT`` and
+    ``CLOUD_TASKS_LOCATION``.
+    """
     raw = os.environ.get(queue_env, "").strip()
     if not raw:
         raise RuntimeError(f"{queue_env} not set")
     if raw.startswith("projects/"):
         return raw
-    # GCP_PROJECT (set by the prod deploy) with a GOOGLE_CLOUD_PROJECT fallback —
-    # see _resolve_queue_path above.
+    # Prefer GCP_PROJECT (the var the prod deploy actually sets) with a
+    # GOOGLE_CLOUD_PROJECT fallback. deploy-prod.sh's env-file sets GCP_PROJECT
+    # but NOT GOOGLE_CLOUD_PROJECT, so reading only the latter made every bare
+    # queue path raise → artefact-rebuild "failed".
     project = (os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
     location = os.environ.get("CLOUD_TASKS_LOCATION", "").strip()
     if not project or not location:
@@ -295,6 +187,29 @@ def enqueue_artefact_rebuild() -> str:
         task_name="artefact-rebuild",
         schedule_seconds=int(os.environ.get("ARTEFACT_REBUILD_SCHEDULE_S", "300")),
     )
+
+
+def request_community_rebuild() -> str:
+    """Ask for the community PMTiles to be rebuilt after an upload. Never raises.
+
+    This is what the upload paths (``/gpx/upload``, ``/imports/files``) call
+    once a community-eligible activity is stored. It is the SAME debounced
+    ``artefact-rebuild`` task the retired ``/internal/ingest/heat`` hop used to
+    enqueue — the per-activity heat-compute task in between is gone, the
+    outcome in prod is identical.
+
+    Returns the value surfaced as ``heatmap_status`` to the client:
+    ``"queued"`` (task created, or already pending — a deduped enqueue IS a
+    pending rebuild), ``"inline"`` (Cloud Tasks not configured: dev / tests,
+    nothing to do), ``"failed"`` (enqueue raised or was rejected — the
+    activity is stored, the display catches up on the next rebuild).
+    """
+    try:
+        outcome = enqueue_artefact_rebuild()
+    except Exception:
+        logger.warning("community rebuild request failed", exc_info=True)
+        return "failed"
+    return "queued" if outcome == "deduped" else outcome
 
 
 # ── Heatmap export build (Phase 3 — PRD #391) ────────────────────────
