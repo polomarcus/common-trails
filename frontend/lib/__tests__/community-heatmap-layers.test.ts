@@ -45,8 +45,16 @@ import {
   LINE_CRISP_MINZOOM,
   HEAT_OPACITY_RAMP,
   LINE_OPACITY_RAMP,
+  GLOW_OPACITY_RAMP,
   withMult,
 } from '../community-heatmap-layers';
+
+/** Output (a heat_score ramp) of a zoom-interpolate paint value at an exact zoom stop. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function lineOpacityAt(ramp: any[], zoom: number): any[] {
+  for (let i = 3; i < ramp.length; i += 2) if (ramp[i] === zoom) return ramp[i + 1];
+  throw new Error(`no zoom stop ${zoom}`);
+}
 
 describe('withMult (SSOT opacity scaler — used by the /map hooks at runtime)', () => {
   it('mult===1 returns the ramp unchanged (byte-identical /map default)', () => {
@@ -70,11 +78,26 @@ describe('withMult (SSOT opacity scaler — used by the /map hooks at runtime)',
   });
 
   it('a DATA-driven ramp × mult keeps the simple [*, mult, ramp] wrapper (legal there)', () => {
-    // LINE_OPACITY_RAMP keys off ['get','heat_score'] — a ['*'] wrapper is valid.
+    // GLOW_OPACITY_RAMP keys off ['get','heat_score'] — a ['*'] wrapper is valid.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dim = withMult(LINE_OPACITY_RAMP, 0.35) as any[];
+    const dim = withMult(GLOW_OPACITY_RAMP, 0.35) as any[];
     expect(dim[0]).toBe('*');
     expect(dim[1]).toBe(0.35);
+  });
+
+  it('the LINE opacity (zoom × heat_score) × mult stays a top-level zoom interpolate', () => {
+    // LINE_OPACITY_RAMP is zoom-driven with a per-zoom heat_score ramp as output:
+    // the multiplier must be folded into each zoom stop, never wrapped around
+    // the zoom interpolate (maplibre would silently drop the paint value).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dim = withMult(LINE_OPACITY_RAMP, 0.35) as any[];
+    expect(dim[0]).toBe('interpolate');
+    expect(dim[2]).toEqual(['zoom']);
+    for (let i = 4; i < dim.length; i += 2) {
+      expect(dim[i][0]).toBe('*');
+      expect(dim[i][1]).toBe(0.35);
+      expect(dim[i][2][2]).toEqual(['get', 'heat_score']);
+    }
   });
 });
 
@@ -111,21 +134,48 @@ describe('layer specs — line/glow are LINE over "trails"', () => {
       // useMapLayerSync / useHeatmapControl which re-set it on /map.
       expect(spec.paint['line-opacity'][0]).toBe('interpolate');
     }
-    // Capped at 0.6 (was 1.0) so dense repeated traces accumulate into intensity
-    // rather than a solid "pâté"; low-density floor stays 0.4 (desire lines visible).
-    expect(line.paint['line-opacity']).toEqual([
-      'interpolate', ['linear'], ['get', 'heat_score'],
-      0, 0.4, 0.3, 0.45, 0.7, 0.52, 1.0, 0.6,
-    ]);
+    // Zoom-driven (lisibilité par zoom, 2026-11-11). At MID zoom (z13–15) it is
+    // still capped at 0.6 (was 1.0) so dense repeated traces accumulate into
+    // intensity rather than a solid "pâté"; the floor stays 0.4 (desire lines).
+    const op = line.paint['line-opacity'];
+    expect(op.slice(0, 3)).toEqual(['interpolate', ['linear'], ['zoom']]);
+    const mid = ['interpolate', ['linear'], ['get', 'heat_score'], 0, 0.4, 0.3, 0.45, 0.7, 0.52, 1.0, 0.6];
+    expect(lineOpacityAt(op, 13)).toEqual(mid);
+    expect(lineOpacityAt(op, 15)).toEqual(mid);
   });
 
   it('hero options: visible, custom minzoom, opacity ramp multiplied', () => {
     const spec = communityTrailsLineLayerSpec({ visible: true, minzoom: 8, opacityMult: 0.9 });
     expect(spec.layout.visibility).toBe('visible');
     expect(spec.minzoom).toBe(8);
-    expect(spec.paint['line-opacity'][0]).toBe('*');
-    expect(spec.paint['line-opacity'][1]).toBe(0.9);
-    expect(spec.paint['line-opacity'][2][0]).toBe('interpolate');
+    // Zoom ramp: the multiplier is folded into every zoom stop's output.
+    const op = spec.paint['line-opacity'];
+    expect(op.slice(0, 3)).toEqual(['interpolate', ['linear'], ['zoom']]);
+    for (let i = 4; i < op.length; i += 2) {
+      expect(op[i].slice(0, 2)).toEqual(['*', 0.9]);
+      expect(op[i][2][0]).toBe('interpolate');
+    }
+  });
+
+  it('lisibilité par zoom : traits plus opaques et plus épais aux zooms région et rue', () => {
+    // Non-régression (Paul, 2026-11-11) : à z8–10 les traits fins et pâles se
+    // perdaient dans le fond de carte ; à z16+ il ne restait que des traces pâles.
+    const line = communityTrailsLineLayerSpec();
+    const scoreAt = (ramp: unknown[], i: number) => ramp[4 + 2 * i] as number; // i-th heat_score stop
+    const op = line.paint['line-opacity'];
+    const [o8, o13, o17] = [8, 13, 17].map((z) => lineOpacityAt(op, z));
+    for (const i of [0, 3]) {
+      expect(scoreAt(o8, i)).toBeGreaterThan(scoreAt(o13, i));
+      expect(scoreAt(o17, i)).toBeGreaterThan(scoreAt(o13, i));
+    }
+    expect(scoreAt(o8, 0)).toBeGreaterThanOrEqual(0.6);
+    expect(scoreAt(o17, 0)).toBeGreaterThanOrEqual(0.6);
+    const w = line.paint['line-width'];
+    expect(w.slice(0, 3)).toEqual(['interpolate', ['exponential', 1.5], ['zoom']]);
+    const widthAt = (z: number) => lineOpacityAt(w, z);
+    expect(scoreAt(widthAt(8), 0)).toBeGreaterThanOrEqual(0.8);   // was 0.4 px hairlines
+    expect(scoreAt(widthAt(16), 0)).toBeGreaterThanOrEqual(1.5);  // was 1 px
+    expect(scoreAt(widthAt(18), 3)).toBeLessThanOrEqual(7);       // still no fat blob
   });
 });
 
@@ -162,8 +212,10 @@ describe('glow layer — anti-oversaturation invariants (fix/heatmap-oversaturat
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const op = communityTrailsLineLayerSpec().paint['line-opacity'] as any[];
     // first stop is heat_score 0 → its value must remain clearly visible.
-    const zeroOpacity = op[4];
-    expect(zeroOpacity).toBeGreaterThanOrEqual(0.4);
+    // Zoom ramp → check the heat_score-0 output at EVERY zoom stop.
+    for (let i = 4; i < op.length; i += 2) {
+      expect(op[i][4]).toBeGreaterThanOrEqual(0.4);
+    }
   });
 });
 
@@ -208,7 +260,9 @@ describe('raster-style density heatmap layer (feat/raster-heatmap)', () => {
     // ['interpolate',['linear'],['zoom'], 6,v, 10,v, 13,v, 16,v, 18,v]
     const stops: Record<number, number> = {};
     for (let i = 3; i < r.length; i += 2) stops[r[i]] = r[i + 1];
-    expect(stops[10]).toBe(4);
+    expect(stops[10]).toBe(5.5);
+    // Regional zoom: big enough to read where the data is (was 2px@z6).
+    expect(stops[6]).toBeGreaterThanOrEqual(3);
     // Capped well below the old 26px kernel that filled the Lez into a mass.
     expect(stops[18]).toBeLessThanOrEqual(14);
   });

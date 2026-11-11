@@ -169,15 +169,23 @@ export const GLOW_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['get', 'heat
 // Capped at 0.6 (was 1.0): where a rider repeats a route 100+×, the raw traces
 // overlap; full opacity turned that into a solid orange "pâté" (blob). A cap lets
 // overlaps ACCUMULATE into intensity (Strava-raster feel) instead of a solid mass.
-export const LINE_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['get', 'heat_score'],
-  0, 0.4, 0.3, 0.45, 0.7, 0.52, 1.0, 0.6,
+const byScore = (a: number, b: number, c: number, d: number): Expr =>
+  ['interpolate', ['linear'], ['get', 'heat_score'], 0, a, 0.3, b, 0.7, c, 1.0, d];
+
+// Lisibilité par zoom (Paul, 2026-11-11). Mid zoom (z13–15) keeps the tuned
+// 0.4→0.6 (the anti-"pâté" values). At REGIONAL zoom (≤ z8) the hairlines were
+// lost in the basemap's roads → more opaque; at STREET zoom (z17+) the raster
+// has faded out and the line carries the read alone → more opaque too.
+// ZOOM is the top-level input (maplibre requires it); `withMult` folds a
+// multiplier into the per-zoom outputs.
+export const LINE_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
+  8, byScore(0.65, 0.72, 0.8, 0.88),
+  11, byScore(0.5, 0.56, 0.64, 0.72),
+  13, byScore(0.4, 0.45, 0.52, 0.6),
+  15, byScore(0.4, 0.45, 0.52, 0.6),
+  17, byScore(0.7, 0.76, 0.84, 0.92),
 ];
 
-// ⭐ SSOT color stops for the community heat ramp: dark plum (rare) → hot pink →
-// orange (very popular), Komoot-style. The line layer's `line-color`, the home
-// hero legend + SVG illustration, and /map's MapLegend swatch ALL derive from
-// this list — never re-type the hexes (the /map legend once drifted to a stale
-// BLUE ramp precisely because it was hand-copied).
 export const HEAT_RAMP_STOPS: ReadonlyArray<readonly [number, string]> = [
   [0, '#7a2058'], [0.25, '#a83275'], [0.5, '#d63384'],
   [0.75, '#f06595'], [0.9, '#ff7e3a'], [1.0, '#ff8c42'],
@@ -193,9 +201,11 @@ export const HEAT_RAMP_CSS = `linear-gradient(to right, ${HEAT_RAMP_STOPS
 // still re-set the OLD fat ramps on heatmap-toggle). Thinned ~half at the
 // high-heat end (z16 core 8→3.6) so dense repeated traces don't merge into a blob.
 export const LINE_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoom'],
-  10, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 0.4, 0.3, 0.7, 0.7, 1.3, 1, 2],
-  13, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 0.7, 0.3, 1.2, 0.7, 2, 1, 3],
-  16, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1, 0.3, 1.6, 0.7, 2.6, 1, 3.6],
+  8, byScore(0.8, 1.2, 1.8, 2.6),
+  10, byScore(0.8, 1.2, 1.8, 2.6),
+  13, byScore(0.9, 1.4, 2.2, 3.2),
+  16, byScore(1.6, 2.4, 3.6, 5),
+  18, byScore(2.2, 3.2, 4.8, 6.5),
 ];
 export const GLOW_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoom'],
   10, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1, 0.3, 1.6, 0.7, 2.6, 1, 3.6],
@@ -302,7 +312,7 @@ export const HEAT_WEIGHT_RAMP: Expr = ['interpolate', ['linear'], ['get', 'w'],
  *  (2026-08-06): z16.5 solid-blob+dark-beads → readable corridors, overview
  *  (z12) unchanged (only z13+ diverges). */
 export const HEAT_INTENSITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
-  6, 0.4, 10, 0.6, 13, 0.9, 14, 0.8, 16, 0.5, 18, 0.35,
+  6, 0.7, 8, 0.85, 10, 0.9, 13, 0.9, 14, 0.8, 16, 0.5, 18, 0.35,
 ];
 
 /** heatmap-radius grows to a MODEST cap (~12px@z18, was 26px). A 26px kernel at
@@ -313,7 +323,7 @@ export const HEAT_INTENSITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
  *  thins `heat_points` per zoom so the gap along a lone trace stays < this radius
  *  (fix/heatmap-beads). Change both together. */
 export const HEAT_RADIUS_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
-  6, 2, 10, 4, 13, 8, 16, 10, 18, 12,
+  6, 3, 8, 4.5, 10, 5.5, 13, 8, 16, 10, 18, 12,
 ];
 
 /** heatmap-opacity ~0.85 through mid zoom, then fades HARDER from z15 (was z16)
