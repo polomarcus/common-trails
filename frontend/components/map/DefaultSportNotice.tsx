@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getToken } from '@/lib/auth';
 import { SPORT_COLORS } from '@/lib/constants';
 import {
-  BULK_SPORT_MAX_IDS, DEFAULT_SPORT_CHOICES, fetchDefaultSport, reclassifyDefaultSport,
+  BULK_SPORT_MAX_IDS, DEFAULT_SPORT_CHOICES, fetchDefaultSport, tryFetchDefaultSport, reclassifyDefaultSport,
   type DefaultSportChange, type DefaultSportChoice, type DefaultSportStatus,
 } from '@/lib/default-sport';
 import { formatDist, fmtDate } from '@/lib/format';
@@ -76,8 +76,12 @@ export default function DefaultSportNotice({ dateLocale, refreshKey = 0, onChang
     } catch {
       setError(true);
       // The request may have been partly applied (or the list is out of
-      // date): show what the server has now rather than a stale count.
-      setStatus(await fetchDefaultSport());
+      // date): show what the server has now rather than a stale count — but
+      // ONLY if that read succeeded. A failed refetch must not read as "zero
+      // left": the panel, the notice and this error would all vanish and the
+      // rider would believe everything was classified.
+      const now = await tryFetchDefaultSport();
+      if (now) setStatus(now);
     } finally {
       setBusy(false);
     }

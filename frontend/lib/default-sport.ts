@@ -41,15 +41,21 @@ export interface BulkSportResult {
   default_sport_count: number;
 }
 
-/** Never throws: an older backend / a network error reads as "nothing to classify". */
-export async function fetchDefaultSport(limit = DEFAULT_SPORT_LIST_LIMIT): Promise<DefaultSportStatus> {
+/** `null` when the status could not be read (network error, older backend,
+ *  malformed body) — distinct from "zero left to classify". */
+export async function tryFetchDefaultSport(limit = DEFAULT_SPORT_LIST_LIMIT): Promise<DefaultSportStatus | null> {
   try {
     const data = await apiFetch<DefaultSportStatus>(`/me/activities/default-sport?limit=${limit}`);
-    if (typeof data?.count !== 'number' || !Array.isArray(data.activities)) return { count: 0, activities: [] };
+    if (typeof data?.count !== 'number' || !Array.isArray(data.activities)) return null;
     return data;
   } catch {
-    return { count: 0, activities: [] };
+    return null;
   }
+}
+
+/** Never throws: an older backend / a network error reads as "nothing to classify". */
+export async function fetchDefaultSport(limit = DEFAULT_SPORT_LIST_LIMIT): Promise<DefaultSportStatus> {
+  return (await tryFetchDefaultSport(limit)) ?? { count: 0, activities: [] };
 }
 
 /** `'all'` = every default-sport activity of the rider (server-side set). */

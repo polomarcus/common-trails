@@ -198,6 +198,26 @@ describe('DefaultSportNotice', () => {
     expect(q('default-sport-notice')!.textContent).toContain('2 sorties');
   });
 
+  // Non-régression : si la relecture échoue aussi (réseau coupé, 5xx), elle ne
+  // doit pas se lire comme « plus rien à classer » — le panneau, l'encart et
+  // le message d'erreur disparaissaient, comme si tout avait été classé.
+  it('a failed request followed by a failed re-read keeps the panel, the list and the error', async () => {
+    const { state, fetchMock } = fakeBackend(rides());
+    vi.stubGlobal('fetch', fetchMock);
+    await mount();
+    await click('default-sport-open');
+    await click('default-sport-item-r1');
+    state.failPatch = true;
+    const real = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/me/activities/default-sport')) throw new TypeError('network down');
+      return real(url, init);
+    });
+    await click('default-sport-apply');
+    expect(q('default-sport-error')).not.toBeNull();
+    expect(q('default-sport-list')!.querySelectorAll('li').length).toBe(3);
+  });
+
   it('the panel takes focus when it opens, Escape closes it and focus returns to the opener', async () => {
     vi.stubGlobal('fetch', fakeBackend(rides()).fetchMock);
     await mount();
