@@ -270,10 +270,12 @@ export default function MapPage() {
   // Called optimistically with the new sport, and again with the old one on a
   // failed PATCH (rollback): keep the list, the selected card and the
   // "Ma heatmap" source (hover popup reads feature.properties.sport) in sync.
-  const handleActivitySportChange = useCallback((activityId: string, sport: string) => {
-    // The rider has now said what this ride is: no longer a "default" sport.
-    setActivities((prev) => prev.map((a) => (a.id === activityId ? { ...a, sport, sport_is_default: false } : a)));
-    setSelectedActivity((prev) => (prev && prev.id === activityId ? { ...prev, sport, sport_is_default: false } : prev));
+  // `sportIsDefault`: false on the optimistic call (the rider has now said what
+  // this ride is), the PREVIOUS value on a rollback.
+  const handleActivitySportChange = useCallback((activityId: string, sport: string, sportIsDefault = false) => {
+    const patch = { sport, sport_is_default: sportIsDefault };
+    setActivities((prev) => prev.map((a) => (a.id === activityId ? { ...a, ...patch } : a)));
+    setSelectedActivity((prev) => (prev && prev.id === activityId ? { ...prev, ...patch } : prev));
     const next = withActivitySport(userActivitiesGeojsonRef.current, activityId, sport);
     if (next !== userActivitiesGeojsonRef.current) {
       userActivitiesGeojsonRef.current = next;

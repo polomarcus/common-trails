@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getToken } from '@/lib/auth';
 import { SPORT_COLORS } from '@/lib/constants';
 import {
@@ -44,6 +44,17 @@ export default function DefaultSportNotice({ dateLocale, refreshKey = 0, onChang
   }, []);
   useEffect(() => { void reload(); }, [reload, refreshKey]);
 
+  // Basic dialog focus management: focus the panel when it opens (so Escape
+  // and Tab start inside it), give focus back to the opener when it closes.
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const openButtonRef = useRef<HTMLButtonElement | null>(null);
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open) dialogRef.current?.focus();
+    else if (wasOpenRef.current) openButtonRef.current?.focus();
+    wasOpenRef.current = open;
+  }, [open]);
+
   const count = status?.count ?? 0;
   if (count === 0) return null;
   const listed = status!.activities;
@@ -64,6 +75,9 @@ export default function DefaultSportNotice({ dateLocale, refreshKey = 0, onChang
       if (next.count === 0) setOpen(false);
     } catch {
       setError(true);
+      // The request may have been partly applied (or the list is out of
+      // date): show what the server has now rather than a stale count.
+      setStatus(await fetchDefaultSport());
     } finally {
       setBusy(false);
     }
@@ -104,6 +118,7 @@ export default function DefaultSportNotice({ dateLocale, refreshKey = 0, onChang
           </span>
           <button
             type="button"
+            ref={openButtonRef}
             data-testid="default-sport-open"
             onClick={() => setOpen(true)}
             style={{ ...btn, background: '#2d6a4f', color: '#fff' }}
@@ -130,12 +145,14 @@ export default function DefaultSportNotice({ dateLocale, refreshKey = 0, onChang
           aria-modal="true"
           aria-label={t('map.defaultSport.title')}
           onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } }}
           style={{
             position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.35)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
           }}
         >
-          <div style={{
+          <div ref={dialogRef} tabIndex={-1} style={{
+            outline: 'none',
             background: '#fff', borderRadius: 14, width: '100%', maxWidth: 460, maxHeight: '86vh',
             display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
             fontSize: 13, color: '#1f2937',

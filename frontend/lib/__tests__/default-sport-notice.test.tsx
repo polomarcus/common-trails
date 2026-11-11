@@ -182,6 +182,38 @@ describe('DefaultSportNotice', () => {
     expect(q('default-sport-list')!.querySelectorAll('li').length).toBe(3);
   });
 
+  it('after a failed request the count and the list are re-read from the server', async () => {
+    const { state, fetchMock } = fakeBackend(rides());
+    state.failPatch = true;
+    vi.stubGlobal('fetch', fetchMock);
+    await mount();
+    await click('default-sport-open');
+    await click('default-sport-item-r1');
+    // Meanwhile the server-side set changed (e.g. the request was partly applied).
+    state.rows[0].flagged = false;
+    await click('default-sport-apply');
+    expect(q('default-sport-error')).not.toBeNull();
+    expect(q('default-sport-list')!.querySelectorAll('li').length).toBe(2);
+    await click('default-sport-close');
+    expect(q('default-sport-notice')!.textContent).toContain('2 sorties');
+  });
+
+  it('the panel takes focus when it opens, Escape closes it and focus returns to the opener', async () => {
+    vi.stubGlobal('fetch', fakeBackend(rides()).fetchMock);
+    await mount();
+    q('default-sport-open')!.focus();
+    await click('default-sport-open');
+    const panel = q('default-sport-panel')!;
+    expect(panel.getAttribute('role')).toBe('dialog');
+    expect(panel.contains(document.activeElement)).toBe(true);
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(q('default-sport-panel')).toBeNull();
+    expect(q('default-sport-notice')).not.toBeNull();
+    expect(document.activeElement).toBe(q('default-sport-open'));
+  });
+
   it('re-reads the count when refreshKey changes (sport fixed from the activity card)', async () => {
     const { state, fetchMock } = fakeBackend(rides());
     vi.stubGlobal('fetch', fetchMock);

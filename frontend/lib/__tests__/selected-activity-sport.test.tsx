@@ -84,7 +84,7 @@ describe('SelectedActivityCard — sport correction', () => {
     await pick('mtb');
     // Optimistic: UI + parent updated BEFORE the request resolves.
     expect(select().value).toBe('mtb');
-    expect(onSportChange).toHaveBeenCalledWith('a1', 'mtb');
+    expect(onSportChange).toHaveBeenCalledWith('a1', 'mtb', false);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toMatch(/\/me\/activities\/a1$/);
     expect(init.method).toBe('PATCH');
@@ -103,7 +103,7 @@ describe('SelectedActivityCard — sport correction', () => {
     const onSportChange = render();
 
     await pick('gravel');
-    expect(onSportChange.mock.calls).toEqual([['a1', 'gravel'], ['a1', 'road']]);
+    expect(onSportChange.mock.calls).toEqual([['a1', 'gravel', false], ['a1', 'road', false]]);
     expect(select().value).toBe('road');
     expect(container.querySelector('[data-testid="activity-sport-error"]')).not.toBeNull();
   });
@@ -122,23 +122,59 @@ describe('SelectedActivityCard — sport correction', () => {
   it('the hint goes away once the rider picks a sport, and comes back if the PATCH fails', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'nope' }), { status: 500 }));
     const saved = vi.fn();
+    const changed = vi.fn();
     root = createRoot(container);
     act(() => root!.render(
       <I18nProvider>
         <SelectedActivityCard
           activity={{ ...activity, sport_is_default: true }} dateLocale="fr-FR"
-          onClose={() => {}} onSportSaved={saved}
+          onClose={() => {}} onSportSaved={saved} onSportChange={changed}
         />
       </I18nProvider>,
     ));
     await pick('gravel');
     expect(hint()).not.toBeNull(); // rolled back
     expect(saved).not.toHaveBeenCalled();
+    // The rollback hands the parent the PREVIOUS flag back, not `false`.
+    expect(changed.mock.calls).toEqual([['a1', 'gravel', false], ['a1', 'road', true]]);
 
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'a1', sport: 'gravel', changed: true }), { status: 200 }));
     await pick('gravel');
     expect(hint()).toBeNull();
     expect(saved).toHaveBeenCalledWith('a1');
+  });
+
+  it('a default sport is shown as a question and picking the SAME sport confirms it', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 'a1', sport: 'road', changed: false }), { status: 200 }));
+    const saved = vi.fn();
+    const changed = vi.fn();
+    root = createRoot(container);
+    act(() => root!.render(
+      <I18nProvider>
+        <SelectedActivityCard
+          activity={{ ...activity, sport_is_default: true }} dateLocale="fr-FR"
+          onClose={() => {}} onSportSaved={saved} onSportChange={changed}
+        />
+      </I18nProvider>,
+    ));
+    // Not pre-selected: "Route ?" placeholder, so that Route itself can be picked.
+    expect(select().value).toBe('');
+    expect(select().options[0].textContent).toBe('Route ?');
+    expect(Array.from(select().options).slice(1).map((o) => o.value)).toEqual([...EDITABLE_SPORTS]);
+
+    await pick('road');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ sport: 'road' });
+    expect(changed.mock.calls).toEqual([['a1', 'road', false]]);
+    expect(saved).toHaveBeenCalledWith('a1');
+    expect(hint()).toBeNull();
+    expect(select().value).toBe('road');
+  });
+
+  it('re-picking the current sport of a NON-default activity sends nothing', async () => {
+    render();
+    await pick('road');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('a legacy "offroad" activity shows it as current but cannot re-pick it', () => {
