@@ -497,8 +497,7 @@ _STARTUP_STEPS = [
     "Chargement des activités",
     "Données de démo",
     "Réseau DFCI",
-    "Sentiers balisés",
-    "Enrichissement des edges",
+    "Itinéraires GT",
 ]
 
 startup_progress: dict = {
@@ -536,39 +535,16 @@ async def _background_data_load(admin_id: str) -> None:
     _advance(2)
     await _load_dfci(_t0)
     _advance(3)
-    # Marked-trail edges (`trail_edges`, GR/GT/PR/EV) are no longer loaded at
-    # startup: nothing reads them since the routing graph was decommissioned.
     await _load_gt_routes(_t0)
-    _advance(4)
-    # Edge enrichment is no longer a startup task. The matched-era OSM
-    # enrichment (surface/dangerous-highway tagging of heat_edges) was removed
-    # with the raw-trace pivot — the community map renders raw GPS traces, not
-    # OSM-matched edges. Startup should never do unbounded batch work — it would
-    # re-run on every cold start (Cloud Run scale-to-zero, OOM restart, deploy)
-    # and waste CPU for ~minutes producing zero new rows on a populated DB.
 
     startup_progress["step"] = len(_STARTUP_STEPS)
     startup_progress["label"] = "Prêt"
     startup_progress["done"] = True
 
-    from sqlalchemy import text as sa_text
-
-    # Use pg_class.reltuples for instant estimates (startup log only, exact count unnecessary)
-    from app.db.session import SessionLocal
-    from app.services.ingest import get_dfci_edge_count, get_trail_edge_count
-    db = SessionLocal()
-    try:
-        heat_n = db.execute(sa_text(
-            "SELECT COALESCE(SUM(GREATEST(reltuples, 0)), 0)::bigint FROM pg_class "
-            "WHERE relkind = 'r' AND relname LIKE 'heat_edges_%' "
-            "AND relname NOT LIKE '%idx%' AND relname NOT LIKE '%key%'"
-        )).scalar() or 0
-    finally:
-        db.close()
+    from app.services.ingest import get_dfci_edge_count
     logger.info(
-        "Background load DONE in %.1fs — heat=%d dfci=%d trails=%d",
-        _t.monotonic() - _t0, heat_n, get_dfci_edge_count(),
-        get_trail_edge_count(),
+        "Background load DONE in %.1fs — dfci=%d",
+        _t.monotonic() - _t0, get_dfci_edge_count(),
     )
 
     # Pre-warm caches so the first user never waits for cold queries
@@ -576,7 +552,7 @@ async def _background_data_load(admin_id: str) -> None:
 
 
 async def _prewarm_caches(t0: float) -> None:
-    """Pre-warm heatmap summary + full graph caches after background data load."""
+    """Pre-warm the heatmap summary cache after background data load."""
     import time as _t
 
     # 1. Heatmap summary cache
@@ -594,11 +570,9 @@ async def _prewarm_caches(t0: float) -> None:
     except Exception:
         logger.warning("Failed to pre-warm heatmap summary", exc_info=True)
 
-    # Note: full graph pre-warm removed — frontend uses area.pb tiles on demand
-
 
 async def _load_activities(t0: float) -> int:
-    """Load persisted activities and populate heat_edges/heat_cells in PostGIS."""
+    """Bootstrap an empty DB from the bundled fixture (dev / tests)."""
     import asyncio
     import time as _t
 
@@ -685,13 +659,6 @@ async def _load_gt_routes(t0: float) -> int:
     return n
 
 
-# DEM slope enrichment is baked at import time
-# (import_dfci_ign / import_dfci_herault). The matched-era
-# heat-edges OSM enrichment CLI (app.cli.enrich_edges) was removed with the
-# raw-trace pivot — the community map renders raw GPS traces, not OSM-matched
-# edges, so per-edge OSM surface/highway tagging no longer applies.
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     import asyncio
@@ -715,7 +682,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     _elapsed = _t.monotonic() - _t0
     logger.info("READY in %.1fs — server accepting requests", _elapsed)
 
-    # Load ALL data in background (activities, DFCI, trails, enrichment)
+    # Load ALL data in background (activities fixture, demo data, DFCI, GT routes)
     # This doesn't block the startup probe — healthz responds immediately.
     bg_task = asyncio.create_task(_background_data_load(admin_id))
 
@@ -736,7 +703,6 @@ from app.api.health import router as health_router
 from app.api.heatmap import router as heatmap_router
 from app.api.imports import router as imports_router
 from app.api.internal_artefacts import router as internal_artefacts_router
-from app.api.internal_ingest import router as internal_ingest_router
 from app.api.me_activities import router as me_activities_router
 from app.api.me_heatmap import internal_router as internal_my_heatmap_router
 from app.api.me_heatmap import router as me_heatmap_router
@@ -844,7 +810,6 @@ app.include_router(collections_router)
 app.include_router(collections_public_router)
 app.include_router(trips_router)
 app.include_router(admin_router)
-app.include_router(internal_ingest_router)
 app.include_router(internal_artefacts_router)
 app.include_router(internal_my_heatmap_router)
 app.include_router(export_router)

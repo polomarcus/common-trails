@@ -3,7 +3,7 @@
 POST /gpx/upload — uploads a single GPX file.
 
 Production path (Cloud Run):
-    1. Parse GPX, ``ingest_activity(skip_heat_computation=True)`` — stores
+    1. Parse GPX, ``ingest_activity`` — stores
        the Activity row (~200 ms).
     2. ``cloud_tasks.request_community_rebuild()`` — asks for the debounced
        PMTiles rebuild (one constant-named Cloud Task: a burst of uploads
@@ -246,7 +246,6 @@ async def gpx_upload(
         user_id=current_user.user_id,
         activity_data=activity_data,
         contribute_heatmap=community_ok,
-        skip_heat_computation=True,
     )
 
     # Archive raw GPX to uploads bucket (safety net for heatmap rebuild).

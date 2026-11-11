@@ -106,23 +106,13 @@ def main():
 
     # Skip the per-upload PMTiles rebuild during the loop (saves repeated
     # heavy display-artefact builds on bulk imports). We rebuild once at the
-    # end. Set BEFORE importing ingest. (The heat_edges_display matview was
-    # dropped June 2026 — the live MVT endpoint now aggregates heat_edges
-    # directly, so there is no matview to refresh anymore.)
+    # end. Set BEFORE importing ingest.
     os.environ.setdefault("SKIP_PMTILES_REBUILD", "true")
-    # Skip per-activity canonical-merge bbox query — saves ~30% per
-    # activity for dense areas. ON CONFLICT in the UPSERT still
-    # deduplicates by edge_key, and the projection fix already
-    # collapses co-trail edges at the 5dp grid.
-    os.environ.setdefault("SKIP_CANONICAL_MERGE", "true")
 
     # Import
     from app.db.session import SessionLocal
     from app.services.gpx import parse_gpx
-    from app.services.ingest import (
-        ingest_activity,
-        retry_on_deadlock,
-    )
+    from app.services.ingest import ingest_activity
     from app.services.provenance import COMMUNITY_SOURCE
 
     # Get user ID
@@ -200,14 +190,10 @@ def main():
                 "file_hash": parsed.get("file_hash"),
                 "activity_date": parsed.get("activity_date"),
             }
-            # retry_on_deadlock: parallel UPSERTs on overlapping
-            # heat_edges bboxes can deadlock; the lock-loser retries.
-            result = retry_on_deadlock(
-                ingest_activity,
+            result = ingest_activity(
                 user_id=user_id,
                 activity_data=activity_data,
                 contribute_heatmap=True,
-                skip_heat_computation=True,  # Compute heatmap in batch after
             )
             with counters_lock:
                 if result["status"] == "created":
@@ -246,11 +232,9 @@ def main():
     elapsed = time.time() - t0
     log.info("Done: %d imported, %d skipped, %d failed in %.0fs (%.1f files/s)",
              imported, skipped, failed, elapsed, total / elapsed if elapsed > 0 else 0)
-    log.info("Heatmap computation was skipped.")
     log.info(
         "Display artefacts were skipped during the loop. Rebuild the heatmap "
-        "PMTiles once with `make pmtiles` (or `python -m app.jobs.build_pmtiles`) "
-        "after the heat_edges are generated."
+        "PMTiles once with `make pmtiles` (or `python -m app.jobs.build_pmtiles`)."
     )
 
 

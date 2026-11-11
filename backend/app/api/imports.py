@@ -1,14 +1,9 @@
 """File import API — supports .gpx and .zip (of .gpx files).
 
 POST /imports/files — multipart upload with sport + contribute_heatmap.
-Activities stored immediately (fast), heatmap computed in background.
-
-Production path: each created activity is enqueued as an individual
-Cloud Task hitting ``/internal/ingest/heat``. One activity per task so
-retries are scoped tightly and Cloud Tasks can parallelise the work.
-
-TEST_MODE keeps the legacy synchronous behaviour (heat computed in the
-request thread).
+Activities are stored immediately; the community map (static PMTiles) is
+rebuilt out-of-band — ONE debounced rebuild request per upload burst
+(``cloud_tasks.request_community_rebuild``), nothing in TEST_MODE.
 """
 import logging
 import os
@@ -35,8 +30,8 @@ log = logging.getLogger(__name__)
 MAX_FILE_SIZE = int(os.environ.get("MAX_IMPORT_FILE_SIZE", str(50 * 1024 * 1024)))  # 50 MB
 
 # Per-USER upload throttle (keyed by the session user, not the IP — an abuser
-# can't dodge it by rotating IPs). Each accepted upload can fan out to a
-# heat-compute Cloud Task, so this bounds the per-user cost of loop-uploading;
+# can't dodge it by rotating IPs). Each accepted upload costs a parse + DB
+# write, so this bounds the per-user cost of loop-uploading;
 # the EXPENSIVE PMTiles rebuild is throttled separately (debounced), so this
 # limit only needs to catch a runaway loop, not gate normal batches. The
 # default is deliberately WELL ABOVE a realistic loose-file batch: the frontend
@@ -378,7 +373,6 @@ async def import_files(
                 user_id=current_user.user_id,
                 activity_data=activity_data,
                 contribute_heatmap=community_ok,
-                skip_heat_computation=not sync_mode,
             )
             activity_ids.append(result["activity_id"])
             # "promoted" (③): a manual upload that upgraded a pre-existing
