@@ -921,3 +921,23 @@ def test_activation_waits_for_inflight_writer(mhf_env, users):
         assert mhf.read_state(db, uid).fresh
     finally:
         db.close()
+
+
+def test_backfill_enqueue_schedules_on_worker_without_building(mhf_env, users):
+    """Prod jobs have no bucket access (403): `backfill --enqueue` must only
+    schedule each stale user's rebuild, never build/upload in-process."""
+    from app.cli import my_heatmap_files as cli
+
+    db = SessionLocal()
+    try:
+        uid = _mk_user(db)
+        users.append(uid)
+        _mk_activity(db, uid)
+        db.commit()
+    finally:
+        db.close()
+    mhf_env.clear()
+    summary = cli.backfill(user_id=uid, enqueue=True)
+    assert summary.get("recorded") == 1
+    assert (uid, "backfill") in mhf_env
+    assert mhf.get_store().list_keys(f"users/{uid}/") == []  # nothing built here
