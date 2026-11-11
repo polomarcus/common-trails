@@ -43,7 +43,7 @@ jobs:
   backend-test:
     name: Backend tests
     runs-on: ubuntu-24.04
-    # The image build (incl. the slow DEM-tile bake) + data load + ~5 min pytest
+    # The image build + data load + ~5 min pytest
     # lands at ~12-14 min on a COLD docker cache. 12 then 18 both proved too
     # tight: cold-cache runner variance repeatedly pushed the job past the ceiling
     # and it got cancelled-on-timeout with ZERO failing tests (the recurring flake

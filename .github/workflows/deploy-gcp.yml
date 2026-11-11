@@ -147,7 +147,7 @@ jobs:
       # until a task failed. Red the CD instead. URL = WORKER_RUN_URL in
       # deploy-prod.sh. Hit /readyz (NOT the SPA catch-all /health/live, which
       # 200s on any booted container): /readyz is a real route that verifies DB
-      # connectivity via cloudsql + returns the heat_edges_agg count — a
+      # connectivity via cloudsql (a bare `SELECT 1`, no heatmap table) — a
       # MEANINGFUL "worker booted AND can reach the DB" signal, exactly what
       # /internal/ingest/heat + artefact-rebuild need. Retry loop tolerates the
       # ~40s scale-to-zero cold start (worker /readyz measured ~6.5s warm).
