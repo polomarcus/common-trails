@@ -254,7 +254,7 @@ def test_failed_too_many_members_sends_friendly_reason(monkeypatch):
     to, subject, html = send.call_args.args
     assert to == email
     assert subject == "Ton archive n'a pas pu être traitée"
-    assert "découpe" in html
+    assert "découpe-le" in html
     # NEVER leak internals: neither the raw stored error nor exception names.
     assert "too many members" not in html
     assert "ZipBombError" not in html

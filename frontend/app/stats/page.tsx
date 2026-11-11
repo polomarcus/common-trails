@@ -385,7 +385,7 @@ export default function StatsPage() {
                       if (rec.category === 'most_elevation') {
                         return (
                           <>
-                            <strong>&laquo;{rec.label}&raquo;</strong> est ton {sportLabel} avec le plus de D+ :{' '}
+                            <strong>&laquo;{rec.label}&raquo;</strong> est ta sortie {sportLabel} avec le plus de D+ :{' '}
                             <strong>{rec.formatted}</strong>
                           </>
                         );
