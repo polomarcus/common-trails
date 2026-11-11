@@ -32,6 +32,12 @@ services:
       SKIP_DEM_ENRICHMENT: ${SKIP_DEM_ENRICHMENT:-true}
       HEATMAP_K_ANONYMITY: ${HEATMAP_K_ANONYMITY:-1}
       CI: ${CI:-}
+      # Per-user "Ma heatmap" PMTiles file (docs/ma-heatmap-fichier-prive.md).
+      # OFF by default — identical to before for a local stack. CI turns it on
+      # with a LOCAL directory store so the E2E suite plays the real prod path
+      # (manifest → summary → Range-read tiles) in a browser.
+      MY_HEATMAP_FILES_ENABLED: ${MY_HEATMAP_FILES_ENABLED:-false}
+      MY_HEATMAP_LOCAL_DIR: ${MY_HEATMAP_LOCAL_DIR:-}
     ports:
       - "8787:8787"
     depends_on:

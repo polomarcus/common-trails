@@ -23,6 +23,11 @@ name: Deploy to GCP (prod CD)
 on:
   push:
     branches: [main]
+    # A push that only touches documentation changes nothing in the image: no
+    # full prod deploy (build + 2 services + 6 jobs) for a typo in a .md.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
     inputs:
       tag:
