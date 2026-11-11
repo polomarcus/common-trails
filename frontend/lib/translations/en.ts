@@ -999,6 +999,10 @@ const en: Translations = {
   // Toolbar
   'map.toolbar.heatmapLayer': 'Community heatmap',
   'map.toolbar.myHeatmap': 'My heatmap',
+  'map.appearance.title': 'Appearance',
+  'map.appearance.color': 'Colour',
+  'map.appearance.opacity': 'Opacity',
+  'map.appearance.reset': 'Reset',
   'map.toolbar.myHeatmapLoading': 'Loading your traces…',
   'map.share.cta': 'Share my heatmap',
   'map.share.activeShort': 'Sharing on',

@@ -13,6 +13,7 @@
  * constant would silently replace the zoom ramp and bring the blob back.
  */
 import { withMult } from '@/lib/community-heatmap-layers';
+import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Expr = any;
@@ -45,17 +46,34 @@ export const USER_TRACE_DIM_GLOW_MULT = 0.33;
 
 /** Line/glow opacity expressions, optionally dimmed — always zoom ramps. */
 export function userTraceOpacity(dimmed: boolean): { line: Expr; glow: Expr } {
+  // The rider's own "opacité" setting (Calques → Apparence) scales the ramps too.
+  const user = getHeatmapAppearance().myOpacity;
   return {
-    line: withMult(USER_TRACE_LINE_OPACITY, dimmed ? USER_TRACE_DIM_LINE_MULT : 1),
-    glow: withMult(USER_TRACE_GLOW_OPACITY, dimmed ? USER_TRACE_DIM_GLOW_MULT : 1),
+    line: withMult(USER_TRACE_LINE_OPACITY, user * (dimmed ? USER_TRACE_DIM_LINE_MULT : 1)),
+    glow: withMult(USER_TRACE_GLOW_OPACITY, user * (dimmed ? USER_TRACE_DIM_GLOW_MULT : 1)),
   };
 }
 
+// Last dim state painted, so an appearance change can repaint without knowing
+// whether an activity is selected.
+let lastDimmed = false;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function applyUserTraceOpacity(map: any, dimmed: boolean): void {
+  lastDimmed = dimmed;
   const { line, glow } = userTraceOpacity(dimmed);
   map.setPaintProperty(USER_TRACE_LINE_LAYER, 'line-opacity', line);
   map.setPaintProperty(USER_TRACE_GLOW_LAYER, 'line-opacity', glow);
+}
+
+/** Repaint the rider's traces after an appearance change (colour + opacity). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyUserTraceAppearance(map: any): void {
+  if (!map.getLayer?.(USER_TRACE_LINE_LAYER)) return;
+  const { myColor } = getHeatmapAppearance();
+  map.setPaintProperty(USER_TRACE_LINE_LAYER, 'line-color', myColor);
+  if (map.getLayer(USER_TRACE_GLOW_LAYER)) map.setPaintProperty(USER_TRACE_GLOW_LAYER, 'line-color', myColor);
+  applyUserTraceOpacity(map, lastDimmed);
 }
 
 export const USER_TRACE_HIT_LAYER = 'user-activities-hit';
@@ -86,7 +104,7 @@ export function userTraceLayerSpecs(color: string, sourceLayer?: string): any[] 
       paint: {
         'line-color': color,
         'line-width': USER_TRACE_GLOW_WIDTH,
-        'line-opacity': USER_TRACE_GLOW_OPACITY,
+        'line-opacity': userTraceOpacity(false).glow,
         'line-blur': USER_TRACE_GLOW_BLUR,
       },
     },
@@ -97,7 +115,7 @@ export function userTraceLayerSpecs(color: string, sourceLayer?: string): any[] 
       paint: {
         'line-color': color,
         'line-width': USER_TRACE_LINE_WIDTH,
-        'line-opacity': USER_TRACE_LINE_OPACITY,
+        'line-opacity': userTraceOpacity(false).line,
       },
     },
     {

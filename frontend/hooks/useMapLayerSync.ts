@@ -7,9 +7,10 @@ import { API_URL } from '@/lib/api-client';
 import { getToken } from '@/lib/auth';
 import { getTrackBbox, activityDisplayGeometry } from '@/lib/map-utils';
 import { applyUserTraceOpacity } from '@/lib/user-traces-layers';
+import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
 import {
   LINE_OPACITY_RAMP, GLOW_OPACITY_RAMP, LINE_WIDTH_RAMP, HEAT_OPACITY_RAMP,
-  COMMUNITY_TRAILS_HEAT_LAYER, applyCommunityHeatSportFilter,
+  COMMUNITY_TRAILS_HEAT_LAYER, applyCommunityHeatSportFilter, withMult,
 } from '@/lib/community-heatmap-layers';
 import type { ActivityItem } from '@/lib/map-utils';
 import { buildProfileData } from '@/lib/elevation-profile';
@@ -75,8 +76,10 @@ export function useMapLayerSync(params: {
 
     // Default data-driven opacity expressions — SSOT from community-heatmap-layers.ts
     // (must stay identical to the base specs; imported so a retune can't diverge).
-    const lineOpacity = LINE_OPACITY_RAMP;
-    const heatOpacity = HEAT_OPACITY_RAMP;
+    // × the rider's "opacité" setting (Calques → Apparence), folded by withMult.
+    const userMult = getHeatmapAppearance().communityOpacity;
+    const lineOpacity = withMult(LINE_OPACITY_RAMP, userMult);
+    const heatOpacity = withMult(HEAT_OPACITY_RAMP, userMult);
 
     if (layers.heatmap) {
       // Show: raster density heatmap (PRIMARY) + thin crisp line (z14+) + arrows.
@@ -225,7 +228,8 @@ export function useMapLayerSync(params: {
             13, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 2, 0.3, 4, 0.7, 7, 1, 10],
             16, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 2.5, 0.3, 5, 0.7, 8, 1, 11]]
         : LINE_WIDTH_RAMP);
-      m.setPaintProperty('community-trails-line', 'line-opacity', hc ? 1.0 : LINE_OPACITY_RAMP);
+      m.setPaintProperty('community-trails-line', 'line-opacity',
+        hc ? 1.0 : withMult(LINE_OPACITY_RAMP, getHeatmapAppearance().communityOpacity));
     }
     if (m.getLayer('community-trails-glow')) {
       m.setPaintProperty('community-trails-glow', 'line-opacity', hc
