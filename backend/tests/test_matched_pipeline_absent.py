@@ -110,7 +110,7 @@ _DEAD_MODULES = (
     "app.services.heat_aggregation", "app.services.heat_quality",
     "app.services.routing_profiles", "app.services.surface_classification",
     "app.services.tile_keys", "app.services.local_dem", "app.services.dem",
-    "app.jobs.rebuild_heat_agg",
+    "app.jobs.rebuild_heat_agg", "app.cli.download_dem",
 )
 
 
@@ -124,6 +124,17 @@ def test_ingest_module_exposes_no_matched_symbol():
 @pytest.mark.parametrize("module", _DEAD_MODULES)
 def test_matched_modules_are_gone(module):
     assert importlib.util.find_spec(module) is None
+
+
+def test_image_bakes_no_elevation_tiles():
+    """The DEM tiles only fed the retired OSM import: ~520 MB and 12–14 min of
+    cold image build for files nothing reads."""
+    dockerfile = pathlib.Path(__file__).resolve().parents[1] / "Dockerfile"
+    if not dockerfile.is_file():  # tests run from an installed tree
+        pytest.skip("Dockerfile not shipped next to the tests")
+    content = dockerfile.read_text()
+    assert "download_dem" not in content
+    assert "SKIP_DEM_BAKE" not in content
 
 
 def test_no_display_source_switch_left_in_the_app():
