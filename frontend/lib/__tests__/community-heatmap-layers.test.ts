@@ -46,6 +46,8 @@ import {
   HEAT_OPACITY_RAMP,
   LINE_OPACITY_RAMP,
   GLOW_OPACITY_RAMP,
+  LINE_WIDTH_RAMP,
+  HERO_HEATMAP,
   withMult,
 } from '../community-heatmap-layers';
 
@@ -155,6 +157,33 @@ describe('layer specs — line/glow are LINE over "trails"', () => {
       expect(op[i].slice(0, 2)).toEqual(['*', 0.9]);
       expect(op[i][2][0]).toBe('interpolate');
     }
+  });
+
+  // Non-régression (Paul, 2026-11-11) : la retouche de lisibilité de /map avait
+  // épaissi et opacifié la heatmap de l'accueil, qui noyait le titre et les CTA.
+  it('accueil : la heatmap de fond est plus fine et plus transparente que sur /map', () => {
+    const map = communityTrailsLineLayerSpec({ visible: true, minzoom: 9 });
+    const hero = communityTrailsLineLayerSpec({
+      visible: true, minzoom: 9,
+      opacityMult: HERO_HEATMAP.lineOpacity, widthMult: HERO_HEATMAP.lineWidth,
+    });
+    expect(HERO_HEATMAP.lineOpacity).toBeLessThanOrEqual(0.6);
+    expect(HERO_HEATMAP.lineWidth).toBeLessThanOrEqual(0.7);
+    expect(HERO_HEATMAP.heatOpacity).toBeLessThanOrEqual(0.75);
+    // Both stay top-level ZOOM interpolates with the multiplier folded into
+    // each stop (a wrapper around a zoom ramp is silently dropped by maplibre).
+    for (const prop of ['line-width', 'line-opacity'] as const) {
+      const v = hero.paint[prop];
+      expect(v[0]).toBe('interpolate');
+      expect(v[2]).toEqual(['zoom']);
+      for (let i = 4; i < v.length; i += 2) expect(v[i][0]).toBe('*');
+    }
+    // /map is untouched: default widthMult → the SSOT ramp itself.
+    expect(map.paint['line-width']).toBe(LINE_WIDTH_RAMP);
+    // At the hero's zoom the most popular corridor stays under ~1.6 px / 0.5.
+    const top = (ramp: unknown[], z: number) => (lineOpacityAt(ramp as unknown[], z) as unknown[])[2] as unknown[];
+    expect((top(hero.paint['line-width'], 10)[10] as number) * HERO_HEATMAP.lineWidth).toBeLessThanOrEqual(1.6);
+    expect((top(hero.paint['line-opacity'], 8)[10] as number) * HERO_HEATMAP.lineOpacity).toBeLessThanOrEqual(0.5);
   });
 
   it('lisibilité par zoom : traits plus opaques et plus épais aux zooms région et rue', () => {

@@ -122,6 +122,9 @@ export interface CommunityLayerOptions {
   /** Multiplies the data-driven opacity ramps (hero background dims slightly).
    *  Default 1 → emits the plain ramps, byte-identical to the historical /map specs. */
   opacityMult?: number;
+  /** Multiplies the LINE width ramp (line layer only). Default 1. The hero
+   *  thins the lines: it is a BACKGROUND behind the title and CTAs. */
+  widthMult?: number;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -213,6 +216,12 @@ export const GLOW_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoo
   16, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1.8, 0.3, 2.8, 0.7, 4, 1, 5.5],
 ];
 
+/** Home hero: the heatmap is a BACKGROUND behind the title and CTAs, so it is
+ *  drawn lighter than on /map (thinner, more transparent lines; dimmer density).
+ *  At the hero's zoom (~z9–10) this lands near the pre-retune look: line
+ *  opacity ≈ 0.3–0.5, width ≈ 0.5–1.6 px. */
+export const HERO_HEATMAP = { heatOpacity: 0.7, lineOpacity: 0.55, lineWidth: 0.6 } as const;
+
 /** Soft bloom around popular trails — Garmin-style diffused edges. */
 export function communityTrailsGlowLayerSpec(opts: CommunityLayerOptions = {}) {
   const { visible = false, minzoom = 10, opacityMult = 1 } = opts;
@@ -255,7 +264,7 @@ export function communityTrailsGlowLayerSpec(opts: CommunityLayerOptions = {}) {
 
 /** Crisp core trail lines — thickness driven by popularity (Garmin-style). */
 export function communityTrailsLineLayerSpec(opts: CommunityLayerOptions = {}) {
-  const { visible = false, minzoom = 10, opacityMult = 1 } = opts;
+  const { visible = false, minzoom = 10, opacityMult = 1, widthMult = 1 } = opts;
   return {
     id: COMMUNITY_TRAILS_LINE_LAYER,
     type: 'line',
@@ -276,7 +285,7 @@ export function communityTrailsLineLayerSpec(opts: CommunityLayerOptions = {}) {
       ],
       // Thinned (~half at the high-heat end): 8px cores made dense repeated
       // traces merge into a blob. See the pâté fix (2026-08-05). SSOT const.
-      'line-width': LINE_WIDTH_RAMP,
+      'line-width': withMult(LINE_WIDTH_RAMP, widthMult),
       'line-blur': 0,
       'line-opacity': withMult(LINE_OPACITY_RAMP, opacityMult),
       'line-opacity-transition': { duration: 300, delay: 0 },
