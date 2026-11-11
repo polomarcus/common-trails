@@ -125,13 +125,16 @@ export default function ExportHeatmapModal({ onClose, returnFocusTo }: ExportHea
               borderRadius: 12, padding: 16, textAlign: 'left',
             }}
           >
-            <p style={{ color: '#fff', fontSize: 14.5, fontWeight: 700, margin: '0 0 4px' }}>
-              {t('exportGate.cta')}
-            </p>
-            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12.5, margin: '0 0 14px', lineHeight: 1.5 }}>
-              {t('exportGate.sub')}
-            </p>
-            <EmailLoginForm variant="dark" />
+            <EmailLoginForm variant="dark" intro={
+              <>
+                <p style={{ color: '#fff', fontSize: 14.5, fontWeight: 700, margin: '0 0 4px' }}>
+                  {t('exportGate.cta')}
+                </p>
+                <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12.5, margin: '0 0 14px', lineHeight: 1.5 }}>
+                  {t('exportGate.sub')}
+                </p>
+              </>
+            } />
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
             <button

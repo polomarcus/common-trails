@@ -212,8 +212,8 @@ export function useHeatmapControl(
     // ['*', mult, <zoom-interpolate>] (silently drops the paint value + fires an
     // error), so the raster opacity could never be set — route-mode dimming of
     // the raster never applied and every toggle logged an error. withMult folds
-    // the multiplier into the zoom-ramp's output stops (legal); for the
-    // data-driven line ramp it stays the simple ['*'] wrapper.
+    // the multiplier into the zoom-ramp's output stops (legal). The line opacity
+    // is a zoom ramp too (per-zoom heat_score ramps), so it takes the same path.
     m.setPaintProperty('community-trails-line', 'line-opacity', withMult(LINE_OPACITY_RAMP, mult));
     if (m.getLayer(COMMUNITY_TRAILS_HEAT_LAYER)) {
       m.setPaintProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'heatmap-opacity',
