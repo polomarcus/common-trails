@@ -5,9 +5,9 @@
     ``POST …/jobs/<job>:run`` as ``common-trails-tasks-invoker@`` but that SA had
     no ``roles/run.invoker`` on those jobs → PERMISSION_DENIED on every run since
     creation (the backstops never fired once, silently).
-  * P0-2 — ``strava-health-check-daily-prod`` signed its OIDC token for the
-    custom domain while the web verifies ``aud`` against
-    ``INTERNAL_STRAVA_HEALTH_HANDLER_URL`` (the .run.app URL) → 401 every day.
+  * P0-2 — the Strava health-check scheduler audience fix: gone with the
+    Strava API sync; the deploy must no longer touch that scheduler nor the
+    three Strava jobs.
   * P2-1 — the drain job lacked ``HEATMAP_PUBLIC_BASE_URL`` (the "calque" email
     linked storage.googleapis.com) and ``HEATMAP_GCS_BUCKET`` on build-pmtiles
     was never asserted.
@@ -20,7 +20,6 @@ calls it would make against prod.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -74,7 +73,6 @@ def gcloud_calls(tmp_path_factory) -> list[list[str]]:
         **os.environ,
         "PATH": f"{tmp}{os.pathsep}{os.environ.get('PATH', '')}",
         "DEPLOY_YES": "1",
-        "STRAVA_WEBHOOK_SUBSCRIPTION_ID": "349136",
         # As in prod (deploy-gcp.yml): the per-user "Ma heatmap" file is ON.
         "MY_HEATMAP_FILES_ENABLED": "true",
     }
@@ -166,29 +164,29 @@ def test_iam_bindings_run_after_jobs_are_updated(gcloud_calls):
         assert idx[("run", "jobs", "add-iam-policy-binding", job)] > idx[("run", "jobs", "update", job)]
 
 
-def test_health_check_scheduler_audience_matches_handler_env(gcloud_calls):
-    """P0-2: the scheduler's OIDC audience must equal, byte-for-byte, the
-    INTERNAL_STRAVA_HEALTH_HANDLER_URL the web verifies against."""
-    script = _DEPLOY_SH.read_text(encoding="utf-8")
-    proj_num = re.search(r'PROJECT_NUMBER="(\d+)"', script).group(1)
-    expected = f"https://common-trails-api-prod-{proj_num}.europe-west1.run.app/internal/strava/health-check"
-    # The service env declares the same URL (resolved form).
-    assert re.search(
-        r'^INTERNAL_STRAVA_HEALTH_HANDLER_URL:\s*"\$\{RUN_URL\}/internal/strava/health-check"',
-        script,
-        re.MULTILINE,
-    )
-    updates = [
-        c
+def test_deploy_no_longer_touches_strava_resources(gcloud_calls):
+    """Strava API sync removed: no gcloud call may reference its jobs, its
+    health-check scheduler, its webhook queue or its secrets. (Those prod
+    resources are orphaned and deleted by hand — never by the deploy.)"""
+    flat = "\n".join(arg for call in gcloud_calls for arg in call).lower()
+    assert "strava" not in flat.replace("/imports/strava-archive", "")
+    assert not any(
+        c[:3] == ["scheduler", "jobs", "update"] and "health-check" in " ".join(c)
         for c in gcloud_calls
-        if c[:4] == ["scheduler", "jobs", "update", "http"] and c[4] == "strava-health-check-daily-prod"
-    ]
-    assert updates, "health-check scheduler is not asserted by the deploy"
-    call = updates[0]
-    assert _flag(call, "oidc-token-audience") == expected
-    assert _flag(call, "uri") == expected
-    assert "chemins-communs.fr" not in (_flag(call, "oidc-token-audience") or "")
-    assert _flag(call, "oidc-service-account-email") == _TASKS_INVOKER.split(":", 1)[1]
+    )
+
+
+def test_deploy_needs_no_operator_input(tmp_path):
+    """The mandatory STRAVA_WEBHOOK_SUBSCRIPTION_ID is gone: the script must
+    get past its input checks with a bare environment (it then stops at the
+    missing image tag, exit 2 — before any gcloud call)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("STRAVA_")}
+    proc = subprocess.run(
+        ["bash", str(_DEPLOY_SH)], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 2
+    assert "image tag required" in proc.stderr
+    assert "STRAVA" not in proc.stderr
 
 
 def test_drain_job_carries_public_heatmap_base_url(gcloud_calls):

@@ -282,19 +282,6 @@ class TestMeActivitiesCompactPayload:
         assert second["backfilled"] == 0
 
 
-def test_strava_stream_upgrade_refreshes_display_geojson(client, auth_headers):
-    """The Strava GPS-stream upgrade REPLACES geometry_geojson: the derived
-    cache must follow, or "Ma heatmap" keeps drawing the old polyline."""
-    from app.api.integrations_strava import _gps_apply_batch
-
-    aid = _upload(client, auth_headers, "compact-stream-upgrade", _dense_wiggly(300))
-    upgraded = json.dumps({"type": "LineString", "coordinates": _dense_wiggly(900, start_lon=3.9)})
-    _gps_apply_batch("no-such-job", [(aid, upgraded)], 0)
-    geometry_geojson, display_geojson = _row(aid)
-    assert geometry_geojson == upgraded
-    assert display_geojson == compact_display_geojson(upgraded)
-
-
 def test_simplify_keeps_elevation_crest_on_straight_road():
     """Review finding: a straight road over a crest must not collapse to its
     2 endpoints (the selected-activity card draws its profile from these)."""

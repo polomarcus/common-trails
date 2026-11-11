@@ -19,8 +19,8 @@ from app.services import ingest as ingest_service
 
 
 def _make_activity_data(idx: int, with_geom: bool = True) -> dict:
-    """Build a Strava-shaped activity_data dict (matches what
-    integrations_strava._run_strava_import would pass)."""
+    """Build a Strava-shaped activity_data dict (the shape of the legacy
+    provider='strava' rows still present in the DB)."""
     geom = None
     if with_geom:
         # Two-point LineString — enough to pass _geojson_to_cells.

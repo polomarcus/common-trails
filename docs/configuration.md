@@ -15,7 +15,7 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 |---|---|---|---|---|
 | `TEST_MODE` | `false` | `true` | `false` | Stubs pour tous les appels externes ; désactive Cloud Tasks / emails |
 | `DATABASE_URL` | — | `postgresql://postgres:postgres@db:5432/common_trails` | secret | Connexion Postgres |
-| `JWT_SECRET` | — (refusé hors TEST_MODE si faible) | `dev-secret-change-in-production` | secret | Signe les sessions **et** l'état OAuth Strava (`backend/app/api/auth.py`) |
+| `JWT_SECRET` | — (refusé hors TEST_MODE si faible) | `dev-secret-change-in-production` | secret | Signe les sessions et les liens magiques (`backend/app/api/auth.py`) |
 | `JWT_EXPIRE_MINUTES` | `129600` (90 j) | `10080` (7 j) | — → `129600` | Durée de session |
 | `MAGIC_LINK_TTL_MIN` | `15` | — | — | Validité du lien magique |
 | `FRONTEND_URL` | `http://localhost:3787` | `http://localhost:3787` | `https://chemins-communs.fr` | Origine utilisateur (redirections OAuth, liens email) |
@@ -63,29 +63,17 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `BUILD_PMTILES_DEBOUNCE_S` | `600` | — | — | Anti-rafale du déclencheur `/imports/files` (par instance) |
 | `DRAIN_PMTILES_REPING_S` | `1800` | — | — | Intervalle min. entre deux pings de build dans un même drain |
 | `CLOUD_TASKS_LOCATION`, `CLOUD_TASKS_QUEUE`, `CLOUD_TASKS_INVOKER_SA` | vide | — | `europe-west1`, `common-trails-heat-compute-prod`, SA invoker | Vides → calcul en ligne (pas de Cloud Tasks) |
-| `INTERNAL_HEAT_HANDLER_URL`, `INTERNAL_ARTEFACT_HANDLER_URL`, `INTERNAL_STRAVA_WEBHOOK_HANDLER_URL` | vide | — | URL `.run.app` du **worker** | Audience OIDC des tâches lourdes |
-| `CLOUD_TASKS_ARTEFACT_QUEUE`, `CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod`, `common-trails-strava-webhook-prod` | Files Cloud Tasks |
-| `INTERNAL_STRAVA_HEALTH_HANDLER_URL` | vide | — | URL `.run.app` du **web** | Health-check Strava quotidien |
+| `INTERNAL_HEAT_HANDLER_URL`, `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | URL `.run.app` du **worker** | Audience OIDC des tâches lourdes |
+| `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks |
 
 Les URLs `.run.app` doivent correspondre octet pour octet à l'audience OIDC
 (voir [`prod-deploy.md`](prod-deploy.md) §8).
-
-## Strava
-
-| Variable | Défaut code | Dev (compose) | Prod | Rôle |
-|---|---|---|---|---|
-| `ENABLE_STRAVA_INTEGRATION` | `false` | `true` | `true` | Active l'intégration (données perso uniquement) |
-| `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` | vide | vide | secrets | OAuth |
-| `STRAVA_REDIRECT_URI` | — | `http://localhost:8787/integrations/strava/callback` | `https://chemins-communs.fr/integrations/strava/callback` | Callback OAuth |
-| `STRAVA_TOKEN_ENC_KEY` | vide | — | secret | Chiffrement des jetons |
-| `STRAVA_WEBHOOK_CALLBACK_URL` | vide | — | `https://chemins-communs.fr/integrations/strava/webhook` | Callback du webhook |
-| `STRAVA_WEBHOOK_VERIFY_TOKEN` | — | — | secret | Handshake de souscription |
-| `STRAVA_WEBHOOK_SUBSCRIPTION_ID` | vide (= tout accepter) | — | obligatoire à l'appel du script | Liste blanche de souscription |
 
 ## Email
 
 | Variable | Défaut code | Dev (compose) | Prod | Rôle |
 |---|---|---|---|---|
+| `ADMIN_NOTIFY_EMAIL` | *(vide : aucune notification)* | — | `paul@epauler.fr` | Destinataire du mail « nouveau compte confirmé » (première connexion d'un compte) |
 | `EMAIL_FROM` | `Chemins Communs <onboarding@resend.dev>` | — | `Chemins Communs <no-reply@chemins-communs.fr>` | Expéditeur (services + jobs drain/rappel) |
 | `RESEND_API_KEY` | vide (envoi no-op) | — | secret | API Resend |
 

@@ -2,20 +2,18 @@
 
 Protected: requires authenticated user with is_admin=True.
 """
-import asyncio
 import logging
 import os
-import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import String, cast, func, text
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user
-from app.db.models import Activity, DfciEdge, HeatCell, HeatEdge, IntegrationAccount, Route, TrailEdge, User
+from app.db.models import Activity, DfciEdge, HeatCell, HeatEdge, Route, TrailEdge, User
 from app.db.session import get_db
 
 log = logging.getLogger(__name__)
@@ -144,9 +142,9 @@ async def admin_dashboard(
     total_distance = db.query(func.coalesce(func.sum(Activity.distance_m), 0)).scalar()
     total_elevation = db.query(func.coalesce(func.sum(Activity.elevation_gain_m), 0)).scalar()
 
-    # Provider split (strava vs file vs anything else). The model stores
-    # the provider as a non-null string ('strava' for OAuth import, 'file'
-    # for manual GPX/ZIP upload — see Activity.provider in db/models.py).
+    # Provider split. The model stores the provider as a non-null string
+    # ('file' for an uploaded GPX/FIT/ZIP; 'strava' rows are legacy activities
+    # from the retired API sync — see Activity.provider in db/models.py).
     provider_rows = (
         db.query(Activity.provider, func.count(Activity.id))
         .group_by(Activity.provider)
@@ -196,13 +194,6 @@ async def admin_dashboard(
     revision = os.environ.get("K_REVISION", "")
     service = os.environ.get("K_SERVICE", "")
 
-    # Number of Strava connections (cheap count; the per-account detail
-    # lives on /admin/sync-status). Surfacing this on the dashboard
-    # answers "how many friends linked Strava" without a second fetch.
-    strava_connected = db.query(func.count(IntegrationAccount.id)).filter(
-        IntegrationAccount.provider == "strava"
-    ).scalar() or 0
-
     return {
         "users": {
             "total": total_users,
@@ -221,9 +212,6 @@ async def admin_dashboard(
         "routes": {
             "total": total_routes,
             "by_visibility": routes_by_visibility,
-        },
-        "integrations": {
-            "strava_connected": strava_connected,
         },
         "heatmap": heat_stats["heatmap"],
         "graph_health": heat_stats["graph_health"],
@@ -246,15 +234,10 @@ def _heatmap_freshness(db: Session) -> dict:
     """Level-1 "is it alive + fresh?" panel — ALL cheap, indexed reads.
 
     Deliberately touches only small / indexed tables (``activities``,
-    ``heat_edges_agg``, ``import_jobs``, ``integration_accounts``) — NEVER a
-    raw ``heat_edges`` scan (off-limits on this now-live db-f1-micro endpoint).
+    ``heat_edges_agg``) — NEVER a raw ``heat_edges`` scan (off-limits on this now-live db-f1-micro endpoint).
     Each probe is individually fail-soft so a hiccup degrades one field to
     ``null`` rather than 500-ing the panel.
     """
-    # Strava reconnect threshold — same SSOT constant the /integrations/strava
-    # /status endpoint uses (local import avoids a module-load import cycle).
-    from app.api.integrations_strava import STRAVA_RECONNECT_THRESHOLD
-
     def _row(sql: str):
         try:
             return db.execute(text(sql)).first()
@@ -274,37 +257,11 @@ def _heatmap_freshness(db: Session) -> dict:
     heat_edges_agg = int(r[0] or 0) if r else 0
     heat_agg_updated_at = r[1].isoformat() if r and r[1] else None
 
-    # Last resync run + status — the latest Strava import job (tiny table).
-    r = _row(
-        "SELECT status, updated_at FROM import_jobs "
-        "WHERE provider = 'strava' ORDER BY updated_at DESC LIMIT 1"
-    )
-    last_resync_status = r[0] if r else None
-    last_resync_at = r[1].isoformat() if r and r[1] else None
-
-    # Strava integration health — same rule as /integrations/strava/status:
-    # reconnect_required once sync_failures crosses the threshold.
-    r = _row(
-        "SELECT COUNT(*), COALESCE(MAX(sync_failures), 0) "
-        "FROM integration_accounts WHERE provider = 'strava'"
-    )
-    strava_connected = int(r[0] or 0) if r else 0
-    strava_sync_failures = int(r[1] or 0) if r else 0
-
     return {
         "last_activity_at": last_activity_at,
         "last_activity_date": last_activity_date,
         "heat_agg_updated_at": heat_agg_updated_at,
         "heat_edges_agg": heat_edges_agg,
-        "last_resync_at": last_resync_at,
-        "last_resync_status": last_resync_status,
-        "strava_connected": strava_connected,
-        "strava_sync_failures": strava_sync_failures,
-        "strava_reconnect_required": strava_sync_failures >= STRAVA_RECONNECT_THRESHOLD,
-        "reconnect_threshold": STRAVA_RECONNECT_THRESHOLD,
-        "webhook_subscription_present": bool(
-            os.environ.get("STRAVA_WEBHOOK_SUBSCRIPTION_ID", "").strip()
-        ),
     }
 
 
@@ -403,7 +360,7 @@ async def admin_recent_activities(
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> dict:
-    """Most recently uploaded activities with their author + provider. Lets the admin see GPX vs Strava ingress in real time."""
+    """Most recently uploaded activities with their author + provider."""
     rows = (
         db.query(
             Activity.id,
@@ -441,40 +398,6 @@ async def admin_recent_activities(
     }
 
 
-@router.get("/sync-status")
-async def admin_sync_status(
-    _admin: Annotated[AuthenticatedUser, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
-) -> dict:
-    """Per-user Strava sync status for admin monitoring."""
-    accounts = db.query(IntegrationAccount).filter(
-        IntegrationAccount.provider == "strava"
-    ).all()
-
-    now = datetime.now(UTC)
-    users = []
-    for acct in accounts:
-        delay_days = (now - acct.last_synced_at).days if acct.last_synced_at else None
-        users.append({
-            "athlete_name": acct.athlete_name or "Unknown",
-            "last_synced_at": acct.last_synced_at.isoformat() if acct.last_synced_at else None,
-            "delay_days": delay_days,
-            "sync_failures": acct.sync_failures,
-            "token_expired": bool(acct.expires_at and acct.expires_at < time.time()),
-            "disabled": acct.sync_failures >= 3,
-        })
-
-    users.sort(key=lambda u: u["delay_days"] if u["delay_days"] is not None else 9999, reverse=True)
-
-    return {
-        "total_connected": len(users),
-        "stale_30d": sum(1 for u in users if (u["delay_days"] or 9999) > 30),
-        "token_expired": sum(1 for u in users if u["token_expired"]),
-        "disabled": sum(1 for u in users if u["disabled"]),
-        "users": users,
-    }
-
-
 @router.get("/users")
 async def admin_users(
     _admin: Annotated[AuthenticatedUser, Depends(require_admin)],
@@ -483,15 +406,13 @@ async def admin_users(
     """Per-user observability rows for the admin USER dashboard.
 
     One row per registered user with: identity (id/email/username/is_admin/
-    created_at), Strava linkage (athlete id → profile link, name, connect +
-    sync health incl. the /status `reconnect_required` flag), and a traces
-    summary (count + per-sport breakdown + total distance + first/last date +
+    created_at) and a traces summary (count + per-sport breakdown + total distance + first/last date +
     provider split + skipped/failed import counts).
 
     Efficiency (runs on db-f1-micro): the heavy tables (`activities`,
     `import_jobs`) are touched by exactly THREE `GROUP BY user_id` scans
-    (indexed column) — never a per-user N+1. The users + strava-accounts
-    tables are tiny (friends-beta) and fully materialised into dicts.
+    (indexed column) — never a per-user N+1. The users table is tiny
+    (friends-beta) and fully materialised.
 
     Deliberately OMITTED: per-user grid-fallback vs OSM-matched heat_edge
     ratio. `heat_edges` has no `user_id`; attributing rows to a user means
@@ -499,22 +420,10 @@ async def admin_users(
     `edge_key` filtered on a per-user hash — not cheap on f1-micro. The
     GLOBAL ratio already lives on `/admin/dashboard` (osm_way_id_pct).
     """
-    # Reconnect threshold is the SSOT from the Strava module (env-driven,
-    # default 3). Lazy import to avoid a heavy/circular top-level import.
-    from app.api.integrations_strava import STRAVA_RECONNECT_THRESHOLD
-
     # ── Users (tiny table — beta) ────────────────────────────────────────
     user_rows = db.query(
         User.id, User.email, User.username, User.is_admin, User.created_at
     ).order_by(User.created_at.asc()).all()
-
-    # ── Strava accounts keyed by user_id (tiny table) ────────────────────
-    strava_accounts = {
-        acct.user_id: acct
-        for acct in db.query(IntegrationAccount).filter(
-            IntegrationAccount.provider == "strava"
-        ).all()
-    }
 
     # ── Activities aggregated by (user_id, sport): count, distance,
     #    first/last date. One indexed GROUP BY scan. ──────────────────────
@@ -577,23 +486,8 @@ async def admin_users(
         for uid, skipped, failed in import_agg
     }
 
-    now_ts = time.time()
     users = []
     for u_id, email, username, is_admin, created_at in user_rows:
-        acct = strava_accounts.get(u_id)
-        strava = None
-        if acct:
-            failures = acct.sync_failures or 0
-            strava = {
-                "athlete_id": acct.external_user_id,
-                "athlete_name": acct.athlete_name,
-                "connected_at": acct.created_at.isoformat() if acct.created_at else None,
-                "expires_at": acct.expires_at,
-                "token_expired": bool(acct.expires_at and acct.expires_at < now_ts),
-                "last_synced_at": acct.last_synced_at.isoformat() if acct.last_synced_at else None,
-                "sync_failures": failures,
-                "reconnect_required": failures >= STRAVA_RECONNECT_THRESHOLD,
-            }
         sport = by_user_sport.get(u_id, {})
         imports = by_user_imports.get(u_id, {"skipped": 0, "failed": 0})
         users.append({
@@ -602,7 +496,6 @@ async def admin_users(
             "username": username,
             "is_admin": bool(is_admin),
             "created_at": created_at.isoformat() if created_at else None,
-            "strava": strava,
             "activities": {
                 "total": sport.get("total", 0),
                 "total_distance_m": sport.get("total_distance_m", 0.0),
@@ -820,8 +713,6 @@ def _fetch_executions(job_name: str, limit: int = 5) -> list[dict]:
 
 _TRACKED_JOBS = [
     "common-trails-import-osm-prod",
-    "common-trails-import-strava-prod",
-    "common-trails-resync-strava-prod",
     "common-trails-group-edges-osm-prod",
     "common-trails-rebuild-heatmap-prod",
     "common-trails-migrate-edge-clustering-prod",
@@ -906,47 +797,3 @@ async def admin_cancel_job(
         "changed": True,
         "previous_status": prev_status,
     }
-
-
-@router.post("/resync")
-async def admin_trigger_resync(
-    _admin: Annotated[AuthenticatedUser, Depends(require_admin)],
-    background_tasks: BackgroundTasks,
-) -> dict:
-    """Manually trigger the Strava resync job."""
-    from app.api.integrations_strava import GCP_PROJECT, GCP_REGION
-
-    resync_job_name = os.environ.get("RESYNC_JOB_NAME", "common-trails-resync-strava-prod")
-
-    if GCP_PROJECT and GCP_REGION:
-        try:
-            import httpx
-            token_resp = httpx.get(
-                "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
-                headers={"Metadata-Flavor": "Google"},
-                timeout=5.0,
-            )
-            token_resp.raise_for_status()
-            access_token = token_resp.json()["access_token"]
-
-            url = (
-                f"https://run.googleapis.com/v2/projects/{GCP_PROJECT}"
-                f"/locations/{GCP_REGION}/jobs/{resync_job_name}:run"
-            )
-            resp = httpx.post(
-                url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={},
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            log.info("Triggered Cloud Run resync job %s", resync_job_name)
-            return {"status": "triggered", "target": "cloud_run_job"}
-        except Exception as exc:
-            log.warning("Cloud Run trigger failed, falling back to background task: %s", exc)
-
-    # Fallback: run in-process
-    from app.jobs.resync_strava import resync_all
-
-    background_tasks.add_task(lambda: asyncio.run(resync_all()))
-    return {"status": "triggered", "target": "background_task"}

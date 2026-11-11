@@ -1,17 +1,15 @@
 """Real execute-and-assert tests for the admin heatmap MONITORING feature.
 
-Covers the three pieces landed in ``feat/admin-heatmap-monitoring``:
+Covers the two pieces landed in ``feat/admin-heatmap-monitoring``:
 
 1. ``build_pmtiles.capture_heatmap_metrics_snapshot`` — the append-only
    snapshot writer (reuses ``compute_community_stats``, SSOT). Asserts it
    writes the documented columns with the right types.
 2. ``GET /admin/heatmap-metrics`` — admin-gated; returns the Level-2
    time-series + the Level-1 freshness object. Non-admin → 403.
-3. ``admin._heatmap_freshness`` — the Level-1 computation, driven directly
-   so a logic regression (reconnect threshold, webhook env) fails the test.
 
 Drives the REAL functions/handlers (no inline mirror). Non-destructive on the
-shared local DB: synthetic ``source`` tags + integration rows, cleaned up in
+shared local DB: synthetic ``source`` tags, cleaned up in
 ``finally``. Needs the PostGIS DB with migration 0058 (``heatmap_metrics``);
 skips cleanly if absent.
 """
@@ -147,13 +145,10 @@ class TestHeatmapMetricsEndpoint:
 
             # Level-1 freshness object
             fr = data["freshness"]
-            for k in ("last_activity_at", "heat_agg_updated_at", "heat_edges_agg",
-                      "last_resync_at", "last_resync_status", "strava_connected",
-                      "strava_sync_failures", "strava_reconnect_required",
-                      "reconnect_threshold", "webhook_subscription_present"):
-                assert k in fr, k
-            assert isinstance(fr["strava_reconnect_required"], bool)
-            assert isinstance(fr["webhook_subscription_present"], bool)
+            # Exactly the fields the admin page reads (frontend/lib/admin-metrics.ts
+            # `Freshness`) — the retired Strava API sync fields are gone.
+            assert set(fr) == {"last_activity_at", "last_activity_date",
+                               "heat_agg_updated_at", "heat_edges_agg"}
         finally:
             db = SessionLocal()
             db.execute(sa_text("DELETE FROM heatmap_metrics WHERE source = :s"), {"s": source})
@@ -183,45 +178,4 @@ class TestHeatmapMetricsEndpoint:
             db = SessionLocal()
             db.execute(sa_text("DELETE FROM heatmap_metrics WHERE source LIKE :p"), {"p": f"{base}%"})
             db.commit()
-            db.close()
-
-
-class TestFreshnessComputation:
-    def test_reconnect_required_crosses_threshold(self, monkeypatch):
-        """sync_failures >= STRAVA_RECONNECT_THRESHOLD flips reconnect_required."""
-        from app.api.admin import _heatmap_freshness
-        from app.api.integrations_strava import STRAVA_RECONNECT_THRESHOLD
-
-        acct_id = str(uuid.uuid4())
-        user_id = str(uuid.uuid4())
-        db = SessionLocal()
-        try:
-            db.execute(sa_text(
-                "INSERT INTO integration_accounts "
-                "(id, user_id, provider, access_token, sync_failures) "
-                "VALUES (:id, :uid, 'strava', 'tok', :sf)"
-            ), {"id": acct_id, "uid": user_id, "sf": STRAVA_RECONNECT_THRESHOLD + 1})
-            db.commit()
-
-            monkeypatch.setenv("STRAVA_WEBHOOK_SUBSCRIPTION_ID", "sub-123")
-            fr = _heatmap_freshness(db)
-            assert fr["strava_connected"] >= 1
-            assert fr["strava_sync_failures"] >= STRAVA_RECONNECT_THRESHOLD
-            assert fr["strava_reconnect_required"] is True
-            assert fr["reconnect_threshold"] == STRAVA_RECONNECT_THRESHOLD
-            assert fr["webhook_subscription_present"] is True
-        finally:
-            db.execute(sa_text("DELETE FROM integration_accounts WHERE id = :id"), {"id": acct_id})
-            db.commit()
-            db.close()
-
-    def test_webhook_absent_when_env_unset(self, monkeypatch):
-        from app.api.admin import _heatmap_freshness
-
-        monkeypatch.delenv("STRAVA_WEBHOOK_SUBSCRIPTION_ID", raising=False)
-        db = SessionLocal()
-        try:
-            fr = _heatmap_freshness(db)
-            assert fr["webhook_subscription_present"] is False
-        finally:
             db.close()

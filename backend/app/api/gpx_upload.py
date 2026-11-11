@@ -45,7 +45,7 @@ def _upload_rate_limit() -> str:
     return os.environ.get("UPLOAD_RATE_LIMIT", "200/hour")
 
 # Constants live in `app.services.gpx` so every parse_gpx caller (HTTP
-# upload, ZIP bulk, CLI bulk folder, Strava webhook) imports from the
+# upload, ZIP bulk, CLI bulk folder) imports from the
 # parser layer rather than depending on this HTTP handler module.
 # Re-exported here so anything importing from the old location still
 # works (the test fixture in test_import_gpx_folder_cli.py patches via

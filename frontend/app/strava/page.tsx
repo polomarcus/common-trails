@@ -9,9 +9,8 @@
  * `ContributionDropzone` (any `.zip` → the GB-safe archive path; loose GPX/FIT
  * → /imports/files).
  *
- * The old "connect Strava = a personal view of your rides" flow is CANCELLED at
- * the UI level (the backend OAuth / webhook / sync code stays in place but
- * dormant — there is simply no UI entry point here anymore). This page has one
+ * The old "connect Strava = a personal view of your rides" flow is REMOVED
+ * (UI entry points and the backend OAuth / webhook / sync code). This page has one
  * job: "deposit your traces to contribute to the common map."
  *
  * The page is source-neutral: Strava is one source among GPX / FIT / others, so

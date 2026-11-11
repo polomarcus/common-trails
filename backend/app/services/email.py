@@ -19,6 +19,7 @@ backend's health (no account enumeration, no 500 on a transient SMTP hiccup).
 """
 from __future__ import annotations
 
+import html as html_lib
 import logging
 import math
 import os
@@ -26,6 +27,9 @@ import os
 import httpx
 
 from app.config import EMAIL_FROM, RESEND_API_KEY, SUPPORT_EMAIL, TEST_MODE
+
+# Where "a new rider confirmed their account" notifications go. Unset → none.
+ADMIN_NOTIFY_EMAIL = os.environ.get("ADMIN_NOTIFY_EMAIL", "").strip()
 
 logger = logging.getLogger(__name__)
 
@@ -526,3 +530,41 @@ def render_email_change_email(confirm_url: str, locale: str = "fr") -> tuple[str
   <p style="font-size:12px;color:#999;word-break:break-all;margin:0">{confirm_url}</p>
 </div>"""
     return subject, html
+
+
+def render_admin_new_account_email(new_email: str) -> tuple[str, str]:
+    """``(subject, html)`` of the admin notification sent when a new account
+    confirms its address (first successful magic-link login). Internal mail:
+    French only, no marketing — the address, and a link to the admin page."""
+    safe = html_lib.escape(new_email)
+    subject = f"Nouveau compte sur Chemins Communs : {new_email}"
+    body = f"""\
+  <p style="font-size:15px;line-height:1.5;margin:0 0 12px">
+    Un nouveau compte vient de confirmer son adresse :
+  </p>
+  <p style="font-size:16px;font-weight:700;margin:0 0 20px">{safe}</p>
+  <p style="margin:0 0 8px">
+    <a href="https://chemins-communs.fr/admin"
+       style="display:inline-block;padding:10px 22px;background:#2d6a4f;color:#fff;
+              text-decoration:none;border-radius:10px;font-weight:600;font-size:14px">
+      Ouvrir la page admin
+    </a>
+  </p>
+  <p style="font-size:12px;color:#888;margin:16px 0 0">
+    Notification automatique — envoyée une seule fois par compte, à sa première connexion.
+  </p>
+"""
+    return subject, _wrap_html(body)
+
+
+def notify_admin_new_account(new_email: str) -> bool:
+    """Tell the admin (``ADMIN_NOTIFY_EMAIL``) that a new account confirmed its
+    address. No-op (False) when the variable is unset. Never raises."""
+    if not ADMIN_NOTIFY_EMAIL:
+        return False
+    try:
+        subject, html = render_admin_new_account_email(new_email)
+        return send_email(ADMIN_NOTIFY_EMAIL, subject, html)
+    except Exception:  # noqa: BLE001 — a notification must never break a login
+        logger.warning("admin new-account notification failed", exc_info=True)
+        return False

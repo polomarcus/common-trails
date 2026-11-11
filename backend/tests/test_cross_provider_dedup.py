@@ -100,7 +100,7 @@ class TestCrossProviderDedup:
         assert r2["status"] == "created"
 
     def test_strava_iso8601_string_activity_date_does_not_crash(self):
-        """The resync path (`app/jobs/resync_strava.py`) passes Strava's
+        """The former Strava API resync job passed Strava's
         `start_date_local` / `start_date` verbatim — these are ISO 8601
         STRINGS, not datetime objects. The cross-provider dedup added
         2026-05-27 (S2.6) does `activity_date - timedelta(minutes=5)`,

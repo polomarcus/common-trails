@@ -1,11 +1,8 @@
-"""Account unification — Strava-connect ⇄ email login.
+"""Account unification — setting a real email on an account.
 
-Drives the REAL handlers through the FastAPI test client:
-
-  (b) LINK-ON-CONNECT — a logged-in user who connects Strava gets the athlete
-      attached to THEIR account (no synthetic strava_<id>@strava.local user),
-      and a logged-in user can NEVER steal an athlete already linked to someone
-      else (the old "ghost migration" hijack is gone → conflict redirect).
+Drives the REAL handlers through the FastAPI test client (the Strava-connect
+half of this file went away with the Strava API sync; legacy synthetic
+``strava_<id>@strava.local`` accounts are created by direct DB insert):
 
   (a) POST /auth/me/email — set/change the account email with a confirm link,
       refusing (409) any address already owned by another account (no takeover),
@@ -15,8 +12,8 @@ Drives the REAL handlers through the FastAPI test client:
       be replayed at the magic-link login verify; a magic-link token can't
       finalize an email change.
 
-The Strava callback stub always uses external_user_id == "strava_stub_user_42";
-we wipe it around each test so a leftover binding can't mask a conflict path.
+The synthetic account uses external id "strava_stub_user_42"; we wipe it
+around each test so a leftover row can't leak across tests.
 """
 from __future__ import annotations
 
@@ -26,20 +23,11 @@ import uuid
 import pytest
 from sqlalchemy import text as sa_text
 
-from app.db.models import IntegrationAccount, User
+from app.db.models import User
 from app.db.session import SessionLocal
 
 _STUB_STRAVA_ID = "strava_stub_user_42"
 _SYNTHETIC_EMAIL = f"strava_{_STUB_STRAVA_ID}@strava.local"
-
-
-@pytest.fixture(autouse=True)
-def _strava_enabled(monkeypatch):
-    import app.api.integrations_strava as strava_mod
-    monkeypatch.setattr(strava_mod, "STRAVA_ENABLED", True)
-    monkeypatch.setattr(strava_mod, "TEST_MODE", True)
-    monkeypatch.setattr(strava_mod, "FRONTEND_URL", "http://localhost:3787")
-    yield
 
 
 @pytest.fixture(autouse=True)
@@ -99,52 +87,10 @@ def _create_user_directly(email: str) -> str:
         db.close()
 
 
-def _link_strava_to(user_id: str) -> None:
-    db = SessionLocal()
-    try:
-        db.add(IntegrationAccount(
-            id=str(uuid.uuid4()),
-            user_id=user_id,
-            provider="strava",
-            access_token="x",
-            refresh_token="y",
-            expires_at=9_999_999_999,
-            external_user_id=_STUB_STRAVA_ID,
-            athlete_name="Existing",
-        ))
-        db.commit()
-    finally:
-        db.close()
-
-
-def _connect_and_callback(client, bearer: str):
-    """Drive GET /connect (logged-in) → follow to /callback. Returns callback resp."""
-    connect = client.get(
-        "/integrations/strava/connect",
-        headers={"Authorization": f"Bearer {bearer}"},
-        follow_redirects=False,
-    )
-    assert connect.status_code in (302, 307), connect.text
-    callback_url = connect.headers["location"]
-    return client.get(callback_url, follow_redirects=False)
-
-
 def _extract_token(html: str) -> str:
     m = re.search(r"token=([A-Za-z0-9._\-]+)", html)
     assert m, f"no token in email html: {html[:200]}"
     return m.group(1)
-
-
-def _strava_account_owner() -> str | None:
-    db = SessionLocal()
-    try:
-        acct = db.query(IntegrationAccount).filter(
-            IntegrationAccount.external_user_id == _STUB_STRAVA_ID,
-            IntegrationAccount.provider == "strava",
-        ).first()
-        return acct.user_id if acct else None
-    finally:
-        db.close()
 
 
 def _user_email(user_id: str) -> str | None:
@@ -154,59 +100,6 @@ def _user_email(user_id: str) -> str | None:
         return u.email if u else None
     finally:
         db.close()
-
-
-# ── (b) LINK-ON-CONNECT ────────────────────────────────────────────────
-
-class TestLinkOnConnect:
-    def test_logged_in_connect_attaches_to_current_user(self, client):
-        """A logged-in email user who connects Strava gets the athlete bound to
-        THEIR account — no synthetic strava_<id>@strava.local user is created."""
-        user_id, email, bearer = _register(client)
-
-        resp = _connect_and_callback(client, bearer)
-        assert resp.status_code in (302, 307), resp.text
-        assert "status=connected" in resp.headers.get("location", "")
-
-        # The athlete is bound to the logged-in user, not a fresh synthetic one.
-        assert _strava_account_owner() == user_id
-        # No synthetic user was created for this athlete.
-        db = SessionLocal()
-        try:
-            synth = db.query(User).filter(User.email == _SYNTHETIC_EMAIL).first()
-            assert synth is None, "connect flow wrongly created a synthetic strava_ user"
-        finally:
-            db.close()
-        # The user's real email is untouched.
-        assert _user_email(user_id) == email
-
-    def test_connect_does_not_steal_athlete_linked_to_another_user(self, client):
-        """User A connecting an athlete already linked to user B must NOT relink
-        or migrate — B keeps the link, A is told there is a conflict."""
-        b_id = _create_user_directly(_unique_email())
-        _link_strava_to(b_id)
-
-        a_id, _a_email, a_bearer = _register(client)
-        resp = _connect_and_callback(client, a_bearer)
-
-        # Refused via a conflict redirect (never a silent success bind).
-        assert resp.status_code in (302, 307), resp.text
-        loc = resp.headers.get("location", "")
-        assert "status=conflict" in loc, f"expected conflict redirect, got {loc}"
-
-        # The athlete still belongs to B; A has no Strava account.
-        assert _strava_account_owner() == b_id
-        db = SessionLocal()
-        try:
-            a_acct = db.query(IntegrationAccount).filter(
-                IntegrationAccount.user_id == a_id,
-                IntegrationAccount.provider == "strava",
-            ).first()
-            assert a_acct is None
-            # B's user row is intact (old ghost-migration would delete it).
-            assert db.query(User).filter(User.id == b_id).first() is not None
-        finally:
-            db.close()
 
 
 # ── (a) POST /auth/me/email ────────────────────────────────────────────

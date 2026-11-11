@@ -56,7 +56,6 @@ jobs:
       DOCKER_BUILDKIT: 1
       COMPOSE_DOCKER_CLI_BUILD: 1
       TEST_MODE: "true"
-      ENABLE_STRAVA_INTEGRATION: "true"
       JWT_SECRET: "ci-test-secret"
       POSTGRES_DB: "common_trails"
       POSTGRES_USER: "postgres"
@@ -84,7 +83,6 @@ jobs:
           echo "::notice::Docker build+start: $(($(date +%s) - START))s"
         env:
           TEST_MODE: "true"
-          ENABLE_STRAVA_INTEGRATION: "true"
           JWT_SECRET: "ci-test-secret"
           DOCKER_BUILDKIT: "1"
           COMPOSE_DOCKER_CLI_BUILD: "1"
@@ -151,7 +149,6 @@ jobs:
       DOCKER_BUILDKIT: 1
       COMPOSE_DOCKER_CLI_BUILD: 1
       TEST_MODE: "true"
-      ENABLE_STRAVA_INTEGRATION: "true"
       API_URL: "http://localhost:8787"
       BASE_URL: "http://localhost:3787"
       NEXT_PUBLIC_API_URL: "http://localhost:8787"
@@ -182,7 +179,6 @@ jobs:
           docker compose -f docker-compose.backend.yml up --build -d
         env:
           TEST_MODE: "true"
-          ENABLE_STRAVA_INTEGRATION: "true"
           JWT_SECRET: "ci-test-secret"
           # "Ma heatmap" private file ON, stored in a directory inside the
           # backend container (my-heatmap-private-file.spec.ts). E2E job only.

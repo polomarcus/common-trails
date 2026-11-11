@@ -406,51 +406,6 @@ def test_sport_change_single_and_bulk_schedule(mhf_env, client, auth_headers, us
     assert _rev(uid) > r1
 
 
-def test_strava_geometry_upgrade_schedules(mhf_env, users):
-    from app.api.integrations_strava import _gps_apply_batch
-
-    db = SessionLocal()
-    try:
-        uid = _mk_user(db)
-        users.append(uid)
-        aid = _mk_activity(db, uid, provider="strava", source="strava_api")
-        db.commit()
-    finally:
-        db.close()
-    mhf_env.clear()
-    r0 = _rev(uid)
-    _gps_apply_batch(str(uuid.uuid4()), [(aid, _line(*_start(), n=12))], 0)
-    assert _scheduled(mhf_env, uid)
-    assert _rev(uid) > r0
-
-
-def test_strava_webhook_delete_schedules(mhf_env, users):
-    from app.api.internal_strava_webhook import _delete_activity_for_strava
-    from app.db.models import IntegrationAccount
-
-    athlete = uuid.uuid4().hex[:10]
-    db = SessionLocal()
-    try:
-        uid = _mk_user(db)
-        users.append(uid)
-        _mk_activity(db, uid, provider="strava", provider_activity_id="777")
-        db.add(IntegrationAccount(
-            id=str(uuid.uuid4()), user_id=uid, provider="strava", access_token="x",
-            refresh_token="y", expires_at=9_999_999_999, external_user_id=athlete, athlete_name="A"))
-        db.commit()
-    finally:
-        db.close()
-    mhf_env.clear()
-    try:
-        assert _delete_activity_for_strava(athlete, "777")["status"] == "deleted"
-        assert _scheduled(mhf_env, uid)
-    finally:
-        db = SessionLocal()
-        db.execute(sa_text("DELETE FROM integration_accounts WHERE user_id = :u"), {"u": uid})
-        db.commit()
-        db.close()
-
-
 def test_account_merge_rebuilds_survivor_and_deletes_absorbed(mhf_env, users):
     from app.services.account_merge import merge_synthetic_account
 
@@ -783,7 +738,6 @@ def _run_deploy_with_stub(tmp_path, flag: str):
         **os.environ,
         "PATH": f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}",
         "DEPLOY_YES": "1",
-        "STRAVA_WEBHOOK_SUBSCRIPTION_ID": "349136",
         "MY_HEATMAP_FILES_ENABLED": flag,
     }
     proc = subprocess.run(["bash", str(script), "test-tag"], env=env, capture_output=True, text=True, timeout=60)

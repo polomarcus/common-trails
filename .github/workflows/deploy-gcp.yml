@@ -49,10 +49,6 @@ jobs:
       GCP_REGION: ${{ secrets.GCP_REGION || 'europe-west1' }}
       ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO || 'europe-west1-docker.pkg.dev/common-trails/common-trails' }}
       IMAGE_TAG: ${{ github.event.inputs.tag || github.sha }}
-      # Required by deploy-prod.sh (set -u guard, line ~76). The live value is
-      # 349136; NEVER pass '' (empty = allow-all subscriptions, a security
-      # downgrade). Secret already exists in the repo.
-      STRAVA_WEBHOOK_SUBSCRIPTION_ID: ${{ secrets.STRAVA_WEBHOOK_SUBSCRIPTION_ID }}
       # Private per-user "Ma heatmap" files (docs/ma-heatmap-fichier-prive.md §9).
       # ON for every account; rollback = set to "false" and redeploy (the front
       # falls back to /me/activities via the manifest, no front rebuild).
@@ -146,7 +142,7 @@ jobs:
           echo "post-deploy healthcheck FAILED (web /readyz not returning 200 JSON)"; exit 1
 
       # The WORKER (scale-to-zero 2Gi) owns the heavy /internal Cloud Tasks
-      # handlers (heat-compute, artefact-rebuild, Strava webhook). A broken
+      # handlers (heat-compute, artefact-rebuild). A broken
       # worker deploy (wrong image / crash / no DB) would otherwise be SILENT
       # until a task failed. Red the CD instead. URL = WORKER_RUN_URL in
       # deploy-prod.sh. Hit /readyz (NOT the SPA catch-all /health/live, which

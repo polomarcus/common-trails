@@ -10,9 +10,8 @@
 #   (the ~€65/mo trap). Do NOT hand-type `gcloud run deploy` and do NOT
 #   `terraform apply`. Twice, a hand-typed
 #   `gcloud run deploy --set-env-vars=...` dropped half the env — specifically
-#   the webhook wiring (CLOUD_TASKS_*_QUEUE, INTERNAL_*_HANDLER_URL,
-#   STRAVA_WEBHOOK_*) — leaving the Strava push webhook silently OFF until the
-#   weekly resync scheduler happened to backfill. `--set-env-vars` REPLACES the
+#   the Cloud Tasks wiring (CLOUD_TASKS_*_QUEUE, INTERNAL_*_HANDLER_URL) —
+#   leaving a background path silently OFF. `--set-env-vars` REPLACES the
 #   whole env set, so anything you forget to list is gone.
 #
 #   This script fixes that class of bug by being DECLARATIVE: it applies the
@@ -45,11 +44,10 @@
 #   MICROSERVICE SPLIT (2026-07-13): this script now deploys TWO Cloud Run
 #   services from the SAME image with the SAME authoritative env — a light
 #   512Mi public WEB and a scale-to-zero 2Gi WORKER that owns the heavy Cloud
-#   Tasks /internal handlers (heat compute, PMTiles rebuild, Strava webhook).
+#   Tasks /internal handlers (heat compute, PMTiles rebuild).
 #   See the "MICROSERVICE SPLIT" topology block below + docs/prod-deploy.md §8.
 #
 # USAGE
-#   export STRAVA_WEBHOOK_SUBSCRIPTION_ID='349136'  # required (empty '' = allow-all)
 #   scripts/deploy-prod.sh <IMAGE_TAG>              # e.g. prod-20260711-1710 or a git sha
 #   # non-interactive: DEPLOY_YES=1 scripts/deploy-prod.sh <IMAGE_TAG>
 #
@@ -72,13 +70,13 @@ ENV="prod"
 # the SAME env set. They differ ONLY in size + which traffic each receives:
 #
 #   • WEB  (${WEB_SERVICE:-common-trails-api-prod}) — public. Static frontend +
-#     light API (auth, /imports, Strava OAuth, heatmap/export reads,
+#     light API (auth, /imports, heatmap/export reads,
 #     me_activities). Sized 512Mi so warm is cheap. Keeps the historical name,
 #     so the domain mapping + its .run.app URL are UNCHANGED.
 #
 #   • WORKER (common-trails-worker-prod) — scale-to-zero, 2Gi. Owns the HEAVY
 #     Cloud Tasks handlers: POST /internal/ingest/heat, /internal/artefacts/
-#     rebuild (PMTiles build), /internal/strava/webhook-event. Cloud Tasks
+#     rebuild (PMTiles build). Cloud Tasks
 #     POSTs to the WORKER's URL (INTERNAL_*_HANDLER_URL below), so the 2Gi
 #     memory + heavy CPU live off the user-facing service.
 #
@@ -86,8 +84,6 @@ ENV="prod"
 # where the INTERNAL_*_HANDLER_URL vars point (worker) + the per-service memory
 # knobs. Nothing routes public traffic to the worker; nothing enqueues heavy
 # work to the web. The web's dormant /internal routes are never hit → harmless.
-# (The daily Strava health-check is LIGHT — cheap SQL + one API call — so it
-# STAYS on the web to avoid re-pointing its Cloud Scheduler OIDC audience.)
 WEB_SERVICE="common-trails-api-${ENV}"
 WORKER_SERVICE="common-trails-worker-${ENV}"
 SERVICE="$WEB_SERVICE"  # back-compat alias for pre-flight / messages
@@ -101,9 +97,8 @@ JOBS_SA="common-trails-jobs@${PROJECT}.iam.gserviceaccount.com"
 CLOUDSQL_INSTANCE="${PROJECT}:${REGION}:common-trails-${ENV}"
 # GCS data bucket (DFCI cache / DEM tiles), mounted read-only at /data.
 DATA_BUCKET="${PROJECT}-common-trails-data-${ENV}"
-# USER-FACING origin (custom domain). Used ONLY for FRONTEND_URL, the Strava
-# OAuth redirect, and the Strava webhook callback — the URLs a human/Strava
-# hits.
+# USER-FACING origin (custom domain). Used ONLY for FRONTEND_URL — the URL a
+# human hits (links in emails, post-login redirects).
 PUBLIC_URL="https://chemins-communs.fr"
 # MACHINE-TO-MACHINE origins (Cloud Run auto-assigned .run.app URLs). The
 # INTERNAL_*_HANDLER_URL vars use THESE, because Cloud Tasks / Cloud Scheduler
@@ -119,8 +114,8 @@ PUBLIC_URL="https://chemins-communs.fr"
 # url is the SAME pattern for the new service name; it resolves the moment the
 # worker service exists (first deploy). ⚠️ If Cloud Run ever reassigns EITHER
 # url, re-capture it from `describe` (docs/prod-deploy.md §1) AND re-issue the
-# OIDC-token creators (the 3 heat/artefact/webhook Cloud Tasks queues target
-# the WORKER url; the health-check scheduler targets the WEB url).
+# OIDC-token creators (the heat/artefact Cloud Tasks queues target the WORKER
+# url).
 PROJECT_NUMBER="301616827398"
 RUN_URL="https://${WEB_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"           # WEB (public)
 WORKER_RUN_URL="https://${WORKER_SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app" # WORKER (heavy /internal/*)
@@ -144,20 +139,14 @@ MY_HEATMAP_FILES_USERS="${MY_HEATMAP_FILES_USERS:-}"
 # ── Cloud Scheduler (2026-11-07 ops audit P0-1/P0-2) ─────────────────────────
 # The daily/monthly backstops call the Cloud Run Admin API `…/jobs/<job>:run`
 # with an OAuth token minted for TASKS_INVOKER_SA. That needs `run.jobs.run` ON
-# THE JOB. The SA had it only on resync-strava (whose scheduler was deleted
-# 2026-08-04) → the 3 live schedulers got PERMISSION_DENIED (403) on EVERY run
+# THE JOB. The SA did not have it → the 3 live schedulers got PERMISSION_DENIED (403) on EVERY run
 # since their creation: the drain/rebuild backstops never fired once.
 # Least privilege = roles/run.invoker bound on each scheduled JOB (not the
 # project): on a job resource it carries exactly run.jobs.run (its other perms,
 # routes/instances.invoke, only apply to services). See job_scheduler_invoker_for.
-HEALTH_CHECK_SCHEDULER="strava-health-check-daily-prod"
 
-# ── Required operator inputs (deployment state, NOT code) ─────────────────────
-# `${VAR?msg}` errors if UNSET but allows an explicit empty string. Requiring it
-# means an authoritative redeploy can never silently WIPE the live value.
-# (SENTRY_DSN is now wired as a Secret Manager secret — see the SECRETS block —
-#  so error/perf observability actually reports; 2026-08-07.)
-: "${STRAVA_WEBHOOK_SUBSCRIPTION_ID?export STRAVA_WEBHOOK_SUBSCRIPTION_ID (empty '' = allow-all subscriptions; the live value is 349136 — set it after 'app.cli.strava_subscribe create')}"
+# No required operator input: every value is either fixed topology (above) or a
+# Secret Manager secret (SECRETS block below).
 
 IMAGE_TAG="${1:-}"
 if [[ -z "$IMAGE_TAG" ]]; then
@@ -179,11 +168,12 @@ IMAGE="${REPO}/api:${IMAGE_TAG}"
 # defunct and re-syncing their images every deploy was pure waste:
 #   import-osm, group-edges-osm, rebuild-heatmap, rebuild-heat-agg,
 #   verify-heat-agg, migrate-edge-clustering, recompute-elevation-gain.
-# What remains below are the LIVE jobs of the raw pipeline + Strava sync.
+# The three Strava API sync jobs (import-strava, strava-subscribe,
+# resync-strava) left this list with the Strava live-sync removal: their
+# entrypoints no longer exist in the image. The Cloud Run Job resources are
+# orphaned until deleted by hand (docs/prod-deploy.md).
+# What remains below are the LIVE jobs of the raw pipeline.
 JOBS=(
-  "common-trails-import-strava-${ENV}"          # Strava full import (per-user, personal)
-  "common-trails-strava-subscribe-${ENV}"       # Strava push-subscription bootstrap CLI
-  "common-trails-resync-strava-${ENV}"          # weekly trailing-window reconcile (load-bearing — recovers webhook drops)
   "common-trails-build-pmtiles-${ENV}"          # heatmap-display.pmtiles from RAW activities (raw-trace pivot)
   "common-trails-ingest-pending-archives-${ENV}" # drain uploaded archives (signed-URL flow) → manual_upload activities
   "common-trails-resync-reminder-${ENV}"        # monthly "re-export + re-upload your data" reminder email (stale contributors)
@@ -197,8 +187,9 @@ JOBS=(
 ENV_FILE="$(mktemp)"  # gcloud --env-vars-file parses by content, not extension
 trap 'rm -f "$ENV_FILE"' EXIT
 # ── EXACTLY the live-good revision 00395 env set (verified via `describe`) ────
-# 29 literal vars below + 7 secrets (SECRETS, further down) = 36 env entries.
-# (rev 00395 baseline was 23 + 6 = 29; +EMAIL_FROM +RESEND_API_KEY were added
+# Literal vars below + the secrets (SECRETS, further down) = the whole env.
+# (History since the rev 00395 baseline: −the Strava API sync vars and secrets
+# when that feature was removed; +EMAIL_FROM +RESEND_API_KEY were added
 # for the email-login feature — passwordless magic-link auth;
 # +INGEST_ARCHIVES_JOB_NAME for the event-driven archive-drain trigger;
 # +BUILD_PMTILES_JOB_NAME for the event-driven post-drain heatmap rebuild;
@@ -208,9 +199,6 @@ trap 'rm -f "$ENV_FILE"' EXIT
 # add/remove without re-verifying against live.
 cat >"$ENV_FILE" <<YAML
 TEST_MODE: "false"
-# Strava live sync (OAuth connect + API sync) is removed: the product only
-# ingests files users upload. Flag off until the backend code is deleted.
-ENABLE_STRAVA_INTEGRATION: "false"
 # K-anonymity: single-user beta → ~99.9% of edges are user_count=1, so K=2 would
 # blank the public heatmap. Live is 1. Flip to 2 once there are >=2 contributors
 # (CLAUDE.md prod doctrine). See feedback_min_uc_1_for_beta.
@@ -249,28 +237,26 @@ HEATMAP_RAW_BBOX: "-12;34;32;62"
 # job (job_env_for). z6-14, ~10k tiles, ~70s.
 HEATMAP_RASTER_PYRAMID: "true"
 DATA_DIR: "/app/data"
-# User-facing origin — server-side OAuth redirects default to localhost:3787
-# without it (config.py), which breaks every prod Strava connect.
+# User-facing origin — links in emails / post-login redirects default to
+# localhost:3787 without it (config.py).
 FRONTEND_URL: "${PUBLIC_URL}"
-# Cloud Run Job dispatch (integrations_strava.py reads GCP_PROJECT/GCP_REGION).
+# Cloud Run Job dispatch (run_jobs.py reads GCP_PROJECT/GCP_REGION).
 GCP_PROJECT: "${PROJECT}"
 GCP_REGION: "${REGION}"
 # Overpass stays off in prod (rate-limited, slow); OVERPASS_ENABLED=false is
 # what the live revision uses (overpass.py / graph_tiles.py / ingest.py all
 # honour it — a tile miss falls back to grid-snap, no 5-15 s round-trip).
 OVERPASS_ENABLED: "false"
-STRAVA_REDIRECT_URI: "${PUBLIC_URL}/integrations/strava/callback"
 # ── Cloud Tasks queues + their /internal handler URLs (the wiring that got
-#    DROPPED twice → Strava webhook silently OFF). Queue names match the
+#    DROPPED twice by hand-typed deploys). Queue names match the
 #    google_cloud_tasks_queue resources; handler URLs are OIDC-audience-bound
 #    to the .run.app origin — see the RUN_URL / WORKER_RUN_URL note above.
-#    ── MICROSERVICE SPLIT ── the three HEAVY handlers point at WORKER_RUN_URL:
+#    ── MICROSERVICE SPLIT ── the HEAVY handlers point at WORKER_RUN_URL:
 #    Cloud Tasks signs 'audience = <this url>' and POSTs to it → the WORKER
-#    (2Gi) does the heat compute / PMTiles build / Strava fetch+ingest, and
+#    (2Gi) does the heat compute / PMTiles build, and
 #    the WORKER verifies the same audience against this same env var. The web
 #    (512Mi) only ENQUEUES (reads these vars to set the audience), never runs
-#    the heavy work. The health-check STAYS on the web (RUN_URL) — see the
-#    split note above.
+#    the heavy work.
 CLOUD_TASKS_LOCATION: "${REGION}"
 CLOUD_TASKS_QUEUE: "common-trails-heat-compute-${ENV}"
 CLOUD_TASKS_INVOKER_SA: "${TASKS_INVOKER_SA}"
@@ -283,16 +269,6 @@ INTERNAL_MY_HEATMAP_HANDLER_URL: "${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
 MY_HEATMAP_BUCKET: "${MY_HEATMAP_BUCKET_NAME}"
 MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED}"
 MY_HEATMAP_FILES_USERS: "${MY_HEATMAP_FILES_USERS}"
-CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE: "common-trails-strava-webhook-${ENV}"
-INTERNAL_STRAVA_WEBHOOK_HANDLER_URL: "${WORKER_RUN_URL}/internal/strava/webhook-event"
-INTERNAL_STRAVA_HEALTH_HANDLER_URL: "${RUN_URL}/internal/strava/health-check"
-# Public callback Strava GETs during the subscription handshake + POSTs events
-# to — user-facing custom domain (read by internal_strava_health.py +
-# strava_subscribe.py). Dropped by the full-replace before this fix.
-STRAVA_WEBHOOK_CALLBACK_URL: "${PUBLIC_URL}/integrations/strava/webhook"
-# Strava webhook subscription allow-list (second-line defence in the worker).
-# Empty = allow all subscription ids (bootstrap); live value is 349136.
-STRAVA_WEBHOOK_SUBSCRIPTION_ID: "${STRAVA_WEBHOOK_SUBSCRIPTION_ID}"
 # Heatmap PMTiles publish target + canonical /export/heatmap redirect. BOTH
 # point at the SAME bucket on live — the event-driven /internal/artefacts/rebuild
 # uploads here and /export/heatmap serves here; splitting them would upload fresh
@@ -333,6 +309,8 @@ MAX_ARCHIVE_BYTES: "2147483648"
 # we send from the real domain and deliver to any recipient. Revert to
 # "Chemins Communs <onboarding@resend.dev>" only if the domain is unverified.
 EMAIL_FROM: "Chemins Communs <no-reply@chemins-communs.fr>"
+# Admin notification when a new account confirms its address (first login).
+ADMIN_NOTIFY_EMAIL: "paul@epauler.fr"
 # DB connection pool — the code default is 20+10=30 connections PER instance
 # (backend/app/db/session.py). With two always-on services (WEB min=1 + WORKER)
 # under concurrent beta + ingest load that risks exhausting Cloud SQL
@@ -345,13 +323,9 @@ DB_MAX_OVERFLOW: "3"
 YAML
 
 # Secrets (Secret Manager → env). Authoritative: --set-secrets. Secret ids
-# match infra/terraform/main.tf (note: strava-webhook-verify-token is lowercased).
+# match infra/terraform/main.tf.
 SECRETS="JWT_SECRET=JWT_SECRET:latest"
 SECRETS="${SECRETS},DATABASE_URL=DATABASE_URL:latest"
-SECRETS="${SECRETS},STRAVA_CLIENT_ID=STRAVA_CLIENT_ID:latest"
-SECRETS="${SECRETS},STRAVA_CLIENT_SECRET=STRAVA_CLIENT_SECRET:latest"
-SECRETS="${SECRETS},STRAVA_TOKEN_ENC_KEY=STRAVA_TOKEN_ENC_KEY:latest"
-SECRETS="${SECRETS},STRAVA_WEBHOOK_VERIFY_TOKEN=strava-webhook-verify-token:latest"
 # Resend API key for transactional email (magic-link login). Already in Secret
 # Manager (version 1). Unset → email.send_email() no-ops (safe, but no login
 # email goes out).
@@ -378,7 +352,7 @@ echo "   SA      : ${API_SA}"
 echo "──────────────────────────────────────────────────────────────────────"
 
 # Best-effort env-key diff vs each LIVE service — this is what surfaces a drop
-# (e.g. live is missing CLOUD_TASKS_STRAVA_WEBHOOK_QUEUE). Non-fatal if the
+# (e.g. live is missing CLOUD_TASKS_ARTEFACT_QUEUE). Non-fatal if the
 # describe fails (first deploy / no read access — the worker won't exist on the
 # very first split deploy, which is expected).
 NEW_KEYS="$(grep -E '^[A-Z0-9_]+:' "$ENV_FILE" | cut -d: -f1 | sort)"
@@ -392,7 +366,7 @@ env_key_diff() {  # $1 = service name
     removed="$(comm -13 <(echo "$NEW_KEYS") <(echo "$live") || true)"
     [[ -n "$added" ]]   && echo "$added"   | sed 's/^/   + (adds)   /' || echo "   (no keys added)"
     [[ -n "$removed" ]] && echo "$removed" | sed 's/^/   - (removes) /' || echo "   (no keys removed)"
-    echo "   NOTE: '+ adds' that are the webhook/tasks wiring == the exact drift this script fixes."
+    echo "   NOTE: '+ adds' that are the Cloud Tasks wiring == the exact drift this script fixes."
   else
     echo "(could not describe ${svc} — skipping its env-key diff; expected if it does not exist yet)"
   fi
@@ -523,7 +497,7 @@ fi
 
 # ── Deploy one Cloud Run service ─────────────────────────────────────────────
 # Shared knobs across both services (cost-tuned on db-f1-micro): min=0
-# (cold-start accepted — see the webhook caveat in docs/prod-deploy.md), max=1
+# (cold-start accepted), max=1
 # (the micro tier can't sustain more DB connections), gen2 (required for the GCS
 # volume mount), 900s timeout (cold-start GPX upload + heavy worker tasks; the
 # old 60s ceiling 504'd — 2026-05-18 incident), same image/env/secrets/SQL/
@@ -566,7 +540,7 @@ deploy_service() {  # $1 = service name, $2 = memory (e.g. 512Mi | 2Gi), $3 = hu
 
 # ── 1. Deploy the WEB (public, light 512Mi) service ──────────────────────────
 # 512Mi is safe because every heavy in-request path is deferred off the web:
-# heat compute + PMTiles rebuild + Strava webhook fetch/ingest all run on the
+# heat compute + PMTiles rebuild both run on the
 # WORKER via Cloud Tasks; large archive uploads go direct-to-GCS (signed URL,
 # #455) + the cold-start ingest-pending-archives JOB. See the PR audit for the
 # residual inline export-build path (a future worker candidate).
@@ -574,8 +548,8 @@ echo "[1/3] Deploying WEB service (512Mi) ..."
 deploy_service "$WEB_SERVICE" "512Mi" "WEB (public, light)" 1  # min=1: warm (kills the ~43s cold-start on a cheap 512Mi instance)
 
 # ── 2. Deploy the WORKER (heavy /internal/*, 2Gi, scale-to-zero) service ─────
-# Same image + env; only the memory differs. Cloud Tasks (heat / artefact /
-# webhook queues) POST here — the INTERNAL_*_HANDLER_URL vars in the env-file
+# Same image + env; only the memory differs. Cloud Tasks (heat / artefact
+# queues) POST here — the INTERNAL_*_HANDLER_URL vars in the env-file
 # already point at this service's url, so the OIDC audience matches byte-for-
 # byte on both the enqueue (web) and verify (worker) sides.
 echo "[2/3] Deploying WORKER service (2Gi, scale-to-zero) ..."
@@ -622,8 +596,7 @@ job_env_for() {
     #       cache their (cheap) index instead of rebuilding every call.
     # Worst-case budget: 3.2 (segs) + 1.2 (grids) + 2.0 (a MAX_ARCHIVE_BYTES .zip
     # in tmpfs) + ~1.0 (python/ingest) ≈ 7.4 GB < 8 GiB. Comfortable at the
-    # realistic hit rate. (rebuild-heatmap is also 8 Gi and could take the same —
-    # left conservative here; the import-strava job is 512 Mi and MUST NOT.)
+    # realistic hit rate.
     "common-trails-ingest-pending-archives-${ENV}")
       # + the RAW-display env (2026-07-29 pivot): the drain runs ingest_activity,
       # which under raw MUST skip the matched OSM-match + heat_edges write (the
@@ -641,12 +614,6 @@ job_env_for() {
       echo "OVERPASS_ENABLED=false${MY_HEATMAP_JOB_ENV},UPLOADS_BUCKET=${PROJECT}-common-trails-uploads-${ENV},GCP_PROJECT=${PROJECT},GCP_REGION=${REGION},MAX_ARCHIVE_BYTES=2147483648,BUILD_PMTILES_JOB_NAME=common-trails-build-pmtiles-${ENV},OSM_TILE_CACHE_MAX=800,OSM_GRID_CACHE_MAX=150,OSM_GRID_CACHE_MAX_SEGS_PER_ENTRY=200000,HEATMAP_DISPLAY_SOURCE=raw,HEATMAP_MIN_USERS=1,TRACE_MASK_METERS=200,HEATMAP_RAW_BBOX=-12;34;32;62,EMAIL_FROM=Chemins Communs <no-reply@chemins-communs.fr>,HEATMAP_PUBLIC_BASE_URL=${HEATMAP_PUBLIC_BASE_URL}" ;;
     # Every other job that does OSM matching / ingestion must ALSO keep Overpass
     # off (same foreign-tile slowdown if it ran with OVERPASS_ENABLED absent→true).
-    "common-trails-import-strava-${ENV}"|"common-trails-resync-strava-${ENV}")
-      # + the per-user "Ma heatmap" rebuild wiring: these jobs INGEST, and the
-      # ORM hook (app.services.my_heatmap_files) enqueues the user's debounced
-      # rebuild from wherever the write happens. Missing → no-op; the manifest
-      # re-schedules on the next /map view (self-heal), just less promptly.
-      echo "OVERPASS_ENABLED=false${MY_HEATMAP_JOB_ENV}" ;;
     "common-trails-rebuild-heatmap-${ENV}"|"common-trails-group-edges-osm-${ENV}")
       echo "OVERPASS_ENABLED=false" ;;
     # The re-sync reminder emailer: EMAIL_FROM so the reminder is sent from our
@@ -696,10 +663,6 @@ job_memory_for() {
     # rebuild (exactly how the first 8Gi bump got lost).
     "common-trails-build-pmtiles-${ENV}")
       echo "8Gi" ;;
-    # import-strava / strava-subscribe / resync-strava: light Strava sync jobs,
-    # 512Mi each (their current live sizing, captured via `describe`).
-    "common-trails-import-strava-${ENV}"|"common-trails-strava-subscribe-${ENV}"|"common-trails-resync-strava-${ENV}")
-      echo "512Mi" ;;
     # The re-sync reminder emailer: one indexed query + N Resend POSTs, trivial.
     "common-trails-resync-reminder-${ENV}")
       echo "512Mi" ;;
@@ -741,10 +704,8 @@ job_secrets_for() {
 # binding is a no-op), and it is ADDITIVE: it never removes other bindings
 # (e.g. the api/jobs SAs' run.developer used by the event-driven triggers).
 #   drain   ← common-trails-drain-archives-daily-prod     (0 3 * * *)
-#   build   ← common-trails-rebuild-pmtiles-daily-prod    (0 11 * * 6 Paris — weekly, see §5)
+#   build   ← common-trails-rebuild-pmtiles-daily-prod    (0 11 * * 6 Paris — weekly, see §4)
 #   reminder← common-trails-resync-reminder-monthly-prod  (0 9 1 * *)
-# (resync-strava already carries this binding from its deleted weekly
-#  scheduler; left untouched — this function only ADDS.)
 job_scheduler_invoker_for() {
   case "$1" in
     "common-trails-ingest-pending-archives-${ENV}"|"common-trails-build-pmtiles-${ENV}"|"common-trails-resync-reminder-${ENV}")
@@ -815,30 +776,7 @@ for job in "${JOBS[@]}"; do
   fi
 done
 
-# ── 4. Strava health-check scheduler: OIDC audience = the WEB .run.app URL ───
-# (2026-11-07 ops audit P0-2) The scheduler was created out-of-band with
-# uri+audience = the CUSTOM domain, while the web verifies the token's `aud`
-# against INTERNAL_STRAVA_HEALTH_HANDLER_URL = ${RUN_URL}/… (the .run.app host,
-# see the RUN_URL note) → 401 UNAUTHENTICATED every day: the exact 2026-06-04
-# class of bug. Assert uri + audience + signer FROM THE SAME VALUE as the env
-# var so they can never diverge again. Idempotent (update to identical values).
-# Skipped (not failed) if the scheduler doesn't exist, mirroring the jobs loop.
-HEALTH_CHECK_URL="${RUN_URL}/internal/strava/health-check"
-if gcloud scheduler jobs describe "$HEALTH_CHECK_SCHEDULER" --project="$PROJECT" --location="$REGION" >/dev/null 2>&1; then
-  if gcloud scheduler jobs update http "$HEALTH_CHECK_SCHEDULER" --project="$PROJECT" --location="$REGION" \
-        --uri="$HEALTH_CHECK_URL" \
-        --oidc-service-account-email="$TASKS_INVOKER_SA" \
-        --oidc-token-audience="$HEALTH_CHECK_URL" >/dev/null 2>&1; then
-    echo "   ✓ scheduler ${HEALTH_CHECK_SCHEDULER}: uri+OIDC audience asserted → ${HEALTH_CHECK_URL}"
-  else
-    echo "   ✗ scheduler ${HEALTH_CHECK_SCHEDULER}: uri/audience update FAILED" >&2
-    sync_failures=$((sync_failures + 1))
-  fi
-else
-  echo "   ! scheduler ${HEALTH_CHECK_SCHEDULER}: does not exist — SKIPPED"
-fi
-
-# ── 5. Heatmap rebuild backstop: WEEKLY, not daily (Paul 2026-11-07: cost) ───
+# ── 4. Heatmap rebuild backstop: WEEKLY, not daily (Paul 2026-11-07: cost) ───
 # Uploads already ping the build job event-driven (drain → BUILD_PMTILES_JOB_NAME),
 # so the scheduler is only a backstop. A full rebuild every day costs too much;
 # Saturday 11:00 Paris is enough (daytime, so a failed run is spotted quickly). The resource keeps its historical "-daily-" name
