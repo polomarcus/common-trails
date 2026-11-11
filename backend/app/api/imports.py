@@ -27,7 +27,7 @@ from app.services.cloud_tasks import enqueue_heat_compute
 from app.services.gpx_archive import archive_bundle, archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
 from app.services.run_jobs import trigger_ingest_archives_job
-from app.services.strava_utils import resolve_sport_cascade
+from app.services.strava_utils import resolve_sport_cascade, resolve_sport_cascade_with_default
 
 router = APIRouter(tags=["imports"])
 log = logging.getLogger(__name__)
@@ -331,13 +331,18 @@ async def import_files(
             #      for members nothing else classifies, never overriding or
             #      refining a CSV / file sport.
             #   Nothing → SKIP (never a default layer).
-            file_sport = resolve_sport_cascade(
+            # ``sport_is_default``: road only because every source was a
+            # generic bike ride (CSV "Ride", FIT Bike profile). The user's
+            # explicit pick is a real classification, never a default.
+            file_sport, sport_is_default = resolve_sport_cascade_with_default(
                 parsed.get("sport_from_csv"),
                 parsed.get("sport"),
                 parsed.get("sport_from_gpx"),
                 None if is_zip else sport,
             )
             effective_sport = file_sport or (resolve_sport_cascade(sport) if is_zip else None)
+            if is_zip and sport == effective_sport:
+                sport_is_default = False  # the rider picked this sport for the zip
             if effective_sport is None:
                 skipped += 1
                 errors.append(
@@ -354,6 +359,7 @@ async def import_files(
                 # community-eligible provenance. Feeds the ODbL heatmap.
                 "source": COMMUNITY_SOURCE,
                 "sport": effective_sport,
+                "sport_is_default": sport_is_default,
                 "name": parsed.get("name"),
                 "geometry_geojson": parsed.get("geometry_geojson"),
                 "distance_m": parsed.get("distance_m"),

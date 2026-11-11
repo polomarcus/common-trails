@@ -31,7 +31,7 @@ from app.services.cloud_tasks import enqueue_heat_compute
 from app.services.gpx import _sanitize_track_type
 from app.services.gpx_archive import archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
-from app.services.strava_utils import resolve_sport_cascade
+from app.services.strava_utils import resolve_sport_cascade_with_default
 
 router = APIRouter(tags=["gpx"])
 log = logging.getLogger(__name__)
@@ -175,7 +175,11 @@ async def gpx_upload(
     # that a generic road is refined by the user's gravel/mtb. Generic
     # `cycling` (Strava export) or absent → the user's explicit choice.
     # Nothing at all → 422: never a default layer.
-    effective_sport = resolve_sport_cascade(parsed.get("sport_from_gpx"), sport)
+    # ``sport_is_default``: only when a bare generic type ("E-Bike Ride") is
+    # the sole signal — the sport picked in the dropzone is an explicit choice.
+    effective_sport, sport_is_default = resolve_sport_cascade_with_default(
+        parsed.get("sport_from_gpx"), sport
+    )
     if effective_sport is None:
         raise HTTPException(
             status_code=422,
@@ -194,6 +198,7 @@ async def gpx_upload(
         # heatmap; Strava-API syncs are stamped strava_api and stay personal.
         "source": COMMUNITY_SOURCE,
         "sport": effective_sport,
+        "sport_is_default": sport_is_default,
         "name": parsed.get("name"),
         "geometry_geojson": parsed.get("geometry_geojson"),
         "distance_m": parsed.get("distance_m"),

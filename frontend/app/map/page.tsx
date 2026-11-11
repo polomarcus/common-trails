@@ -28,6 +28,8 @@ import { useUserMenu } from '@/hooks/useUserMenu';
 import { useMapLayerSync } from '@/hooks/useMapLayerSync';
 import { NORMAL, HIGH_CONTRAST } from '@/lib/routing-style';
 import { withActivitySport } from '@/lib/activity-sport';
+import DefaultSportNotice from '@/components/map/DefaultSportNotice';
+import { applyDefaultSportChange, type DefaultSportChange } from '@/lib/default-sport';
 import {
   fetchMyHeatmapManifest, loadMyHeatmapFile, summaryToActivityItems, setUserActivitiesSource,
 } from '@/lib/my-heatmap-file';
@@ -268,10 +270,30 @@ export default function MapPage() {
   // Called optimistically with the new sport, and again with the old one on a
   // failed PATCH (rollback): keep the list, the selected card and the
   // "Ma heatmap" source (hover popup reads feature.properties.sport) in sync.
-  const handleActivitySportChange = useCallback((activityId: string, sport: string) => {
-    setActivities((prev) => prev.map((a) => (a.id === activityId ? { ...a, sport } : a)));
-    setSelectedActivity((prev) => (prev && prev.id === activityId ? { ...prev, sport } : prev));
+  // `sportIsDefault`: false on the optimistic call (the rider has now said what
+  // this ride is), the PREVIOUS value on a rollback.
+  const handleActivitySportChange = useCallback((activityId: string, sport: string, sportIsDefault = false) => {
+    const patch = { sport, sport_is_default: sportIsDefault };
+    setActivities((prev) => prev.map((a) => (a.id === activityId ? { ...a, ...patch } : a)));
+    setSelectedActivity((prev) => (prev && prev.id === activityId ? { ...prev, ...patch } : prev));
     const next = withActivitySport(userActivitiesGeojsonRef.current, activityId, sport);
+    if (next !== userActivitiesGeojsonRef.current) {
+      userActivitiesGeojsonRef.current = next;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (mapInstanceRef.current as any)?.getSource('user-activities')?.setData(next);
+    }
+  }, []);
+
+  // Bumped when the card's PATCH settles → the default-sport notice re-reads its count.
+  const [defaultSportRefresh, setDefaultSportRefresh] = useState(0);
+  const handleActivitySportSaved = useCallback(() => setDefaultSportRefresh((n) => n + 1), []);
+
+  // ── Bulk re-classification from the default-sport panel ──────────────────
+  const handleDefaultSportChanged = useCallback((change: DefaultSportChange) => {
+    setActivities((prev) => applyDefaultSportChange(prev, change));
+    setSelectedActivity((prev) => (prev ? applyDefaultSportChange([prev], change)[0] : prev));
+    let next = userActivitiesGeojsonRef.current;
+    for (const id of change.updatedIds) next = withActivitySport(next, id, change.sport);
     if (next !== userActivitiesGeojsonRef.current) {
       userActivitiesGeojsonRef.current = next;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -395,6 +417,7 @@ export default function MapPage() {
           provider: f.properties.provider ?? 'file',
           provider_activity_id: f.properties.provider_activity_id ?? null,
           undated: f.properties.undated === true,
+          sport_is_default: f.properties.sport_is_default === true,
         };
       });
       setActivities(items);
@@ -714,6 +737,13 @@ export default function MapPage() {
 
         {/* Signed-in rider with 0 activities → import CTA; 5000 → cap note */}
         <MapActivitiesNotice count={activitiesReturned} uncapped={activitiesFromFile} />
+
+        {/* Bike rides left on "Route" by default at import → re-classify in bulk */}
+        <DefaultSportNotice
+          dateLocale={dateLocale}
+          refreshKey={defaultSportRefresh}
+          onChanged={handleDefaultSportChanged}
+        />
 
         {/* Tiles host down → say so instead of a silent bare basemap */}
         <HeatmapUnavailableNotice unavailable={heatmapUnavailable} />
@@ -1106,6 +1136,7 @@ export default function MapPage() {
             dateLocale={dateLocale}
             onClose={() => setSelectedActivity(null)}
             onSportChange={handleActivitySportChange}
+            onSportSaved={handleActivitySportSaved}
           />
         )}
       </div>

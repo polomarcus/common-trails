@@ -42,7 +42,7 @@ from app.services import email as email_service
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
 from app.services.run_jobs import trigger_build_pmtiles_job
-from app.services.strava_utils import resolve_sport_cascade
+from app.services.strava_utils import resolve_sport_cascade, resolve_sport_cascade_with_default
 
 log = logging.getLogger(__name__)
 
@@ -474,9 +474,25 @@ def _effective_sport(
     Strava export must not turn every "Ride" into VTT). Nothing → None →
     the caller skips the member; there is no default.
     """
-    return resolve_sport_cascade(
+    return _effective_sport_with_default(parsed, csv_sport, fallback_sport)[0]
+
+
+def _effective_sport_with_default(
+    parsed: dict, csv_sport: str | None, fallback_sport: str | None = None,
+) -> tuple[str | None, bool]:
+    """``_effective_sport`` + ``is_default``: True when the sport is ``road``
+    only because every source was a GENERIC bike ride (CSV "Ride" the name did
+    not refine, FIT generic Bike profile) — stored as
+    ``activities.sport_is_default`` so the rider is asked to classify it. The
+    user's explicit pick (last resort) is never a default."""
+    sport, is_default = resolve_sport_cascade_with_default(
         csv_sport, parsed.get("sport"), parsed.get("sport_from_gpx"),
-    ) or resolve_sport_cascade(fallback_sport)
+    )
+    if sport is not None:
+        # The rider picked "road" for the whole zip: a generic ride that lands
+        # on road is then what they said, not a default.
+        return sport, is_default and fallback_sport != sport
+    return resolve_sport_cascade(fallback_sport), False
 
 
 def _claim_batch(db, limit: int) -> list[dict]:
@@ -546,6 +562,7 @@ def _ingest_member_bytes(
     collect_touched_ways: set[int] | None = None,
     fallback_sport: str | None = None,
     fallback_date=None,
+    stats: dict | None = None,
 ) -> tuple[str, str | None, str | None]:
     """Parse + ingest ONE archive member. Shared by both drains (per-member
     queue AND the whole-archive streaming drain) so provenance stamping +
@@ -560,6 +577,10 @@ def _ingest_member_bytes(
     used ONLY when the file itself carries no timestamp (a CSV-listed activity
     is a real ride — a parser gap must not leave it undated, i.e. off the
     public heatmap).
+
+    ``stats``: optional out-param; ``stats["imported_default_sport"]`` is
+    incremented when the member created an activity whose sport is only a
+    generic default (``sport_is_default``) — one sentence in the done email.
 
     Returns ``(outcome, activity_id, error)`` where ``outcome`` is
     ``"imported"`` (``created``/``promoted``) or ``"skipped"``. For an
@@ -585,7 +606,7 @@ def _ingest_member_bytes(
     # Unknown / ambiguous sport (no CSV row, FIT without a usable
     # sport/sub_sport, GPX typed only "cycling" or untyped) → SKIP. Never a
     # default layer: skip beats pollute.
-    sport = _effective_sport(parsed, resolved_sport, fallback_sport)
+    sport, sport_is_default = _effective_sport_with_default(parsed, resolved_sport, fallback_sport)
     if sport is None:
         return "skipped", None, "sport_unknown"
 
@@ -594,6 +615,7 @@ def _ingest_member_bytes(
         "provider_activity_id": None,
         "source": source or archive_intake.ARCHIVE_PROVENANCE,
         "sport": sport,
+        "sport_is_default": sport_is_default,
         "name": parsed.get("name"),
         "geometry_geojson": parsed.get("geometry_geojson"),
         "distance_m": parsed.get("distance_m"),
@@ -611,6 +633,8 @@ def _ingest_member_bytes(
     # "promoted" (③): a manual-upload member that upgraded a pre-existing
     # Strava-API twin to the community layer — counts as a successful import.
     if result["status"] in ("created", "promoted"):
+        if stats is not None and sport_is_default and result["status"] == "created":
+            stats["imported_default_sport"] = stats.get("imported_default_sport", 0) + 1
         note = UNDATED if activity_data["activity_date"] is None else None
         return "imported", result["activity_id"], note
     return "skipped", result.get("activity_id"), None
@@ -891,6 +915,7 @@ def _notify_archive_terminal(
                 skipped=counts.get("skipped", 0),
                 skipped_no_sport=counts.get("skipped_no_sport", 0),
                 imported_undated=counts.get("imported_undated", 0),
+                imported_default_sport=counts.get("imported_default_sport", 0),
                 failed=counts.get("failed", 0),
                 locale=locale,
                 contribute_heatmap=contribute_heatmap,
@@ -1119,6 +1144,7 @@ def drain_pending_archives(
                             skip_heat_computation=skip_heat_computation,
                             collect_touched_ways=touched_ways,
                             fallback_date=csv_dates.get(name),
+                            stats=counts,
                         )
                         counts[outcome] += 1
                         if outcome == "imported" and _err == UNDATED:

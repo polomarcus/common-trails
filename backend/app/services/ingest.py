@@ -3277,6 +3277,9 @@ def ingest_activity(
             provider_activity_id=provider_activity_id,
             source=activity_data.get("source"),
             sport=sport,
+            # Road only by default (generic "Ride" with no finer signal): the
+            # rider is asked to classify it. See strava_utils.DefaultSport.
+            sport_is_default=bool(activity_data.get("sport_is_default", False)),
             name=activity_data.get("name"),
             geometry_geojson=geometry_geojson,
             display_coords=dc_blob,
@@ -4711,6 +4714,7 @@ def iter_user_map_activities(
             Activity.provider,
             Activity.provider_activity_id,
             Activity.sport,
+            Activity.sport_is_default,
             Activity.name,
             # The full-resolution TEXT is only shipped off the db-f1-micro when
             # the compact cache is missing (pre-backfill rows) — the handler
@@ -4747,6 +4751,7 @@ def iter_user_map_activities(
                 "provider": r.provider,
                 "provider_activity_id": r.provider_activity_id,
                 "sport": r.sport,
+                "sport_is_default": bool(r.sport_is_default),
                 "name": r.name,
                 "geometry_geojson": r.geometry_geojson,
                 "display_geojson": r.display_geojson,
@@ -4943,6 +4948,7 @@ def get_activity_by_id(user_id: str, activity_id: str) -> dict | None:
             "provider": a.provider,
             "provider_activity_id": a.provider_activity_id,
             "sport": a.sport,
+            "sport_is_default": bool(a.sport_is_default),
             "name": a.name,
             "geometry_geojson": a.geometry_geojson,
             "distance_m": a.distance_m,
