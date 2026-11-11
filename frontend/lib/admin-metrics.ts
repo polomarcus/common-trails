@@ -10,20 +10,16 @@ export type ChipLevel = 'green' | 'amber' | 'red' | 'unknown';
 
 export interface HeatmapMetricPoint {
   captured_at: string | null;
-  heat_edges: number;
-  agg_ways: number;
   activities: number;
   contributors: number;
   network_km: number;
-  grid_fallback_pct: number | null;
   source: string;
 }
 
 export interface Freshness {
   last_activity_at: string | null;
   last_activity_date: string | null;
-  heat_agg_updated_at: string | null;
-  heat_edges_agg: number;
+  last_rebuild_at: string | null;
 }
 
 export interface HeatmapMetricsResponse {
@@ -99,6 +95,22 @@ export function sparklinePoints(values: number[], width: number, height: number,
     const y = pad + (1 - norm) * innerH;
     return { x, y };
   });
+}
+
+/**
+ * Human file size for the published PMTiles ("12,3 Mo" / "12.3 MB"): returns
+ * the scaled value + unit so the component formats/localises them. Null when
+ * the size is unknown (no pointer locally).
+ */
+export function fileSizeParts(bytes: number | null | undefined): { value: number; unit: 'kb' | 'mb' | 'gb' } | null {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return null;
+  const KB = 1024;
+  const MB = KB * 1024;
+  const GB = MB * 1024;
+  const round1 = (n: number) => Math.round(n * 10) / 10;
+  if (bytes >= GB) return { value: round1(bytes / GB), unit: 'gb' };
+  if (bytes >= MB) return { value: round1(bytes / MB), unit: 'mb' };
+  return { value: round1(bytes / KB), unit: 'kb' };
 }
 
 /** SVG polyline `d` for a series. Empty string for an empty series. */

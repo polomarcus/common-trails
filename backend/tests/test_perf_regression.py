@@ -2,7 +2,7 @@
 
 Each test targets a specific issue that caused OOM, slow startup, or degraded UX:
 1. DFCI endpoint limit  — GET /heatmap/dfci no longer OOMs (limit=100_000 cap)
-2. MVT tile generation  — GET /heatmap/tiles/.../...mvt completes without OOM
+2. (removed with the live MVT endpoint)
 3. Backend startup speed — /healthz responds quickly (was 195s, now <5s)
 4. DFCI edge count fast  — get_dfci_edge_count(fast=True) uses bounded scan
 5. Enrichment removed   — _enrich_edges no longer runs at startup (moved to CLI)
@@ -49,38 +49,6 @@ class TestDfciEndpointLimit:
         assert "limit=100_000" in source or "limit=100000" in source, (
             "DFCI endpoint must pass a limit to get_dfci_geojson to prevent OOM"
         )
-
-
-# ---------------------------------------------------------------------------
-# 2. MVT tile generation completes without hanging
-# ---------------------------------------------------------------------------
-
-
-class TestMvtTileRegression:
-    """GET /heatmap/tiles/{sport}/{z}/{x}/{y}.mvt completes quickly."""
-
-    def test_mvt_tile_responds(self, client: TestClient):
-        """MVT endpoint returns 200 with protobuf content type."""
-        resp = client.get("/heatmap/tiles/road/13/4183/2990.mvt")
-        assert resp.status_code == 200
-        ct = resp.headers.get("content-type", "")
-        assert "protobuf" in ct or "mvt" in ct, f"Unexpected content-type: {ct}"
-
-    def test_mvt_tile_completes_in_time(self, client: TestClient):
-        """MVT tile must complete within 5 seconds (was OOMing / hanging)."""
-        t0 = time.monotonic()
-        resp = client.get("/heatmap/tiles/road/13/4183/2990.mvt")
-        elapsed = time.monotonic() - t0
-        assert resp.status_code == 200
-        assert elapsed < 5.0, f"MVT tile took {elapsed:.2f}s (budget: 5s)"
-
-    def test_mvt_empty_tile_fast(self, client: TestClient):
-        """Empty tile (no data) should be near-instant, not scan the whole table."""
-        t0 = time.monotonic()
-        resp = client.get("/heatmap/tiles/road/14/0/0.mvt")
-        elapsed = time.monotonic() - t0
-        assert resp.status_code in (200, 204)
-        assert elapsed < 2.0, f"Empty MVT tile took {elapsed:.2f}s (budget: 2s)"
 
 
 # ---------------------------------------------------------------------------

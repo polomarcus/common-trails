@@ -144,7 +144,7 @@ def test_mixed_edges_only_above_k_returned(db_session):
 
 
 def test_default_k_value_is_2_in_prod() -> None:
-    """The HEATMAP_K_ANONYMITY default in the heatmap module must be 2.
+    """The HEATMAP_K_ANONYMITY default in the export module must be 2.
 
     Lowering this default to 1 in prod would silently expose single-user
     data on the public heatmap. Tested via module read so a future PR
@@ -157,7 +157,7 @@ def test_default_k_value_is_2_in_prod() -> None:
         # Re-import to pick up the default (the module reads at import time)
         import importlib
 
-        from app.api import heatmap as heatmap_module
+        from app.api import export as heatmap_module
         importlib.reload(heatmap_module)
         assert heatmap_module.HEATMAP_K_ANONYMITY == 2, (
             f"HEATMAP_K_ANONYMITY default is {heatmap_module.HEATMAP_K_ANONYMITY}, expected 2. "
@@ -170,5 +170,5 @@ def test_default_k_value_is_2_in_prod() -> None:
         # Reload once more to restore module state
         import importlib
 
-        from app.api import heatmap as heatmap_module
+        from app.api import export as heatmap_module
         importlib.reload(heatmap_module)

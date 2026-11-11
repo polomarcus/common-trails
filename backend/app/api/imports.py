@@ -23,7 +23,7 @@ from app.config import VALID_SPORTS
 from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
-from app.services.cloud_tasks import enqueue_heat_compute
+from app.services.cloud_tasks import request_community_rebuild
 from app.services.gpx_archive import archive_bundle, archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
 from app.services.run_jobs import trigger_ingest_archives_job
@@ -298,7 +298,7 @@ async def import_files(
     skipped = 0
     failed = 0
     activity_ids: list[str] = []
-    created_activity_ids: list[str] = []  # subset that triggers heat compute
+    created_activity_ids: list[str] = []  # community-eligible → rebuild request
 
     for parsed in parsed_list:
         try:
@@ -383,7 +383,7 @@ async def import_files(
             activity_ids.append(result["activity_id"])
             # "promoted" (③): a manual upload that upgraded a pre-existing
             # Strava-API twin to the community layer — counts as imported and
-            # needs a heat-compute task like a fresh create.
+            # needs a community rebuild like a fresh create.
             if result["status"] in ("created", "promoted"):
                 imported += 1
                 if community_ok:
@@ -414,26 +414,16 @@ async def import_files(
                 file.filename or "upload.bin", content,
             )
 
-    # Enqueue one heat-compute task per newly-created activity. In dev /
-    # TEST_MODE this is a no-op because ``ingest_activity`` already did
-    # the work synchronously; we report ``done``.
+    # Ask ONCE for the community map rebuild when this request stored at least
+    # one new community-eligible activity (the debounced ``artefact-rebuild``
+    # Cloud Task — the per-activity heat-compute task in between is gone). In
+    # dev / TEST_MODE ``ingest_activity`` already ran inline; we report ``done``.
     heatmap_status = "skipped"
     if sync_mode:
         if created_activity_ids:
             heatmap_status = "done"
     elif created_activity_ids:
-        outcomes = [
-            enqueue_heat_compute(activity_id=aid, user_id=current_user.user_id)
-            for aid in created_activity_ids
-        ]
-        # If at least one task queued successfully, surface "queued"; else
-        # collapse to the most pessimistic outcome.
-        if "queued" in outcomes:
-            heatmap_status = "queued"
-        elif "inline" in outcomes:
-            heatmap_status = "inline"
-        else:
-            heatmap_status = "failed"
+        heatmap_status = request_community_rebuild()
 
     # Event-driven display refresh (best-effort). Without this, a loose GPX/FIT
     # contribution ingests into ``activities`` but never reaches the static

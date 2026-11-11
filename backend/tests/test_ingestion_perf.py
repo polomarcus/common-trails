@@ -126,7 +126,7 @@ class TestIngestionPerformance:
     #      refreshes heat_edges_agg for the touched ways (recompute-from-source,
     #      ~0.8s for a ~270-way ride). Deliberate display-aggregate maintenance;
     #      in prod the whole _update_heat_edges path runs in the async Cloud
-    #      Tasks heat-compute worker (process_heat_compute), OFF the user-facing
+    #      Tasks heat-compute worker (since removed), OFF the user-facing
     #      upload request, so the latency is not user-visible.
     # Still bounded (not "no limit") so a gross matcher/agg regression fails.
     def test_single_activity_under_6s(self):

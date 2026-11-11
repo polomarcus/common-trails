@@ -47,19 +47,6 @@ class TestHeatmapPerformance:
         assert status2 == 200
         assert elapsed2 < 0.1, f"Cached /heatmap/summary took {elapsed2:.3f}s (expected <0.1s)"
 
-    def test_trails_bbox_cache(self, client: TestClient):
-        """Bbox-filtered /heatmap/trails should cache on second call."""
-        url = "/heatmap/trails?min_lon=3.8&min_lat=43.5&max_lon=4.0&max_lat=43.7"
-
-        # Cold call
-        elapsed1, status1, _ = _timed_get(url=url, client=client, headers={"Accept-Encoding": "gzip"})
-        assert status1 == 200
-
-        # Warm call (should be cached)
-        elapsed2, status2, _ = _timed_get(url=url, client=client, headers={"Accept-Encoding": "gzip"})
-        assert status2 == 200
-        assert elapsed2 < 0.1, f"Cached /heatmap/trails bbox took {elapsed2:.3f}s (expected <0.1s)"
-
     def test_dfci_cache(self, client: TestClient):
         """Second call to /heatmap/dfci should be near-instant (cached)."""
         elapsed1, status1, _ = _timed_get(client, "/heatmap/dfci", headers={"Accept-Encoding": "gzip"})

@@ -8,7 +8,7 @@ write to ``heat_edges``, so every downstream reader is correct by construction.
 
 These tests FAIL on the pre-change code (where a strava_api ride wrote
 ``heat_edges``) and PASS after the provenance gate. They drive the REAL
-handlers (``ingest_activity`` inline path + ``process_heat_compute``), never an
+handler (``ingest_activity`` inline path), never an
 inline mirror.
 """
 import json
@@ -150,37 +150,3 @@ class TestIngestGate:
         # (the strava_api ride wrote zero). If the gate regressed, the strava
         # ride would also appear and doubling the contributor pool.
         assert len(edges) >= 1
-
-
-class TestProcessHeatComputeGate:
-    """The prod chokepoint (webhook + GPX-upload heat tasks) gates on provenance."""
-
-    def test_strava_api_activity_is_noop(self):
-        from app.api.internal_ingest import process_heat_compute
-        r = ingest_activity(_USER, {
-            "provider": "strava", "provider_activity_id": "sep-phc-strava",
-            "source": STRAVA_API_SOURCE, "sport": "mtb",
-            "geometry_geojson": _geo(), "distance_m": 900,
-            "activity_date": datetime(2025, 3, 6, 8, 0, tzinfo=UTC),
-        }, contribute_heatmap=True, skip_heat_computation=True)
-        before = _count_edges()
-        res = process_heat_compute(r["activity_id"], _USER)
-        assert res["status"] == "noop"
-        assert res["edges_indexed"] == 0
-        assert _count_edges() == before
-
-    @pytest.mark.usefixtures("matched_mode")  # legacy pipeline — removed with slice D
-    def test_manual_upload_activity_computes(self):
-        from app.api.internal_ingest import process_heat_compute
-        r = ingest_activity(_USER, {
-            "provider": "file", "provider_activity_id": None,
-            "source": COMMUNITY_SOURCE, "sport": "mtb",
-            "geometry_geojson": _geo(), "distance_m": 5000,
-            "file_hash": "sep-phc-manual",
-            "activity_date": datetime(2025, 3, 7, 8, 0, tzinfo=UTC),
-        }, contribute_heatmap=True, skip_heat_computation=True)
-        before = _count_edges()
-        res = process_heat_compute(r["activity_id"], _USER)
-        assert res["status"] == "ok"
-        assert res["edges_indexed"] > 0
-        assert _count_edges() > before

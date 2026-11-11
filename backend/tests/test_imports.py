@@ -431,53 +431,6 @@ class TestImportsFilesConsent:
         assert after == before
 
 
-class TestHeatmap:
-    def test_heatmap_stats_empty(self, client):
-        """Stats endpoint works even with no data."""
-        resp = client.get("/heatmap/stats?sport=road&zoom=14")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "k_anonymity" in data
-        assert "cells" in data
-        assert isinstance(data["cells"], list)
-        assert "license" in data
-
-    def test_heatmap_stats_k_anonymity(self, client, auth_headers):
-        """After uploading, cells with < K users must not appear."""
-        # Upload a single trace contributing to heatmap
-        gpx_bytes = _make_gpx_bytes("K-anon test", n_points=15)
-        client.post(
-            "/gpx/upload",
-            headers=auth_headers,
-            files={"file": ("kanon.gpx", gpx_bytes, "application/gpx+xml")},
-            data={"sport": "road", "contribute_heatmap": "true"},
-        )
-
-        resp = client.get("/heatmap/stats?sport=road&zoom=14")
-        assert resp.status_code == 200
-        data = resp.json()
-        k = data["k_anonymity"]
-        for cell in data["cells"]:
-            assert cell["user_count"] >= k, (
-                f"Cell {cell['cell_key']} has user_count={cell['user_count']} < K={k}"
-            )
-
-    def test_heatmap_export_geojson(self, client):
-        resp = client.get("/heatmap/export?sport=road")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["type"] == "FeatureCollection"
-        assert "metadata" in data
-        assert data["metadata"]["license"] == "ODbL-1.0"
-
-    def test_heatmap_offroad_stats(self, client):
-        """offroad profile should aggregate gravel+mtb."""
-        resp = client.get("/heatmap/stats?sport=offroad&zoom=14")
-        assert resp.status_code == 200
-        # Response is valid regardless of offroad handling strategy
-        assert "cells" in resp.json()
-
-
 class TestActivityDatePropagation:
     """Regression: activity_date must reach the DB so cross-provider dedup works.
 

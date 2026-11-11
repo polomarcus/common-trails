@@ -7,7 +7,7 @@ mirror), each FAILING on the pre-fix code:
   HIGH 2a build-pmtiles trigger is debounced (cost control)
   HIGH 2b /gpx/upload + /imports/files are per-user rate limited
   HIGH 3  /imports/strava-archive/init enforces per-user quotas (429)
-  MED 4   /heatmap/stats + /heatmap/export are version-cached (no DB re-hit)
+  MED 4   (removed: /heatmap/stats + /heatmap/export no longer exist)
   MED 5   /geocode/reverse is per-IP rate limited + fast-fails when saturated
 """
 from __future__ import annotations
@@ -224,53 +224,6 @@ class TestArchiveInitQuota:
         )
         assert resp.status_code == 429, resp.text
         assert "Daily" in resp.json()["detail"]
-
-
-# ── MEDIUM 4 — stats/export version cache + bounded timeout ──────────────────
-class TestHeatmapCostGuards:
-    def test_stats_served_from_version_cache(self, client, monkeypatch):
-        """A second identical /heatmap/stats call is served from the in-memory
-        version cache with NO call into the DB aggregation function."""
-        from app.api import heatmap as hm
-
-        hm._reset_tile_caches()
-        calls = {"n": 0}
-        real = hm.ingest_service.get_heat_cells_aggregated
-
-        def _spy(*a, **k):
-            calls["n"] += 1
-            # The endpoint must pass a bounded statement timeout (cost guard).
-            assert k.get("statement_timeout_ms") == hm._STATS_STATEMENT_TIMEOUT_MS
-            return real(*a, **k)
-
-        monkeypatch.setattr(hm.ingest_service, "get_heat_cells_aggregated", _spy)
-
-        q = "?sport=road&min_lon=3.0&min_lat=43.0&max_lon=4.0&max_lat=44.0"
-        assert client.get(f"/heatmap/stats{q}").status_code == 200
-        n_after_first = calls["n"]
-        assert n_after_first >= 1
-        assert client.get(f"/heatmap/stats{q}").status_code == 200
-        assert calls["n"] == n_after_first, "second call must hit the cache, not the DB"
-
-    def test_export_served_from_version_cache(self, client, monkeypatch):
-        from app.api import heatmap as hm
-
-        hm._reset_tile_caches()
-        calls = {"n": 0}
-        real = hm.ingest_service.get_heat_cells_aggregated
-
-        def _spy(*a, **k):
-            calls["n"] += 1
-            return real(*a, **k)
-
-        monkeypatch.setattr(hm.ingest_service, "get_heat_cells_aggregated", _spy)
-
-        q = "?sport=road&min_lon=3.0&min_lat=43.0&max_lon=4.0&max_lat=44.0"
-        assert client.get(f"/heatmap/export{q}").status_code == 200
-        n1 = calls["n"]
-        assert n1 >= 1
-        assert client.get(f"/heatmap/export{q}").status_code == 200
-        assert calls["n"] == n1, "second export must hit the cache, not the DB"
 
 
 # ── MEDIUM 5 — geocode per-IP limit + saturation fast-fail ───────────────────

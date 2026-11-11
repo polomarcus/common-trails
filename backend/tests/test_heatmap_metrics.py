@@ -139,16 +139,20 @@ class TestHeatmapMetricsEndpoint:
             mine = [p for p in data["series"] if p["source"] == source]
             assert len(mine) == 1
             point = mine[0]
-            for k in ("captured_at", "heat_edges", "agg_ways", "activities",
-                      "contributors", "network_km", "grid_fallback_pct", "source"):
-                assert k in point, k
+            # Exactly the fields the admin page reads (`HeatmapMetricPoint`) —
+            # the matched-era columns (heat_edges, agg_ways, grid_fallback_pct)
+            # are no longer exposed.
+            assert set(point) == {"captured_at", "activities", "contributors",
+                                  "network_km", "source"}
 
             # Level-1 freshness object
             fr = data["freshness"]
             # Exactly the fields the admin page reads (frontend/lib/admin-metrics.ts
             # `Freshness`) — the retired Strava API sync fields are gone.
             assert set(fr) == {"last_activity_at", "last_activity_date",
-                               "heat_agg_updated_at", "heat_edges_agg"}
+                               "last_rebuild_at"}
+            # The snapshot just captured IS the latest build.
+            assert fr["last_rebuild_at"] is not None
         finally:
             db = SessionLocal()
             db.execute(sa_text("DELETE FROM heatmap_metrics WHERE source = :s"), {"s": source})

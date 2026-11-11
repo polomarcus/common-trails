@@ -12,12 +12,13 @@ file per request** (GPX, FIT, or a small `.zip` of them) with the sport and the
 consent fields (`contribute_heatmap`, `consent_version`, …).
 
 1. The activity is parsed and stored in `activities` (`source='manual_upload'`).
-2. Per created activity, `enqueue_heat_compute` (`backend/app/services/cloud_tasks.py`)
-   queues a Cloud Task to the **worker** `POST /internal/ingest/heat`
-   (`backend/app/api/internal_ingest.py`). In raw mode it skips the matched
-   `heat_edges` write and calls `enqueue_artefact_rebuild()` → worker
+2. When the request stored at least one community-eligible activity, the web
+   calls `request_community_rebuild()` (`backend/app/services/cloud_tasks.py`)
+   → `enqueue_artefact_rebuild()` → Cloud Task to the **worker**
    `POST /internal/artefacts/rebuild` (const task name, debounced), which runs
-   `build_pmtiles.main()` in-process.
+   `build_pmtiles.main()` in-process. `POST /gpx/upload` does the same. (The
+   former per-activity hop through `POST /internal/ingest/heat` is gone; that
+   route is a 200 no-op kept for one release so already-queued tasks drain.)
 3. On the **last file of a batch** (`rebuild_display=True`), the web also fires
    the `common-trails-build-pmtiles-prod` Cloud Run Job
    (`run_jobs.trigger_build_pmtiles_job`), debounced per instance by
