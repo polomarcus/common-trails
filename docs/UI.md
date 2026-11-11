@@ -42,8 +42,8 @@ La carte **n'exige pas de connexion**. Seul l'export ODbL en masse
   sur `trails`) et flèches de sens (`community-trails-arrows`). Rampe prune → rose →
   orange (`#7a2058` … `#ff8c42`).
 - **Ma heatmap** — les traces de l'utilisateur, servies en direct par
-  `GET /me/activities` (`backend/app/api/me_activities.py`), une seule couleur cyan
-  `MY_TRACES_COLOR = '#06b6d4'` (`frontend/lib/constants.ts`). Largeur, flou et opacité
+  `GET /me/activities` (`backend/app/api/me_activities.py`), une seule couleur bleue
+  `MY_TRACES_COLOR = '#1447e6'` (`frontend/lib/constants.ts`). Largeur, flou et opacité
   suivent des rampes de zoom (`frontend/lib/user-traces-layers.ts`) : traits fins à
   faible zoom. Pour l'affichage seulement, une trace est coupée en `MultiLineString`
   là où deux points consécutifs sont à plus de 2 500 m (pas de traits droits à travers
@@ -76,4 +76,4 @@ La carte **n'exige pas de connexion**. Seul l'export ODbL en masse
 - Couleur secondaire : `#2d6a4f` (vert moyen)
 - DFCI : rouge `#c0392b` + blanc
 - Heatmap commune : rampe prune → rose → orange (`#7a2058` → `#ff8c42`)
-- Ma heatmap : cyan `#06b6d4`
+- Ma heatmap : bleu `#1447e6`

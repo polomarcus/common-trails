@@ -159,8 +159,8 @@ def shared_style(token: str, request: Request, db: Annotated[Session, Depends(ge
                 "layout": {"line-cap": "round", "line-join": "round"},
                 "paint": {
                     "line-color": _COLOR,
-                    "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 8, 0.6, 11, 1.2, 14, 3, 16, 4],
-                    "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.45, 12, 0.75, 14, 0.92],
+                    "line-width": ["interpolate", ["exponential", 1.5], ["zoom"], 6, 0.9, 8, 1.1, 11, 1.8, 14, 3.2, 16, 4.2],
+                    "line-opacity": ["interpolate", ["linear"], ["zoom"], 8, 0.75, 12, 0.85, 14, 0.92],
                 },
             },
         ],

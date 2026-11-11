@@ -20,8 +20,8 @@ from PIL import Image, ImageDraw
 
 TILE_PX = 256
 _SS = 2  # supersampling factor
-# MY_TRACES_COLOR in frontend/lib/constants.ts ("Ma heatmap" cyan).
-LINE_RGB = (6, 182, 212)
+# MY_TRACES_COLOR in frontend/lib/constants.ts ("Ma heatmap" blue, #1447e6).
+LINE_RGB = (20, 71, 230)
 LINE_ALPHA = 225
 
 
