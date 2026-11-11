@@ -629,12 +629,11 @@ def _fetch_executions(job_name: str, limit: int = 5) -> list[dict]:
     return out
 
 
+# The live Cloud Run Jobs (same list as ``JOBS`` in scripts/deploy-prod.sh).
 _TRACKED_JOBS = [
-    "common-trails-import-osm-prod",
-    "common-trails-group-edges-osm-prod",
-    "common-trails-rebuild-heatmap-prod",
-    "common-trails-migrate-edge-clustering-prod",
-    "common-trails-recompute-elevation-gain-prod",
+    "common-trails-build-pmtiles-prod",
+    "common-trails-ingest-pending-archives-prod",
+    "common-trails-resync-reminder-prod",
 ]
 
 

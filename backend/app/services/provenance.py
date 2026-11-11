@@ -17,21 +17,13 @@ So every activity carries a provenance ``source`` (migration 0059):
 * ``None``            — legacy / pre-migration rows (unknown provenance).
   Treated as NOT community-eligible: those rows originated from the
   Strava API import that pre-dated this split, so excluding them is the
-  compliance-safe default. (Consequence: the current prod ``heat_edges``,
-  built entirely from Strava-API syncs, must be REBUILT from
-  manual_upload uploads before the public map is repopulated — an ops
-  step, see docs/strava/community-contribution-ux.md §5.)
+  compliance-safe default.
 
-DESIGN — filter at INGEST, not at read (option (b)). The community layer
-is ``heat_edges`` / ``heat_edges_agg``. Rather than add a ``source``
-dimension to those aggregate tables (which mix many users per way and
-would need per-source counts), we gate CONTRIBUTION: only
-community-eligible activities ever write to ``heat_edges``. Then
-``heat_edges`` == "the community layer" BY CONSTRUCTION, and every reader
-(``build_pmtiles``, ``heat_edges_agg``,
-the GeoJSON/KML exports) is correct with ZERO SQL changes. The personal
-view reads the user's OWN rows from ``activities`` directly (never
-``heat_edges``), so it still shows strava_api rides — unaffected.
+DESIGN — ONE gate, applied where the community layer is BUILT. The community
+map, its stats banner and its exports all read ``activities`` through
+``community_eligible_conditions`` below, so they filter identically and can
+never drift. The personal view reads the user's OWN rows from ``activities``
+directly, so it still shows strava_api rides — unaffected.
 """
 from __future__ import annotations
 

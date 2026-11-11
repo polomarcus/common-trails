@@ -26,10 +26,7 @@ authorizing its Strava athlete). The merge:
      preference (keep the community-eligible ``manual_upload`` copy).
   2. Reassigns every user-owned row (activities, consents,
      routes, trips, …) from the synthetic account to the survivor.
-  3. Rewrites the absorbed account's K-anonymity contributor hash onto the
-     survivor's so one person counts once, and recomputes the touched
-     ``heat_edges`` counts.
-  4. Deletes the now-empty synthetic ``users`` row.
+  3. Deletes the now-empty synthetic ``users`` row.
 
 Transactional (one commit unless ``commit=False``), idempotent (re-running
 after the synthetic row is gone is a no-op), and it leaves the per-activity
@@ -44,15 +41,9 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app.db.models import Activity, User
-from app.services.activity_deletion import (
-    _recompute_touched_heat_edges,
-    _relation_exists,
-    purge_activity_heat,
-)
 from app.services.ingest import (
     DEDUP_DISTANCE_TOL,
     DEDUP_START_WINDOW_MIN,
-    heat_user_id_hash,
 )
 from app.services.provenance import is_community_source
 
@@ -62,8 +53,8 @@ SYNTHETIC_EMAIL_SUFFIX = "@strava.local"
 
 # Every table that carries an OWNER reference to ``users.id`` as (table, column).
 # Reassigned wholesale from the absorbed account to the survivor. ``activities``
-# is handled SEPARATELY (UNIQUE constraint + heat side-effects) and is
-# intentionally excluded here.
+# is handled SEPARATELY (UNIQUE constraint + dedup) and is intentionally
+# excluded here.
 _OWNED_TABLES: tuple[tuple[str, str], ...] = (
     ("activity_cells", "user_id"),
     ("pending_archive_files", "user_id"),
@@ -96,8 +87,20 @@ class MergeResult:
     reassigned_activities: int = 0
     dropped_duplicate_activities: int = 0
     reassigned_rows: dict[str, int] = field(default_factory=dict)
-    heat_edges_recomputed: int = 0
     reason: str = ""
+
+
+def _relation_exists(db: Session, name: str) -> bool:
+    """True when a base table ``name`` exists in the connected database."""
+    return bool(
+        db.execute(
+            sa_text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables "
+                "WHERE table_name = :n)"
+            ),
+            {"n": name},
+        ).scalar()
+    )
 
 
 def is_synthetic_account(user: User | None) -> bool:
@@ -112,7 +115,7 @@ def is_synthetic_account(user: User | None) -> bool:
 
 def _resolve_activity_dedup(
     db: Session, survivor_id: str, absorbed_id: str
-) -> tuple[list[int], int]:
+) -> int:
     """Drop rides duplicated across the two accounts BEFORE reassignment.
 
     Two activities are "the same ride" iff (reusing the ingest heuristic):
@@ -122,11 +125,10 @@ def _resolve_activity_dedup(
         within ±``DEDUP_DISTANCE_TOL``.
 
     For each matched pair we keep the community-eligible (``manual_upload``,
-    authoritative-geometry) copy and delete the other — routing its community
-    heat through ``purge_activity_heat`` so no orphan ``heat_edges`` are left.
-    Ties (both/neither community-eligible) keep the survivor's existing row.
+    authoritative-geometry) copy and delete the other. Ties (both/neither
+    community-eligible) keep the survivor's existing row.
 
-    Returns ``(way_ids_touched, dropped_count)``. Does NOT commit.
+    Returns the number of dropped activities. Does NOT commit.
     """
     pairs = db.execute(
         sa_text(
@@ -162,7 +164,6 @@ def _resolve_activity_dedup(
 
     dropped: set[str] = set()          # activity ids already deleted
     consumed_survivors: set[str] = set()  # survivor ids already paired off
-    way_ids: list[int] = []
 
     for row in pairs:
         abs_id = str(row.abs_id)
@@ -176,71 +177,13 @@ def _resolve_activity_dedup(
         # survivor's is NOT do we drop the survivor's (the absorbed one is then
         # reassigned to the survivor below).
         loser = surv_id if (abs_community and not surv_community) else abs_id
-        way_ids.extend(purge_activity_heat(db, loser))
         db.execute(
             sa_text("DELETE FROM activities WHERE id = :id"), {"id": loser}
         )
         dropped.add(loser)
         consumed_survivors.add(surv_id)
 
-    return way_ids, len(dropped)
-
-
-def _rewrite_contributor_hash(
-    db: Session, survivor_id: str, absorbed_id: str
-) -> list[int]:
-    """Rewrite the absorbed account's ``user_id_hash`` onto the survivor's for
-    all its REMAINING contributions, then recompute the touched ``heat_edges``
-    so a single person counts ONCE toward K-anonymity. No-op (returns ``[]``)
-    when the community heat tables are gone (raw-trace pivot). Does NOT commit."""
-    if not _relation_exists(db, "heat_edge_contributors"):
-        return []
-    old_hash = heat_user_id_hash(absorbed_id)
-    new_hash = heat_user_id_hash(survivor_id)
-    if old_hash == new_hash:
-        return []
-    # The absorbed account's contributions are those on its (still-owned)
-    # activities. After dedup the losing copies are already gone.
-    edge_keys = [
-        row[0]
-        for row in db.execute(
-            sa_text(
-                "SELECT DISTINCT edge_key FROM heat_edge_contributors "
-                "WHERE user_id_hash = :old AND activity_id IN "
-                "(SELECT id FROM activities WHERE user_id = :absorbed)"
-            ),
-            {"old": old_hash, "absorbed": absorbed_id},
-        )
-    ]
-    if not edge_keys:
-        return []
-    # Collapse onto the survivor's hash. A survivor row already present on the
-    # same (edge_key, activity_id) is impossible (activity_id is unique to one
-    # owner), so no PK collision — but guard defensively against a pre-existing
-    # (edge_key, new_hash, activity_id) by deleting the old row when it clashes.
-    db.execute(
-        sa_text(
-            """
-            DELETE FROM heat_edge_contributors old
-            USING heat_edge_contributors new
-            WHERE old.user_id_hash = :old
-              AND new.user_id_hash = :new
-              AND old.edge_key = new.edge_key
-              AND old.activity_id = new.activity_id
-              AND old.activity_id IN (SELECT id FROM activities WHERE user_id = :absorbed)
-            """
-        ),
-        {"old": old_hash, "new": new_hash, "absorbed": absorbed_id},
-    )
-    db.execute(
-        sa_text(
-            "UPDATE heat_edge_contributors SET user_id_hash = :new "
-            "WHERE user_id_hash = :old AND activity_id IN "
-            "(SELECT id FROM activities WHERE user_id = :absorbed)"
-        ),
-        {"old": old_hash, "new": new_hash, "absorbed": absorbed_id},
-    )
-    return _recompute_touched_heat_edges(db, edge_keys)
+    return len(dropped)
 
 
 def merge_synthetic_account(
@@ -286,15 +229,10 @@ def merge_synthetic_account(
         )
 
     # 1) Drop cross-account duplicate rides (community copy wins).
-    dedup_ways, dropped = _resolve_activity_dedup(db, survivor_user_id, absorbed_user_id)
+    dropped = _resolve_activity_dedup(db, survivor_user_id, absorbed_user_id)
     result.dropped_duplicate_activities = dropped
 
-    # 2) Rewrite the K-anonymity hash of the absorbed account's REMAINING
-    #    contributions onto the survivor (before reassigning activity ownership,
-    #    while `activities.user_id = absorbed` still selects them).
-    hash_ways = _rewrite_contributor_hash(db, survivor_user_id, absorbed_user_id)
-
-    # 3) Reassign remaining activities (unique (user_id, provider,
+    # 2) Reassign remaining activities (unique (user_id, provider,
     #    provider_activity_id) — safe now that colliding dups are gone).
     reassigned_activities = (
         db.query(Activity)
@@ -303,7 +241,7 @@ def merge_synthetic_account(
     )
     result.reassigned_activities = int(reassigned_activities or 0)
 
-    # 4) Reassign every other owner-referencing table.
+    # 3) Reassign every other owner-referencing table.
     for table, col in _OWNED_TABLES:
         if not _relation_exists(db, table):
             continue
@@ -314,10 +252,10 @@ def merge_synthetic_account(
         if n:
             result.reassigned_rows[table] = int(n)
 
-    # 5) Delete the now-empty synthetic user row.
+    # 4) Delete the now-empty synthetic user row.
     db.execute(sa_text("DELETE FROM users WHERE id = :id"), {"id": absorbed_user_id})
 
-    # 7) Private "Ma heatmap" files: the bulk UPDATE + raw DELETEs above bypass
+    # 5) Private "Ma heatmap" files: the bulk UPDATE + raw DELETEs above bypass
     #    the ORM hook. Survivor → rebuild after commit; absorbed → its pointer
     #    row now, its objects after commit (docs/ma-heatmap-fichier-prive.md §7).
     from app.services import my_heatmap_files
@@ -325,26 +263,15 @@ def merge_synthetic_account(
     my_heatmap_files.mark_dirty(db, survivor_user_id)
     my_heatmap_files.mark_deleted(db, absorbed_user_id)
 
-    all_ways = list({*dedup_ways, *hash_ways})
-    result.heat_edges_recomputed = len(all_ways)
     result.merged = True
     result.reason = "merged"
 
     if commit:
         db.commit()
-        if all_ways:
-            # Best-effort agg refresh (self-healing); never undoes the merge.
-            try:
-                from app.services.ingest import _maintain_heat_agg
-
-                _maintain_heat_agg(db, all_ways)
-            except Exception:  # pragma: no cover - defensive
-                logger.warning("heat_agg refresh after merge failed", exc_info=True)
-
         # Reflect the merge on the community map. A merge can DROP duplicate
         # activities and REASSIGN geometry between users, changing what the
-        # static PMTiles should show; in raw mode the build reads consented
-        # activities live, and there is no periodic rebuild scheduler, so
+        # static PMTiles should show; the build reads consented activities
+        # live, and there is no periodic rebuild scheduler, so
         # without this trigger the change would not surface until an unrelated
         # contribution rebuilt. Best-effort: never raises, env-gated no-op
         # locally / in TEST_MODE (run_jobs._is_enabled).
@@ -357,8 +284,8 @@ def merge_synthetic_account(
 
     logger.info(
         "account merge: absorbed=%s -> survivor=%s activities=%d dropped_dups=%d "
-        "rows=%s heat_ways=%d",
+        "rows=%s",
         absorbed_user_id, survivor_user_id, result.reassigned_activities,
-        result.dropped_duplicate_activities, result.reassigned_rows, len(all_ways),
+        result.dropped_duplicate_activities, result.reassigned_rows,
     )
     return result

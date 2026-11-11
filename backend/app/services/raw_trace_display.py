@@ -1,15 +1,13 @@
-"""Raw-trace display source — flag-gated alternative to the matched heatmap.
+"""Raw-trace display source — THE community heatmap source.
 
 Product decision (Paul, 2026-07-21): render **precise raw GPS traces** (the
-Strava raw-raster / law-of-large-numbers look) instead of the K-anonymised,
-OSM-matched, cross-rider ``heat_edges_agg`` aggregate. Privacy is handled by
+Strava raw-raster / law-of-large-numbers look). Privacy is handled by
 **endpoint masking** (``trace_privacy.mask_endpoints`` — trim home/work off
-each trace) rather than K-anonymity.
+each trace) rather than K-anonymity. The former OSM-matched pipeline
+(``heat_edges`` & co.) has been removed; there is no source switch any more.
 
-``HEATMAP_DISPLAY_SOURCE`` defaults to ``raw`` (prod has run raw only since
-2026-07-29). ``HEATMAP_DISPLAY_SOURCE=matched`` still selects the legacy
-matched pipeline until that code is deleted. When ``raw``, ``build_pmtiles`` streams the GeoJSON produced here into the SAME
-tippecanoe + GCS-upload pipeline, so the existing frontend
+``build_pmtiles`` streams the GeoJSON produced here into the
+tippecanoe + GCS-upload pipeline, and the frontend
 (``community-heatmap-layers.ts``) renders it with NO change: features are
 ``LineString``s in the ``trails`` layer carrying ``sport`` / ``user_count`` /
 ``pass_count`` / ``heat_score`` / ``highway_type`` — the props the paint ramps
@@ -669,16 +667,6 @@ def _piece_feature_props(piece: list, terminal: bool, sid: int, sport: str,
 _ACTIVITY_STREAM_BATCH = 200
 
 
-def raw_display_enabled() -> bool:
-    """True when ``HEATMAP_DISPLAY_SOURCE`` selects the raw-trace source.
-
-    Raw is the default (unset or empty). Only an explicit ``matched`` selects
-    the legacy pipeline, which is being removed slice by slice.
-    """
-    value = os.environ.get("HEATMAP_DISPLAY_SOURCE", "").strip().lower()
-    return (value or "raw") == "raw"
-
-
 def min_users() -> int:
     """Distinct-user floor per fine cell for the RAW path (``HEATMAP_MIN_USERS``).
 
@@ -686,7 +674,7 @@ def min_users() -> int:
     choice). Set **2** later to hide single-user pixels: this is how the
     "K=1 now → K=2 at 50 users" promise becomes a one-env-var flip with no
     rework. Endpoint masking (``trace_privacy``) is ALWAYS on and independent of
-    this gate. Applies ONLY in raw mode.
+    this gate.
     """
     raw = os.environ.get("HEATMAP_MIN_USERS", "").strip()
     if not raw:

@@ -4,14 +4,13 @@ Historically this module also published the matched-era CDN "api-cache"
 (``publish_heatmap_cache`` + versioned manifest + MVT pre-generation). That
 whole write-through subsystem was matched-only — it read the now-dropped
 ``heat_edges`` substrate and rendered trails/graph GeoJSON via the removed
-``graph_builder`` service. With the raw-trace pivot
-(``HEATMAP_DISPLAY_SOURCE=raw``) the display artefact is the static
+``graph_builder`` service. Since the raw-trace pivot the display artefact is the static
 ``heatmap-display.pmtiles`` built by ``app.jobs.build_pmtiles``, so the publish
 subsystem became dead code and was removed.
 
 What remains is the small live surface still used by ``app.api.health`` to
 report freshness of any legacy ``manifest.json`` (it gracefully degrades to
-``no_cache`` when none exists under raw mode): the GCS client singleton plus the
+``no_cache`` when none exists): the GCS client singleton plus the
 bucket/prefix constants.
 """
 import logging

@@ -13,8 +13,7 @@ pinned for OG-card generation in `app/api/share.py`).
 Pipeline:
 
 1. Caller passes a list of heat-edge dicts (LineString geometry +
-   user_count + sport) — typically the result of
-   `ingest.get_heat_edges_public(bbox=..., sport=..., k=...)`.
+   user_count + sport) — the features of the raw-trace export.
 2. For each `(z, x, y)` tile inside the bbox at zoom levels in
    ``ZOOM_LEVELS``, project the line segments into 256×256 pixel
    space and rasterise with ``PIL.ImageDraw``.
@@ -173,7 +172,7 @@ def xyz_to_tms_row(y: int, zoom: int) -> int:
 
 @dataclass(frozen=True)
 class HeatEdge:
-    """Minimal projection of ``ingest.get_heat_edges_public`` rows.
+    """Minimal projection of a heat-edge feature (raw-trace export row).
 
     Frozen for safety; not all callers use it but the tests do (the
     integration test seeds tiny synthetic fixtures).
@@ -394,7 +393,7 @@ def build_raster_mbtiles(
 ) -> RasterBuildResult:
     """Render heat-edge polylines as a raster MBTiles file at ``output_path``.
 
-    ``edges`` is an iterable of dicts shaped like ``ingest.get_heat_edges_public``
+    ``edges`` is an iterable of feature dicts shaped like the raw-trace export
     rows (LineString geometry + user_count + sport). Tiles are rendered
     only for the bbox + zoom range; empty tiles are dropped.
 

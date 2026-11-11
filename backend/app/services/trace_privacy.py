@@ -1,9 +1,9 @@
 """Endpoint masking — the privacy mechanism for the raw-trace heatmap.
 
 Product decision (Paul, 2026-07-21): the raw-trace display source (see
-``HEATMAP_DISPLAY_SOURCE`` in ``build_pmtiles``) renders precise individual
+``raw_trace_display`` / ``build_pmtiles``) renders precise individual
 GPS traces instead of K-anonymised, OSM-matched, cross-rider aggregates.
-Privacy in that mode is NOT K-anonymity — it is achieved by **masking every
+Privacy is NOT K-anonymity — it is achieved by **masking every
 point within N metres (radius) of the start and of the end of every trace** so a
 rider's home / work is never drawn on the public map (radial since the 2026-11
 data audit — the original along-track trim leaked home under stationary GPS
