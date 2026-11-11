@@ -122,7 +122,7 @@ describe('Admin dashboard — every card / stat / column string is routed (no Fr
     'admin.stat.total', 'admin.stat.edges', 'admin.stat.cells', 'admin.stat.maxContributors',
     'admin.stat.pctOnOsm', 'admin.stat.pctGridFallback', 'admin.stat.vertices',
     'admin.stat.deadEnds', 'admin.stat.pctDeadEnds', 'admin.stat.dfciTracks',
-    'admin.stat.markedTrails', 'admin.stat.size', 'admin.provider.gpxUpload',
+    'admin.stat.size', 'admin.provider.gpxUpload',
     'admin.col.name', 'admin.col.author', 'admin.col.sport', 'admin.col.visibility',
     'admin.col.distance', 'admin.col.elevation', 'admin.col.created', 'admin.col.source',
     'admin.col.imported', 'admin.col.job', 'admin.col.execution', 'admin.col.status',

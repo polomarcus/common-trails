@@ -510,7 +510,7 @@ startup_progress: dict = {
 
 
 async def _background_data_load(admin_id: str) -> None:
-    """Load activities, DFCI, trails, and enrichment data in background after server is ready."""
+    """Load activities, DFCI and GT routes in background after server is ready."""
     import time as _t
 
     # Guard 1: already completed (e.g., TestClient re-triggering lifespan)
@@ -536,10 +536,9 @@ async def _background_data_load(admin_id: str) -> None:
     _advance(2)
     await _load_dfci(_t0)
     _advance(3)
-    await _load_trails(_t0)
+    # Marked-trail edges (`trail_edges`, GR/GT/PR/EV) are no longer loaded at
+    # startup: nothing reads them since the routing graph was decommissioned.
     await _load_gt_routes(_t0)
-    # Ensure minigraph tables exist before enrichment queries them
-    await _seed_minigraph_tables()
     _advance(4)
     # Edge enrichment is no longer a startup task. The matched-era OSM
     # enrichment (surface/dangerous-highway tagging of heat_edges) was removed
@@ -596,20 +595,6 @@ async def _prewarm_caches(t0: float) -> None:
         logger.warning("Failed to pre-warm heatmap summary", exc_info=True)
 
     # Note: full graph pre-warm removed — frontend uses area.pb tiles on demand
-
-
-async def _seed_minigraph_tables() -> None:
-    """Ensure minigraph_edges/vertices tables exist (idempotent CREATE IF NOT EXISTS)."""
-    import asyncio
-
-    from app.db.seed_minigraph import seed_minigraph
-
-    loop = asyncio.get_event_loop()
-    try:
-        result = await loop.run_in_executor(None, seed_minigraph)
-        logger.info("Minigraph seeded: %s", result)
-    except Exception:
-        logger.warning("Minigraph seed failed", exc_info=True)
 
 
 async def _load_activities(t0: float) -> int:
@@ -685,21 +670,6 @@ async def _load_dfci(t0: float) -> tuple[int, int]:
     return n_dfci_ign, n_dfci_herault
 
 
-async def _load_trails(t0: float) -> int:
-    """Import marked trails (GR, GT, PR, EV, GRP) from OSM route relations."""
-    import time as _t
-
-    from app.cli.import_trails import import_trails
-
-    try:
-        n_trails = await import_trails()
-    except Exception:
-        logger.warning("Trails import failed", exc_info=True)
-        n_trails = 0
-    logger.info("Trails loaded: %d (%.1fs)", n_trails, _t.monotonic() - t0)
-    return n_trails
-
-
 async def _load_gt_routes(t0: float) -> int:
     """Import complete GT/EV/GR trail routes as public Route objects."""
     import time as _t
@@ -716,7 +686,7 @@ async def _load_gt_routes(t0: float) -> int:
 
 
 # DEM slope enrichment is baked at import time
-# (import_dfci_ign / import_dfci_herault / import_trails). The matched-era
+# (import_dfci_ign / import_dfci_herault). The matched-era
 # heat-edges OSM enrichment CLI (app.cli.enrich_edges) was removed with the
 # raw-trace pivot — the community map renders raw GPS traces, not OSM-matched
 # edges, so per-edge OSM surface/highway tagging no longer applies.

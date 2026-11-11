@@ -2,10 +2,6 @@
 import os
 
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
-# Allow external routing calls (dormant BRouter/OSRM fallbacks).
-# Disabled by default — community graph + straight-line is the production cascade.
-# Tests set this to "false" via conftest.py.
-ROUTING_EXTERNAL = os.environ.get("ROUTING_EXTERNAL", "false").lower() == "true"
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3787")
 VALID_SPORTS = frozenset({"road", "gravel", "mtb", "offroad", "running"})
 # Sports a user may pick when CORRECTING an activity's sport after import

@@ -13,7 +13,7 @@ from sqlalchemy import String, cast, func, text
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user
-from app.db.models import Activity, DfciEdge, HeatCell, HeatEdge, Route, TrailEdge, User
+from app.db.models import Activity, DfciEdge, HeatCell, HeatEdge, Route, User
 from app.db.session import get_db
 
 log = logging.getLogger(__name__)
@@ -177,9 +177,8 @@ async def admin_dashboard(
     # pathological plan on db-f1-micro can never sever the pooled connection.
     heat_stats = _heat_edge_stats(db)
 
-    # DFCI + trails
+    # DFCI
     total_dfci = db.query(func.count(DfciEdge.id)).scalar() or 0
-    total_trails = db.query(func.count(TrailEdge.id)).scalar() or 0
 
     # DB size (pg_database_size)
     try:
@@ -217,7 +216,6 @@ async def admin_dashboard(
         "graph_health": heat_stats["graph_health"],
         "network": {
             "dfci_edges": total_dfci,
-            "trail_edges": total_trails,
         },
         "database": {
             "size": db_size,
