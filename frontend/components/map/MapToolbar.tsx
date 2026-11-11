@@ -51,10 +51,6 @@ export interface MapToolbarProps {
   showUserMenu: boolean;
   setShowUserMenu: React.Dispatch<React.SetStateAction<boolean>>;
   userEmail: string | null;
-  stravaName: string | null;
-  stravaSyncing: boolean;
-  stravaSyncMsg: string | null;
-  lastSyncedAt: string | null;
   handleLogout: () => void;
   setShowImportModal: (v: boolean) => void;
   setShowExportModal: (v: boolean) => void;
@@ -87,7 +83,7 @@ export default function MapToolbar(props: MapToolbarProps) {
     layersMenuRef,
     heatmapSport, setHeatmapSport, heatmapDays, setHeatmapDays, dfciCount,
     exploreMode, setExploreMode,
-    showUserMenu, setShowUserMenu, userEmail, stravaName,
+    showUserMenu, setShowUserMenu, userEmail,
     handleLogout, setShowImportModal,
     setShowExportModal,
     activitiesCount, mapInstance, dateLocale,
@@ -104,7 +100,7 @@ export default function MapToolbar(props: MapToolbarProps) {
   useEffect(() => { setAuthToken(getToken()); }, []);
   const accountLabel = !authToken
     ? t('map.account.createOrLogin')
-    : stravaName ? t('map.account.accountOf', { name: stravaName.split(' ')[0] }) : userEmail || t('map.menuButton');
+    : userEmail || t('map.menuButton');
 
   return (
     <nav
@@ -387,7 +383,6 @@ export default function MapToolbar(props: MapToolbarProps) {
                   [
                     { key: 'myCells', label: t('map.toolbar.cellCoverage'), testId: 'toggle-my-cells', icon: '🔲' },
                     { key: 'hillshade', label: t('map.toolbar.hillshade'), testId: 'toggle-hillshade', icon: '⛰️' },
-                    { key: 'photos', label: t('map.toolbar.stravaPhotos'), testId: 'toggle-photos', icon: '📷' },
                   ] as { key: keyof LayerToggles; label: string; testId: string; icon: string }[]
                 ).map(({ key, label, testId, icon }) => (
                   <label
@@ -608,11 +603,10 @@ export default function MapToolbar(props: MapToolbarProps) {
               }}
             >
               {/* Header */}
-              {(stravaName || userEmail) && (
+              {userEmail && (
                 <div style={{ padding: '6px 10px 10px', borderBottom: '1px solid #f0f0f0', marginBottom: 4 }}>
                   <div style={{ fontSize: 11, color: '#aaa', marginBottom: 2 }}>{t('map.account.loggedAs')}</div>
-                  <div style={{ fontWeight: 700, color: '#1a4731' }}>{stravaName || userEmail}</div>
-                  {userEmail && stravaName && <div style={{ fontSize: 11, color: '#999', marginTop: 1 }}>{userEmail}</div>}
+                  <div style={{ fontWeight: 700, color: '#1a4731' }}>{userEmail}</div>
                 </div>
               )}
 

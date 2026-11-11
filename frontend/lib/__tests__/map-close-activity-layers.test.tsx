@@ -25,7 +25,7 @@ const map: any = new Proxy({}, { // eslint-disable-line @typescript-eslint/no-ex
 });
 
 const INITIAL: LayerToggles = {
-  heatmap: true, dfci: true, myTraces: true, myCells: false, hillshade: false, photos: false,
+  heatmap: true, dfci: true, myTraces: true, myCells: false, hillshade: false,
 };
 
 const ride: ActivityItem = {
@@ -56,8 +56,6 @@ function Harness() {
     loadCommunityHeatmap: () => {}, loadDfciTrails: () => {},
     selectedActivity: selected, viewedRoute: viewed, editParentRoute: null,
     routeVariants: [], visibleVariantIds: new Set(),
-    photoData: null, setPhotoData: () => {}, setLightboxPhotos: () => {}, setLightboxPhoto: () => {},
-    photoMarkersRef: useRef([]), maplibreModuleRef: useRef(null),
     layersBeforeActivityRef: useRef(nullRef<LayerToggles>().current),
     layersBeforeRouteRef: useRef(nullRef<LayerToggles>().current),
     waymarkedBeforeRouteRef: useRef(nullRef<WaymarkedToggles>().current),

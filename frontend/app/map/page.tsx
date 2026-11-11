@@ -11,7 +11,7 @@ import { addMapSourcesAndLayers, wireMapEventHandlers } from '@/lib/init-map-lay
 import { trace as perfTrace } from '@/lib/perf-trace';
 import { type GpxPreviewData, waypointsToGpx, parseGpxFile } from '@/lib/gpx-utils';
 import { BASEMAPS } from '@/lib/basemap-styles';
-import { ImportModal, PhotoLightbox } from '@/components/map/MapModals';
+import { ImportModal } from '@/components/map/MapModals';
 import ExportHeatmapModal from '@/components/ExportHeatmapModal';
 import MapToolbar from '@/components/map/MapToolbar';
 import MapLegend from '@/components/map/MapLegend';
@@ -52,7 +52,7 @@ export default function MapPage() {
   const dateLocale = locale === 'en' ? 'en-GB' : 'fr-FR';
   const router = useRouter();
 
-  // ── Layer toggles (heatmap / dfci / traces / cells / photos / basemap) ───
+  // ── Layer toggles (heatmap / dfci / traces / cells / basemap) ───
   const {
     layers, setLayers, waymarked, setWaymarked,
     highContrast, setHighContrast,
@@ -61,13 +61,6 @@ export default function MapPage() {
     layersMenuRef, basemapMenuRef,
   } = useLayerToggles();
 
-  // Photo layer state
-  const [photoData, setPhotoData] = useState<any>(null);
-  const [lightboxPhoto, setLightboxPhoto] = useState<{
-    url_medium: string; caption?: string; activity_name?: string; index: number;
-  } | null>(null);
-  const [lightboxPhotos, setLightboxPhotos] = useState<any[]>([]);
-  const photoMarkersRef = useRef<any[]>([]);
   const rv = highContrast ? HIGH_CONTRAST : NORMAL;
 
   // Backend readiness — single fetch with retries (non-blocking)
@@ -102,13 +95,11 @@ export default function MapPage() {
   const [heatmapUnavailable, setHeatmapUnavailable] = useState(false);
 
   // User menu — state + actions from useUserMenu hook
-  const reloadActivitiesRef = useRef<(() => void) | null>(null);
   const {
     showUserMenu, setShowUserMenu,
-    userEmail, isAdmin, stravaName, lastSyncedAt,
-    stravaSyncing, stravaSyncMsg,
+    userEmail, isAdmin,
     handleLogout,
-  } = useUserMenu(reloadActivitiesRef);
+  } = useUserMenu();
 
   // Trace hover popup
   const [tracePopup, setTracePopup] = useState<{
@@ -158,7 +149,6 @@ export default function MapPage() {
   const [gpxDropNote, setGpxDropNote] = useState<string | null>(null);
 
   const layersReady = useRef(false);
-  const maplibreModuleRef = useRef<any>(null);
   const traceMarkersRef = useRef<any[]>([]);
 
   // ── Sidebar state ─────────────────────────────────────────────────────────
@@ -211,7 +201,6 @@ export default function MapPage() {
     if (positions.length === 0) return;
 
     const maplibregl = await import('maplibre-gl');
-    maplibreModuleRef.current = maplibregl.default; // cache for synchronous use elsewhere
 
     for (const pos of positions) {
       const el = document.createElement('div');
@@ -271,11 +260,8 @@ export default function MapPage() {
       console.error('[map] event wiring failed — layers still active, interactions degraded:', e);
     }
 
-    // Finalize: mark ready + maplibre pre-cache
+    // Finalize: mark ready
     layersReady.current = true;
-    if (!maplibreModuleRef.current) {
-      import('maplibre-gl').then((ml) => { maplibreModuleRef.current = ml.default; });
-    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sport correction from the selected-activity card ─────────────────────
@@ -476,11 +462,6 @@ export default function MapPage() {
     [initMapLayers, loadActivities],
   );
 
-  // ── Reload activities after import ────────────────────────────────────────
-  const reloadActivities = useCallback(() => {
-    if (mapInstance) loadActivities(mapInstance);
-  }, [mapInstance, loadActivities]);
-
   // ── Update URL with map position on move (shareable links) ────────────────
   useEffect(() => {
     if (!mapInstance) return;
@@ -503,9 +484,6 @@ export default function MapPage() {
     return () => { m.off('moveend', onMoveEnd); clearTimeout(timeout); };
   }, [mapInstance]);
 
-  // Wire reloadActivities ref so the user-menu hook can call it after import
-  reloadActivitiesRef.current = reloadActivities;
-
   // ── Layer toggle/sync effects (extracted to useMapLayerSync hook) ──
   useMapLayerSync({
     mapInstance, layersReady, layers, setLayers, waymarked, setWaymarked,
@@ -513,9 +491,6 @@ export default function MapPage() {
     loadCommunityHeatmap, loadDfciTrails,
     selectedActivity, viewedRoute: null, editParentRoute: null,
     routeVariants: EMPTY_VARIANTS, visibleVariantIds: EMPTY_VARIANT_IDS,
-    photoData, setPhotoData,
-    setLightboxPhotos, setLightboxPhoto,
-    photoMarkersRef, maplibreModuleRef,
     layersBeforeActivityRef, layersBeforeRouteRef, waymarkedBeforeRouteRef,
     updateTraceMarkers, clearTraceMarkers,
     viewedSurface: null, viewedRouteProfileDataRef, routeTooltipRef,
@@ -647,9 +622,7 @@ export default function MapPage() {
         dfciCount={dfciCount}
         exploreMode={exploreMode} setExploreMode={setExploreMode}
         showUserMenu={showUserMenu} setShowUserMenu={setShowUserMenu}
-        userEmail={userEmail} stravaName={stravaName}
-        stravaSyncing={stravaSyncing} stravaSyncMsg={stravaSyncMsg}
-        lastSyncedAt={lastSyncedAt}
+        userEmail={userEmail}
         handleLogout={handleLogout}
         setShowImportModal={setShowImportModal}
         setShowExportModal={setShowExportModal}
@@ -1168,15 +1141,6 @@ export default function MapPage() {
         />
       )}
 
-      {/* ── Photo Lightbox ── */}
-      {lightboxPhoto && (
-        <PhotoLightbox
-          photo={lightboxPhoto}
-          photos={lightboxPhotos}
-          onClose={() => setLightboxPhoto(null)}
-          onNavigate={setLightboxPhoto}
-        />
-      )}
     </div>
   );
 }

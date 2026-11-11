@@ -269,10 +269,6 @@ export default function HomePage() {
   // Handle OAuth callbacks
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('strava') === 'connected') {
-      router.replace('/strava?status=connected');
-      return;
-    }
     if (params.get('garmin') === 'connected') {
       window.history.replaceState({}, '', window.location.pathname);
     }

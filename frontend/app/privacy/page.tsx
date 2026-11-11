@@ -30,7 +30,6 @@ export default function PrivacyPage() {
             <Ul>
               <Li>{t('privacy.gpsTraces')}</Li>
               <Li>{t('privacy.activityMeta')}</Li>
-              <Li>{t('privacy.thirdPartyId')}</Li>
             </Ul>
             <P>{t('privacy.alsoCollect')}</P>
             <Ul>

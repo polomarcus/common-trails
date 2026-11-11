@@ -208,7 +208,9 @@ trap 'rm -f "$ENV_FILE"' EXIT
 # add/remove without re-verifying against live.
 cat >"$ENV_FILE" <<YAML
 TEST_MODE: "false"
-ENABLE_STRAVA_INTEGRATION: "true"
+# Strava live sync (OAuth connect + API sync) is removed: the product only
+# ingests files users upload. Flag off until the backend code is deleted.
+ENABLE_STRAVA_INTEGRATION: "false"
 # K-anonymity: single-user beta → ~99.9% of edges are user_count=1, so K=2 would
 # blank the public heatmap. Live is 1. Flip to 2 once there are >=2 contributors
 # (CLAUDE.md prod doctrine). See feedback_min_uc_1_for_beta.
