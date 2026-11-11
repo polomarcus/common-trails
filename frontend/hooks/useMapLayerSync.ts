@@ -404,8 +404,10 @@ export function useMapLayerSync(params: {
       // never a constant (a constant would bring back the low-zoom blob).
       applyUserTraceOpacity(m, true);
       // Save current layer toggles and hide overlays so the trace is clearly visible
+      // Snapshot the user's own toggles: if a route already hid the overlays,
+      // its snapshot is the real "before" (ours would be the hidden state).
       if (!layersBeforeActivityRef.current) {
-        layersBeforeActivityRef.current = { ...layers };
+        layersBeforeActivityRef.current = { ...(layersBeforeRouteRef.current ?? layers) };
       }
       setLayers(prev => ({ ...prev, heatmap: false, dfci: false, myTraces: false }));
       // Show start/end + km DOM markers
@@ -416,8 +418,13 @@ export function useMapLayerSync(params: {
       applyUserTraceOpacity(m, false);
       // Restore layer toggles saved before activity selection
       if (layersBeforeActivityRef.current) {
-        setLayers(() => layersBeforeActivityRef.current!);
+        // Capture BEFORE clearing the ref: React runs an updater lazily (at the
+        // next render), after the ref is nulled — `() => ref.current!` set the
+        // layer toggles to null and crashed /map on closing a ride.
+        const saved = layersBeforeActivityRef.current;
         layersBeforeActivityRef.current = null;
+        // A route still open keeps the overlays hidden; it restores on close.
+        if (!(viewedRoute?.coords && viewedRoute.coords.length >= 2)) setLayers(saved);
       }
       // Clear markers only if no viewed route is showing either
       if (!viewedRoute) {
@@ -457,7 +464,8 @@ export function useMapLayerSync(params: {
       m.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 60, maxZoom: 16 });
       // Hide overlays so the route is clearly visible
       if (!layersBeforeRouteRef.current) {
-        layersBeforeRouteRef.current = { ...layers };
+        // Same as the ride: an open ride's snapshot is the real "before".
+        layersBeforeRouteRef.current = { ...(layersBeforeActivityRef.current ?? layers) };
         waymarkedBeforeRouteRef.current = { ...waymarked };
       }
       setLayers(prev => ({ ...prev, heatmap: false, dfci: false, myTraces: false }));
@@ -469,8 +477,10 @@ export function useMapLayerSync(params: {
     } else {
       // Restore layers when route is closed
       if (layersBeforeRouteRef.current) {
-        setLayers(() => layersBeforeRouteRef.current!);
+        const saved = layersBeforeRouteRef.current; // same lazy-updater trap as above
         layersBeforeRouteRef.current = null;
+        // A ride still selected keeps the overlays hidden; it restores on close.
+        if (!selectedActivity) setLayers(saved);
       }
       if (waymarkedBeforeRouteRef.current) {
         setWaymarked(waymarkedBeforeRouteRef.current);
