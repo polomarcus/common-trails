@@ -58,3 +58,22 @@ def test_migration_recovering_on_a_retry_starts_the_server(tmp_path):
     assert proc.returncode == 0
     assert (tmp_path / "served").exists()
     assert counter.read_text().strip() == "3"
+
+
+def test_database_ahead_of_the_image_still_starts(tmp_path):
+    """A rollback to an older image (or the worker cold-starting on the previous
+    image right after the web migrated) meets a DB revision it does not know:
+    alembic fails with "Can't locate revision". Nothing to apply → serve, or no
+    rollback would ever be possible after a migration."""
+    ahead = tmp_path / "ahead.sh"
+    ahead.write_text(
+        "#!/bin/sh\n"
+        "echo \"alembic.util.exc.CommandError: Can't locate revision identified by '0099_future'\" >&2\n"
+        "exit 255\n"
+    )
+    ahead.chmod(0o755)
+    proc = _run(tmp_path, f"sh {ahead}")
+    assert proc.returncode == 0
+    assert (tmp_path / "served").exists()
+    assert "newer than this image" in proc.stderr
+    assert "Alembic attempt" not in proc.stderr
