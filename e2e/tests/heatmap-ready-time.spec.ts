@@ -4,14 +4,18 @@
  * The heatmap defaults ON (useLayerToggles), so on a plain page load the display
  * pipeline must stand itself up with no user interaction: the map is
  * constructed, the STATIC `heatmap-display.pmtiles` source is added, and the
- * density + crisp-line layers are attached and made visible.
+ * crisp-line layer is attached and made visible.
  *
  * PRE-pivot this measured a "first-paint" console-log signal that the
  * raw-PMTiles pivot removed (quarantine cause). Rewritten to be HERMETIC: poll
  * the live map handle (`__mapInstance`) until the `community-trails` source and
- * its `community-trails-heat` / `community-trails-line` layers are present AND
- * visible, within a sane time budget. This asserts the pipeline initializes —
- * no rendered pixels, no artifact size, no DB heatmap data required.
+ * its `community-trails-line` layer are present AND visible, within a sane time
+ * budget. This asserts the pipeline initializes — no rendered pixels, no
+ * artifact size, no DB heatmap data required.
+ *
+ * Readiness used to be measured on the blurred `community-trails-heat` density
+ * layer too; that layer was removed (2026-11-15) — the thin line layer is now
+ * the whole community heatmap, so readiness is measured on it alone.
  */
 import { test, expect } from '@playwright/test';
 
@@ -25,7 +29,7 @@ const INIT_BUDGET_MS = process.env.CI ? 45000 : 25000;
 test.describe('Community heatmap — display pipeline init', () => {
   test.setTimeout(90000);
 
-  test('community-trails source + density/line layers stand up (no interaction)', async ({ page }) => {
+  test('community-trails source + line layer stand up (no interaction)', async ({ page }) => {
     await page.addInitScript(() => { localStorage.setItem('cc_beta_dismissed', '1'); localStorage.setItem('cc_beta_footer_dismissed', '1'); });
 
     const tGoto = Date.now();
@@ -69,16 +73,14 @@ test.describe('Community heatmap — display pipeline init', () => {
       return;
     }
 
-    // Stage 2: the static-PMTiles source + its layers are added AND the heatmap
-    // default-ON state has made the density + line layers visible.
+    // Stage 2: the static-PMTiles source + its line layer are added AND the
+    // heatmap default-ON state has made the line layer visible.
     await page.waitForFunction(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = (window as any).__mapInstance;
       if (!m?.getSource?.('community-trails')) return false;
-      if (m.getLayer?.('community-trails-heat') == null) return false;
       if (m.getLayer?.('community-trails-line') == null) return false;
-      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'visible'
-        && m.getLayoutProperty('community-trails-line', 'visibility') === 'visible';
+      return m.getLayoutProperty('community-trails-line', 'visibility') === 'visible';
     }, undefined, { timeout: INIT_BUDGET_MS });
     const tReady = Date.now() - tGoto;
 
@@ -95,13 +97,13 @@ test.describe('Community heatmap — display pipeline init', () => {
       const m = (window as any).__mapInstance;
       return {
         hasSource: !!m.getSource('community-trails'),
-        heat: m.getLayoutProperty('community-trails-heat', 'visibility'),
         line: m.getLayoutProperty('community-trails-line', 'visibility'),
+        densityLayer: m.getLayer('community-trails-heat') != null,
       };
     });
     expect(ready.hasSource).toBe(true);
-    expect(ready.heat).toBe('visible');
     expect(ready.line).toBe('visible');
+    expect(ready.densityLayer, 'the blurred density layer was removed').toBe(false);
     expect(tReady, `pipeline must initialize within ${INIT_BUDGET_MS}ms`).toBeLessThan(INIT_BUDGET_MS);
   });
 });

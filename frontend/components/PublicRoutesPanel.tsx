@@ -83,6 +83,11 @@ export default memo(function PublicRoutesPanel({ mapInstance, routeMode, viewedR
         id: 'public-routes-line',
         type: 'line',
         source: 'public-routes',
+        // Not at regional zoom: at z8 these 2.5 px sport-coloured (purple /
+        // orange…) lines dominated the thin community heatmap (2026-11-15).
+        // The hover highlight below keeps no floor — it only draws while the
+        // rider points at a route in the list, at whatever zoom they are.
+        minzoom: 10,
         paint: {
           'line-color': ['get', 'color'],
           'line-width': 2.5,

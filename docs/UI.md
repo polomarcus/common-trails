@@ -37,10 +37,14 @@ La carte **n'exige pas de connexion**. Seul l'export ODbL en masse
 ### Couches
 
 - **Heatmap commune** — source PMTiles `community-trails`, couches définies dans
-  `frontend/lib/community-heatmap-layers.ts` : densité (`community-trails-heat`, type
-  `heatmap` sur `heat_points`), lignes (`community-trails-glow` / `community-trails-line`
-  sur `trails`) et flèches de sens (`community-trails-arrows`). Rampe prune → rose →
-  orange (`#7a2058` … `#ff8c42`).
+  `frontend/lib/community-heatmap-layers.ts` : traits fins (`community-trails-line`
+  sur `trails`) et flèches de sens (`community-trails-arrows`). Pas de couche floue :
+  la densité `heatmap` sur `heat_points` a été retirée (halo rose qui empâtait la
+  carte jusqu'à z13) ; la tuile contient toujours `heat_points`, plus rien ne la
+  dessine. Un seul ton, clair = rare → foncé = fréquent (`#f5b3cf` … `#5c0a33`) ;
+  largeur et opacité croissent aussi avec la fréquence. Le fond IGN Plan v2 par
+  défaut est désaturé pour que la heatmap reste la couleur dominante. Les
+  itinéraires publics (`public-routes-line`) n'apparaissent qu'à partir de z10.
 - **Ma heatmap** — les traces de l'utilisateur, servies en direct par
   `GET /me/activities` (`backend/app/api/me_activities.py`), une seule couleur bleue
   `MY_TRACES_COLOR = '#1447e6'` (`frontend/lib/constants.ts`). Largeur, flou et opacité

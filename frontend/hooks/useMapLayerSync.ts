@@ -7,8 +7,8 @@ import { getTrackBbox, activityDisplayGeometry } from '@/lib/map-utils';
 import { applyUserTraceOpacity } from '@/lib/user-traces-layers';
 import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
 import {
-  LINE_OPACITY_RAMP, GLOW_OPACITY_RAMP, LINE_WIDTH_RAMP, HEAT_OPACITY_RAMP,
-  COMMUNITY_TRAILS_HEAT_LAYER, applyCommunityHeatSportFilter, withMult,
+  LINE_OPACITY_RAMP, GLOW_OPACITY_RAMP, LINE_WIDTH_RAMP,
+  applyCommunityHeatSportFilter, withMult,
 } from '@/lib/community-heatmap-layers';
 import type { ActivityItem } from '@/lib/map-utils';
 import { buildProfileData } from '@/lib/elevation-profile';
@@ -68,15 +68,10 @@ export function useMapLayerSync(params: {
     // × the rider's "opacité" setting (Calques → Apparence), folded by withMult.
     const userMult = getHeatmapAppearance().communityOpacity;
     const lineOpacity = withMult(LINE_OPACITY_RAMP, userMult);
-    const heatOpacity = withMult(HEAT_OPACITY_RAMP, userMult);
 
     if (layers.heatmap) {
-      // Show: raster density heatmap (PRIMARY) + thin crisp line (z14+) + arrows.
+      // Show: the thin crisp line (the only community visual) + arrows + hit.
       // ensure visible first (instant), then fade opacity to the data-driven ramp.
-      if (m.getLayer(COMMUNITY_TRAILS_HEAT_LAYER)) {
-        m.setLayoutProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'visibility', 'visible');
-        m.setPaintProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'heatmap-opacity', heatOpacity);
-      }
       // Guarded like the sibling layers: the community source/layers are skipped
       // entirely when NEXT_PUBLIC_HEATMAP_URL is unset in a prod build (see
       // init-map-layers.ts), so never assume the line layer exists.
@@ -86,19 +81,17 @@ export function useMapLayerSync(params: {
       }
       if (m.getLayer('community-trails-arrows')) m.setLayoutProperty('community-trails-arrows', 'visibility', 'visible');
       if (m.getLayer('community-trails-hit')) m.setLayoutProperty('community-trails-hit', 'visibility', 'visible');
-      // Sport chip → filter the density + line + hit layers (all carry `sport`).
+      // Sport chip → filter the line + hit layers (both carry `sport`).
       // /map only updated `heatmapSport` state before; without this the chips
       // never reached the map (home filtered inline in app/page.tsx). SSOT helper.
       applyCommunityHeatSportFilter(m, heatmapSport);
       loadCommunityHeatmap(mapInstance, heatmapSport, heatmapDays);
     } else {
       // Hide: fade opacity to 0 first, then set visibility:none after transition (300ms)
-      if (m.getLayer(COMMUNITY_TRAILS_HEAT_LAYER)) m.setPaintProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'heatmap-opacity', 0);
       if (m.getLayer('community-trails-line')) m.setPaintProperty('community-trails-line', 'line-opacity', 0);
       if (m.getLayer('community-trails-hit')) m.setLayoutProperty('community-trails-hit', 'visibility', 'none');
       if (m.getLayer('community-trails-arrows')) m.setLayoutProperty('community-trails-arrows', 'visibility', 'none');
       const t = setTimeout(() => {
-        if (m.getLayer(COMMUNITY_TRAILS_HEAT_LAYER)) m.setLayoutProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'visibility', 'none');
         if (m.getLayer('community-trails-line')) m.setLayoutProperty('community-trails-line', 'visibility', 'none');
       }, 320);
       return () => clearTimeout(t);

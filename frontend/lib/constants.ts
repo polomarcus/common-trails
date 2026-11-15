@@ -10,7 +10,7 @@ export const SPORT_COLORS: Record<string, string> = {
 /**
  * "Ma heatmap" — the signed-in rider's OWN traces on /map, drawn in ONE colour
  * (not per sport) so they read at a glance against the community heat ramp
- * (plum → pink → orange, HEAT_RAMP_STOPS). A blue stays far from that ramp, so
+ * (light pink → dark burgundy, HEAT_RAMP_STOPS). A blue stays far from that ramp, so
  * "chemins que j'ai roulés" vs "chemins roulés par les autres" stays legible
  * when both layers are superposed (Crouzet beta request). It was a light cyan
  * (#06b6d4) until 2026-11-11: unreadable at regional zoom, lost in the

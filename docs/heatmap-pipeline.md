@@ -34,16 +34,19 @@ is dropped in prod. It is kept as reference only. Overall architecture:
   `--min-uc` CLI flag only applies to the legacy matched path.
 - **Region clip:** `HEATMAP_RAW_BBOX` drops wholly out-of-region (corrupt) traces.
 - **Output layers:** `trails` (LineStrings with `user_count`, `heat_score`,
-  `sport`, direction fields) and `heat_points` (weighted points for the density
-  heatmap). Optional raster XYZ pyramid (`HEATMAP_RASTER_PYRAMID=true` in prod)
+  `sport`, direction fields) and `heat_points` (weighted points, built for a
+  density heatmap the frontend no longer draws — see below). Optional raster XYZ pyramid (`HEATMAP_RASTER_PYRAMID=true` in prod)
   and a gzipped GeoJSONL used by the export endpoints.
 - **Publication:** see [PMTiles versioning convention](#pmtiles-versioning-convention-phase-3)
   below (immutable snapshot → pointer compare-and-set → mutable copy → prune).
 - **Frontend layers** (`frontend/lib/community-heatmap-layers.ts`): source
-  `community-trails` (vector, z6–14) → `community-trails-heat` (maplibre
-  `heatmap` over `heat_points`), `community-trails-glow` + `community-trails-line`
-  (over `trails`), `community-trails-arrows` (one-way direction symbols). The
-  PMTiles URL is resolved through the pointer by `frontend/lib/cdn-cache.ts`.
+  `community-trails` (vector, z6–14) → `community-trails-line` (thin lines over
+  `trails`, single-hue ramp light = rare → dark = frequent) and
+  `community-trails-arrows` (one-way direction symbols). The blurred
+  `community-trails-heat` density layer over `heat_points` was removed
+  (2026-11-15: its halos merged into a solid mat up to z13); the build still
+  emits `heat_points` — dropping it is a separate decision. The PMTiles URL is
+  resolved through the pointer by `frontend/lib/cdn-cache.ts`.
 - **Triggers:** event-driven only (archive drain, `/imports/files` batch end,
   Cloud Tasks artefact rebuild, deletions) — there is no periodic rebuild
   scheduler. See [`architecture.md`](architecture.md).

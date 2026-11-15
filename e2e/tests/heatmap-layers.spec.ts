@@ -9,11 +9,13 @@
  *
  *   source `community-trails` = vector, url `pmtiles://…/heatmap-display.pmtiles`,
  *                               minzoom 6 / maxzoom 14 (communityTrailsSourceSpec)
- *   layer  `community-trails-heat`   = heatmap over source-layer `heat_points`
- *   layer  `community-trails-line`   = line    over source-layer `trails` (z9+)
+ *   layer  `community-trails-line`   = line    over source-layer `trails` (from the
+ *                                      source minzoom) — THE community visual
  *   layer  `community-trails-arrows` = symbol  over source-layer `trails`
  *   layer  `community-trails-hit`    = line    over source-layer `trails`
- *   (NO circle/points layer, NO `community-trails-glow` — both were removed)
+ *   (NO `heatmap` density layer over `heat_points` — removed 2026-11-15, its
+ *   blurred halos merged into a pink mat up to z13; NO circle/points layer and
+ *   NO `community-trails-glow` either — all removed)
  *
  * HERMETIC: assert the DISPLAY IS WIRED (source/layer specs via
  * `__mapInstance.getStyle()`) — never rendered pixels or artifact size.
@@ -149,9 +151,8 @@ test.describe('Community heatmap — static PMTiles source + layers', () => {
 
     const byId = Object.fromEntries(w.community.map((l) => [l.id, l]));
 
-    // ② density heatmap (PRIMARY visual) over the weighted `heat_points` points.
-    expect(byId['community-trails-heat']?.type).toBe('heatmap');
-    expect(byId['community-trails-heat']?.sourceLayer).toBe('heat_points');
+    // ② no blurred density layer any more (removed 2026-11-15).
+    expect(byId['community-trails-heat'], 'the density heatmap layer must be gone').toBeUndefined();
 
     // ② crisp core line over `trails`. Its floor (LINE_CRISP_MINZOOM) must EQUAL
     // the source minzoom — asserted against the live source rather than a literal,
@@ -175,13 +176,35 @@ test.describe('Community heatmap — static PMTiles source + layers', () => {
     for (const l of w.community) expect(l.source).toBe('community-trails');
   });
 
-  test('exactly one density heatmap layer; no circle/points and no removed glow', async ({ page }) => {
+  test('the line layer paints the single-hue ramp, light = rare → dark = frequent', async ({ page }) => {
     await openMap(page, 12);
     const w = await readWiring(page);
     test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
 
-    // The Strava-style density field is a single maplibre `heatmap` layer.
-    expect(w.community.filter((l) => l.type === 'heatmap').length).toBe(1);
+    // Read back from the LIVE map: proves the expression passed maplibre's style
+    // validation (an invalid paint value is dropped, not stored).
+    const paint = await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const m = (window as any).__mapInstance;
+      return {
+        color: m.getPaintProperty('community-trails-line', 'line-color'),
+        blur: m.getPaintProperty('community-trails-line', 'line-blur'),
+      };
+    });
+    expect(paint.color).toEqual(['interpolate', ['linear'], ['get', 'heat_score'],
+      0.2, '#f5b3cf', 0.4, '#e0619e', 0.6, '#c2185b', 0.75, '#8e0f4a', 0.9, '#5c0a33']);
+    expect(paint.blur ?? 0).toBe(0);
+  });
+
+  test('no density heatmap layer; no circle/points and no removed glow', async ({ page }) => {
+    await openMap(page, 12);
+    const w = await readWiring(page);
+    test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
+
+    // Thin crisp lines only (the Strava look): the blurred maplibre `heatmap`
+    // density layer drew 10–16 px halos that merged into a solid mat up to z13.
+    expect(w.community.filter((l) => l.type === 'heatmap')).toEqual([]);
+    expect(w.community.some((l) => l.sourceLayer === 'heat_points')).toBe(false);
     // No circle 'points' layer (the pre-pivot black-dots bug); the code adds none.
     expect(w.community.some((l) => l.type === 'circle')).toBe(false);
     expect(w.community.some((l) => l.id === 'community-trails-points')).toBe(false);
@@ -232,7 +255,7 @@ test.describe('Community heatmap — static PMTiles source + layers', () => {
 test.describe('Community heatmap — toggle wiring (Calques)', () => {
   test.setTimeout(60000);
 
-  test('disabling then re-enabling the heatmap flips the density + line visibility', async ({ page }) => {
+  test('disabling then re-enabling the heatmap flips the line + arrow visibility', async ({ page }) => {
     await openMap(page, 12);
     const w = await readWiring(page);
     test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
@@ -241,7 +264,7 @@ test.describe('Community heatmap — toggle wiring (Calques)', () => {
     await page.waitForFunction(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = (window as any).__mapInstance;
-      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'visible';
+      return m.getLayoutProperty('community-trails-line', 'visibility') === 'visible';
     }, undefined, { timeout: 15000 });
 
     // Open Calques and UNCHECK the heatmap toggle (the checkbox starts checked).
@@ -254,8 +277,8 @@ test.describe('Community heatmap — toggle wiring (Calques)', () => {
     await page.waitForFunction(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = (window as any).__mapInstance;
-      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'none'
-        && m.getLayoutProperty('community-trails-line', 'visibility') === 'none';
+      return m.getLayoutProperty('community-trails-line', 'visibility') === 'none'
+        && m.getLayoutProperty('community-trails-arrows', 'visibility') === 'none';
     }, undefined, { timeout: 5000 });
 
     // Re-enable → both layers visible again.
@@ -263,8 +286,8 @@ test.describe('Community heatmap — toggle wiring (Calques)', () => {
     await page.waitForFunction(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const m = (window as any).__mapInstance;
-      return m.getLayoutProperty('community-trails-heat', 'visibility') === 'visible'
-        && m.getLayoutProperty('community-trails-line', 'visibility') === 'visible';
+      return m.getLayoutProperty('community-trails-line', 'visibility') === 'visible'
+        && m.getLayoutProperty('community-trails-arrows', 'visibility') === 'visible';
     }, undefined, { timeout: 5000 });
   });
 });
