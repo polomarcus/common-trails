@@ -7,13 +7,11 @@
  *       per-visitor DB queries on the db-f1-micro. The static PMTiles is the
  *       PRIMARY display artefact; live MVT is a fallback only.
  *
- * RASTER-HEATMAP REDESIGN (2026-08): the density visual is BACK — but now a
- * maplibre `heatmap` layer over the STATIC PMTiles `heat_points` source-layer
- * (built offline by build_pmtiles), NOT the live MVT endpoint. So a
- * `type:'heatmap'` layer is now EXPECTED and correct; the doctrine that
- * survives is only that no source may stream the LIVE MVT endpoint. The thin
- * crisp `line` overlay (z14+, over `trails`) is layered on top for street-zoom
- * crispness. This spec drives the real home page and asserts the hero's style.
+ * 2026-11-15: the hero draws ONLY the thin crisp `line` layer over the STATIC
+ * PMTiles `trails` source-layer — the blurred `heatmap` density layer over
+ * `heat_points` is gone (its halos merged into a pink mat at regional zoom).
+ * The doctrine that survives: no source may stream the LIVE MVT endpoint.
+ * This spec drives the real home page and asserts the hero's style.
  *
  * 2026-08 re-pin: the old assertions were stale (they predated the raster
  * redesign — they forbade ANY heatmap layer and required every community layer

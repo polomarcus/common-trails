@@ -1020,7 +1020,7 @@ const en: Translations = {
   'calque.step3Text': "Click “Add layer”, then “Save”. The layer is remembered in your browser for next time.",
   'calque.step4Title': 'Turn the overlay on',
   'calque.step4Text': "Hover the map icon again, go to “Overlays › Custom” and tick Chemins Communs.",
-  'calque.step4Text2': "The community's traces appear in purple → orange on top of your basemap. The more a segment is ridden, the warmer and brighter it glows.",
+  'calque.step4Text2': "The community's traces appear as thin lines on top of your basemap, from pale pink to burgundy: the more a segment is ridden, the darker and thicker its line.",
   'calque.panelTitle': 'New custom layer',
   'calque.fieldName': 'Name',
   'calque.fieldUrl': 'Tiles URL',

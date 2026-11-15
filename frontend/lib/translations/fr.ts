@@ -1021,7 +1021,7 @@ const fr: Translations = {
   'calque.step3Text': "Clique « Ajouter la couche », puis « Enregistrer ». La couche est mémorisée dans ton navigateur pour tes prochaines visites.",
   'calque.step4Title': 'Active le calque',
   'calque.step4Text': "Survole à nouveau l'icône de carte, va dans « Superpositions › Personnalisé » (Overlays › Custom) et coche Chemins Communs.",
-  'calque.step4Text2': "Les traces de la communauté apparaissent en violet → orange par-dessus ton fond de carte. Plus une portion est empruntée, plus elle ressort chaude et lumineuse.",
+  'calque.step4Text2': "Les traces de la communauté apparaissent en traits fins par-dessus ton fond de carte, du rose pâle au bordeaux : plus une portion est empruntée, plus son trait est foncé et épais.",
   'calque.panelTitle': 'Nouvelle couche personnalisée',
   'calque.fieldName': 'Nom',
   'calque.fieldUrl': 'URL des tuiles',
