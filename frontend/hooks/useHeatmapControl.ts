@@ -8,9 +8,7 @@ import {
   HEATMAP_DIM_OPACITY, HEATMAP_DEFAULT_OPACITY,
 } from '@/lib/routing-style';
 import { trace, traceWith } from '@/lib/perf-trace';
-import {
-  LINE_OPACITY_RAMP, HEAT_OPACITY_RAMP, COMMUNITY_TRAILS_HEAT_LAYER, withMult,
-} from '@/lib/community-heatmap-layers';
+import { LINE_OPACITY_RAMP, withMult } from '@/lib/community-heatmap-layers';
 
 export interface HeatmapPopup {
   x: number;
@@ -206,19 +204,13 @@ export function useHeatmapControl(
     // × the rider's "opacité" setting (Calques → Apparence).
     const mult = (exploreMode ? 1.0 : routeMode ? HEATMAP_DIM_OPACITY : HEATMAP_DEFAULT_OPACITY)
       * appearance.communityOpacity;
-    // SSOT ramps imported from community-heatmap-layers.ts; scaled by the
+    // SSOT ramp imported from community-heatmap-layers.ts; scaled by the
     // route/explore-mode multiplier through `withMult` — NOT a hand-written
-    // ['*', mult, ramp]. HEAT_OPACITY_RAMP is a ZOOM ramp, and maplibre REJECTS
-    // ['*', mult, <zoom-interpolate>] (silently drops the paint value + fires an
-    // error), so the raster opacity could never be set — route-mode dimming of
-    // the raster never applied and every toggle logged an error. withMult folds
-    // the multiplier into the zoom-ramp's output stops (legal). The line opacity
-    // is a zoom ramp too (per-zoom heat_score ramps), so it takes the same path.
+    // ['*', mult, ramp]: maplibre REJECTS ['*', mult, <zoom-interpolate>]
+    // (silently drops the paint value + fires an error), and withMult picks the
+    // legal shape for whatever the ramp is (data-driven today, so a ['*'] wrap;
+    // a zoom ramp would get the multiplier folded into its output stops).
     m.setPaintProperty('community-trails-line', 'line-opacity', withMult(LINE_OPACITY_RAMP, mult));
-    if (m.getLayer(COMMUNITY_TRAILS_HEAT_LAYER)) {
-      m.setPaintProperty(COMMUNITY_TRAILS_HEAT_LAYER, 'heatmap-opacity',
-        withMult(HEAT_OPACITY_RAMP, mult));
-    }
   }, [mapInstance, routeMode, exploreMode, appearance.communityOpacity]);
 
   // "Ma heatmap" colour / opacity setting → repaint the rider's traces.

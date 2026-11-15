@@ -19,8 +19,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { addMapSourcesAndLayers } from '@/lib/init-map-layers';
 
+// No `community-trails-heat` any more: the blurred density layer was removed
+// (2026-11-15) — the thin line layer is the community heatmap.
 const COMMUNITY_LAYERS = [
-  'community-trails-heat',
   'community-trails-line',
   'community-trails-arrows',
   'community-trails-hit',

@@ -4,8 +4,9 @@
  *   - couleur de « Ma heatmap » (palette fixe, lisible sur les fonds de carte) ;
  *   - opacité de « Ma heatmap » ;
  *   - opacité de la heatmap commune.
- * Les opacités sont des MULTIPLICATEURS appliqués aux rampes par zoom (via
- * `withMult`), jamais des constantes : la lisibilité par zoom est conservée.
+ * Les opacités sont des MULTIPLICATEURS appliqués aux rampes (via `withMult`),
+ * jamais des constantes : l'écart rare → fréquent (et, pour « Ma heatmap », la
+ * lisibilité par zoom) est conservé.
  *
  * Store module-level : les couches sont (re)peintes depuis plusieurs hooks,
  * qui lisent tous `getHeatmapAppearance()` ; les composants React s'abonnent
@@ -22,7 +23,7 @@ export interface HeatmapAppearance {
 }
 
 /** Couleurs proposées pour « Ma heatmap » — toutes loin de la rampe commune
- *  (prune → rose → orange). La première est la couleur par défaut. */
+ *  (rose clair → bordeaux). La première est la couleur par défaut. */
 export const MY_COLOR_CHOICES: readonly string[] = [
   MY_TRACES_COLOR, '#06b6d4', '#15803d', '#111827', '#7c3aed',
 ];

@@ -16,8 +16,7 @@ import { WAYMARKED_LAYERS } from '@/lib/basemap-styles';
 import { registerDirectionArrow, directionArrowLayout } from '@/lib/map-arrows';
 import {
   communityTrailsSourceSpec, communityTrailsLineLayerSpec,
-  communityTrailsArrowLayerSpec, communityTrailsHeatLayerSpec,
-  LINE_CRISP_MINZOOM,
+  communityTrailsArrowLayerSpec, LINE_CRISP_MINZOOM,
 } from '@/lib/community-heatmap-layers';
 import type { ActivityItem } from '@/lib/map-utils';
 import { trace } from '@/lib/perf-trace';
@@ -165,16 +164,13 @@ function addCommunityHeatmap(m: any): void {
       })
       .catch(() => { /* keep the stable source */ });
 
-    // ②-heat: raster-style DENSITY heatmap (maplibre `heatmap` type) over the
-    // PMTiles `heat_points` point layer — the PRIMARY community visual at every
-    // zoom. Overlapping traces accumulate into a clean purple→orange density
-    // field (the Strava look) with the basemap showing through, replacing the
-    // diffuse vector-line "pâté". Starts hidden; useMapLayerSync toggles it.
-    m.addLayer(communityTrailsHeatLayerSpec());
-    // ②-lines: THIN crisp core lines, street-zoom ONLY (z14+), layered ON TOP of
-    // the raster so a road reads as a line rather than a chain of density blobs
-    // when the rider zooms in. The wide blurred GLOW layer was REMOVED — it was
-    // the main pâté driver; the raster now carries the density gradient.
+    // ②-lines: THIN crisp lines over `trails`, from the source minzoom — the
+    // ONLY community visual (the Strava look: one hue, light = rare, dark =
+    // frequent). There is deliberately NO blurred layer under them any more:
+    // the wide GLOW line layer went first (the "pâté" driver), then the
+    // kernel-density `heatmap` over `heat_points` (2026-11-15), whose 10–16 px
+    // halos merged into a solid mat up to z13. Starts hidden; useMapLayerSync
+    // toggles it.
     m.addLayer(communityTrailsLineLayerSpec({ minzoom: LINE_CRISP_MINZOOM }));
     // ②-arrows: Direction arrows on predominantly one-way MTB/gravel singletrack.
     // Starts hidden; useMapLayerSync toggles it with the heatmap. maplibre
@@ -260,7 +256,7 @@ function addDfciTrails(m: any): void {
 function addUserLayers(m: any): void {
   // ③ User activity traces ("Ma heatmap") — glow halo + main line, ONE cyan
   // (MY_TRACES_COLOR) instead of per-sport colours so they contrast with the
-  // plum→orange community ramp. Added AFTER addCommunityHeatmap (see
+  // pink→burgundy community ramp. Added AFTER addCommunityHeatmap (see
   // addMapSourcesAndLayers) so the rider's own traces always draw ON TOP of
   // the community heatmap when both are superposed.
   m.addSource('user-activities', {

@@ -144,7 +144,7 @@ const fr: Translations = {
   'home.stats.traces': 'traces',
   'home.stats.km': 'km de chemins',
   'home.community.title': "C'est quoi une heatmap (ou carte de popularité), et pourquoi c'est utile ?",
-  'home.community.text': "Une heatmap — ou carte de popularité — colore les chemins selon le nombre de cyclistes qui les empruntent réellement. Plus un chemin est roulé, plus il ressort, du prune vers l'orange : d'un coup d'œil tu vois les itinéraires que les locaux privilégient, et ceux qu'ils évitent.\n\nStrava a popularisé cette idée mais l'a verrouillée derrière un abonnement. Ici c'est libre et collectif : chaque trace importée enrichit la carte pour tout le monde, sous licence ODbL. Tes départs et arrivées sont masqués pour protéger ton domicile.",
+  'home.community.text': "Une heatmap — ou carte de popularité — colore les chemins selon le nombre de cyclistes qui les empruntent réellement. Plus un chemin est roulé, plus il ressort, du rose pâle au bordeaux : d'un coup d'œil tu vois les itinéraires que les locaux privilégient, et ceux qu'ils évitent.\n\nStrava a popularisé cette idée mais l'a verrouillée derrière un abonnement. Ici c'est libre et collectif : chaque trace importée enrichit la carte pour tout le monde, sous licence ODbL. Tes départs et arrivées sont masqués pour protéger ton domicile.",
   'home.elevation.title': "Profil d'élévation & surfaces",
   'home.elevation.desc': "Altitude Copernicus DEM, profil coloré par pente, estimation des revêtements avec indice de confiance. D+ et D- sur chaque trace.",
   'home.trails.desc': 'Pistes de Défense des Forêts (DFCI) et sentiers balisés GR, GRP, GT, PR, EuroVelo affichés sur la carte.',

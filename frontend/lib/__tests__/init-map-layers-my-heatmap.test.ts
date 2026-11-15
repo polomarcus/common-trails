@@ -4,18 +4,23 @@
  * paths he rode from the paths others rode.
  *
  * Two map-side invariants, driven through the REAL addMapSourcesAndLayers:
- *   1. the user's traces are painted in ONE colour (MY_TRACES_COLOR, cyan) —
- *      not the per-sport colours that clashed with the plum→orange ramp;
+ *   1. the user's traces are painted in ONE colour (MY_TRACES_COLOR, blue) —
+ *      not the per-sport colours that clashed with the community ramp;
  *   2. every user-trace layer is added AFTER every community layer, i.e. drawn
  *      ON TOP when both are visible.
+ * Plus the community heatmap itself, as /map really builds it: thin lines only,
+ * no blurred `heatmap` density layer (2026-11-15).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { addMapSourcesAndLayers } from '@/lib/init-map-layers';
 import { MY_TRACES_COLOR, SPORT_COLORS } from '@/lib/constants';
-import { HEAT_RAMP_STOPS } from '@/lib/community-heatmap-layers';
+import { HEAT_RAMP_STOPS, LINE_CRISP_MINZOOM } from '@/lib/community-heatmap-layers';
 import { DFCI_MIN_ZOOM } from '@/lib/routing-style';
 
-interface LayerSpec { id: string; source?: string; minzoom?: number; paint?: Record<string, unknown> }
+interface LayerSpec {
+  id: string; type?: string; source?: string; 'source-layer'?: string;
+  minzoom?: number; paint?: Record<string, unknown>;
+}
 
 function makeMap() {
   const layers: LayerSpec[] = [];
@@ -94,6 +99,26 @@ describe('/map — "Ma heatmap" layers vs the community heatmap', () => {
       expect(idx, `${id} must be added`).toBeGreaterThanOrEqual(0);
       expect(idx, `${id} must be above the community heatmap`).toBeGreaterThan(lastCommunity);
     }
+  });
+
+  // Lisibilité (2026-11-15, prod Montpellier): up to z13 the blurred density
+  // layer drew a 10–16 px pink halo around every trace (a solid mat at z9).
+  // FAILS on the old wiring, which added a `heatmap` over `heat_points`.
+  it('draws the community heatmap as thin lines only — no blurred `heatmap` layer', () => {
+    const m = makeMap();
+    addMapSourcesAndLayers(m);
+    const community = m.layers.filter((l) => l.source === 'community-trails');
+    expect(community.length).toBeGreaterThan(0); // the block ran
+    expect(community.filter((l) => l.type === 'heatmap')).toEqual([]);
+    expect(community.some((l) => l['source-layer'] === 'heat_points')).toBe(false);
+    expect(m.layers.some((l) => l.id === 'community-trails-heat')).toBe(false);
+    const line = community.find((l) => l.id === 'community-trails-line');
+    expect(line?.type).toBe('line');
+    expect(line?.['source-layer']).toBe('trails');
+    expect(line?.minzoom).toBe(LINE_CRISP_MINZOOM);
+    expect(line?.paint?.['line-blur']).toBe(0);
+    expect(line?.paint?.['line-color']).toEqual(['interpolate', ['linear'], ['get', 'heat_score'],
+      ...HEAT_RAMP_STOPS.flatMap(([pos, color]) => [pos, color])]);
   });
 
   // Beta feedback: at z6–z9 the dense DFCI network rendered as solid red blobs

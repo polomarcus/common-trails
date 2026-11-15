@@ -12,20 +12,23 @@
  * back — but now a maplibre `heatmap` layer over the STATIC PMTiles
  * `heat_points` layer (built offline by build_pmtiles), NOT the live MVT
  * endpoint. That fixes both the fog (this is a real density gradient, not fed
- * by a broken source) AND the per-visitor DB load (static file). These tests
- * pin: line/arrow specs stay line/symbol over `trails`; the new heatmap spec is
- * a `heatmap` over `heat_points` with a transparent 0-density stop.
+ * by a broken source) AND the per-visitor DB load (static file).
+ *
+ * Thin lines only (2026-11-15, feat/heatmap-traits-fins): that density layer is
+ * GONE again — up to z13 its blurred kernel drew a 10–16 px halo around every
+ * trace and at z9 the halos merged into a solid pink mat. The community heatmap
+ * is now the crisp `line` layer over `trails` alone, one hue, light = rare →
+ * dark = frequent. These tests pin: no spec builds a `heatmap` layer; line/arrow
+ * specs stay line/symbol over `trails`; the colour ramp is single-hue with
+ * strictly decreasing luminance; widths/opacities grow with popularity.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
+import * as communityLayers from '../community-heatmap-layers';
 import {
-  HEAT_RADIUS_RAMP,
   communityTrailsSourceSpec,
   communityTrailsGlowLayerSpec,
   communityTrailsLineLayerSpec,
   communityTrailsArrowLayerSpec,
-  communityTrailsHeatLayerSpec,
   communityHeatSportFilter,
   applyCommunityHeatSportFilter,
   COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS,
@@ -34,8 +37,6 @@ import {
   COMMUNITY_TRAILS_GLOW_LAYER,
   COMMUNITY_TRAILS_LINE_LAYER,
   COMMUNITY_TRAILS_ARROW_LAYER,
-  COMMUNITY_TRAILS_HEAT_LAYER,
-  HEAT_POINTS_SOURCE_LAYER,
   DOMINANCE_THRESHOLD,
   ARROW_MIN_PASS_COUNT,
   ARROW_RAMP_FLOOR,
@@ -43,13 +44,16 @@ import {
   ARROW_OPACITY_RAMP,
   ARROW_SIZE_RAMP,
   LINE_CRISP_MINZOOM,
-  HEAT_OPACITY_RAMP,
   LINE_OPACITY_RAMP,
   GLOW_OPACITY_RAMP,
   LINE_WIDTH_RAMP,
+  HEAT_RAMP_STOPS,
+  HEAT_RAMP_LEGEND_STOPS,
+  HEAT_RAMP_CSS,
   HERO_HEATMAP,
   withMult,
 } from '../community-heatmap-layers';
+import { IGN_PLANV2_STYLE, HYBRID_STYLE, BASEMAPS } from '../basemap-styles';
 
 /** Output (a heat_score ramp) of a zoom-interpolate paint value at an exact zoom stop. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,25 +62,55 @@ function lineOpacityAt(ramp: any[], zoom: number): any[] {
   throw new Error(`no zoom stop ${zoom}`);
 }
 
+/** True when `expr` contains a `['zoom']` expression anywhere. */
+function containsZoom(expr: unknown): boolean {
+  if (!Array.isArray(expr)) return false;
+  if (expr.length === 1 && expr[0] === 'zoom') return true;
+  return expr.some(containsZoom);
+}
+
+/** maplibre's rule: `['zoom']` may ONLY be the direct input of a TOP-LEVEL
+ *  interpolate/step. Anything else (e.g. ['*', mult, <zoom-ramp>]) fails style
+ *  validation and the layer is silently dropped. */
+function zoomIsLegal(expr: unknown): boolean {
+  if (!Array.isArray(expr)) return true;
+  if ((expr[0] === 'interpolate' || expr[0] === 'step') && Array.isArray(expr[2]) && expr[2][0] === 'zoom') {
+    return !containsZoom(expr.slice(3));
+  }
+  if (expr[0] === 'step' && Array.isArray(expr[1]) && expr[1][0] === 'zoom') {
+    return !containsZoom(expr.slice(2));
+  }
+  return !containsZoom(expr);
+}
+
 describe('withMult (SSOT opacity scaler — used by the /map hooks at runtime)', () => {
   it('mult===1 returns the ramp unchanged (byte-identical /map default)', () => {
-    expect(withMult(HEAT_OPACITY_RAMP, 1)).toBe(HEAT_OPACITY_RAMP);
+    expect(withMult(LINE_WIDTH_RAMP, 1)).toBe(LINE_WIDTH_RAMP);
     expect(withMult(LINE_OPACITY_RAMP, 1)).toBe(LINE_OPACITY_RAMP);
   });
 
   it('a ZOOM ramp × mult stays a top-level interpolate (NOT the invalid [*, mult, zoom-ramp])', () => {
-    // HEAT_OPACITY_RAMP is ['interpolate',['linear'],['zoom'], …]. maplibre
-    // REJECTS ['*', mult, <zoom-interpolate>] (silently drops the paint + fires
-    // an error) — the exact bug that stopped the hero raster rendering AND made
-    // useHeatmapControl's runtime heatmap-opacity set a no-op. withMult must fold
-    // the multiplier into the OUTPUT stops instead.
+    // maplibre REJECTS ['*', mult, <zoom-interpolate>] (silently drops the paint
+    // + fires an error) — the bug that once stopped the hero's density layer
+    // rendering. withMult must fold the multiplier into the OUTPUT stops instead.
+    const zoomRamp = ['interpolate', ['linear'], ['zoom'], 6, 0.85, 18, 0.25];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dim = withMult(HEAT_OPACITY_RAMP, 0.35) as any[];
+    const dim = withMult(zoomRamp, 0.35) as any[];
     expect(dim[0]).toBe('interpolate');
-    expect(dim[0]).not.toBe('*');
     expect(dim[2]).toEqual(['zoom']);
     // the z6 stop 0.85 is scaled to 0.85*0.35, folded into the output, not wrapped.
     expect(dim[4]).toBeCloseTo(0.85 * 0.35, 6);
+    expect(zoomIsLegal(dim)).toBe(true);
+    // The real zoom ramp in use (width × the hero's widthMult): each per-zoom
+    // heat_score ramp gets wrapped, the zoom input stays top-level.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = withMult(LINE_WIDTH_RAMP, 0.6) as any[];
+    expect(w.slice(0, 3)).toEqual(['interpolate', ['exponential', 1.5], ['zoom']]);
+    for (let i = 4; i < w.length; i += 2) {
+      expect(w[i].slice(0, 2)).toEqual(['*', 0.6]);
+      expect(w[i][2][2]).toEqual(['get', 'heat_score']);
+    }
+    expect(zoomIsLegal(w)).toBe(true);
   });
 
   it('a DATA-driven ramp × mult keeps the simple [*, mult, ramp] wrapper (legal there)', () => {
@@ -87,19 +121,12 @@ describe('withMult (SSOT opacity scaler — used by the /map hooks at runtime)',
     expect(dim[1]).toBe(0.35);
   });
 
-  it('the LINE opacity (zoom × heat_score) × mult stays a top-level zoom interpolate', () => {
-    // LINE_OPACITY_RAMP is zoom-driven with a per-zoom heat_score ramp as output:
-    // the multiplier must be folded into each zoom stop, never wrapped around
-    // the zoom interpolate (maplibre would silently drop the paint value).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dim = withMult(LINE_OPACITY_RAMP, 0.35) as any[];
-    expect(dim[0]).toBe('interpolate');
-    expect(dim[2]).toEqual(['zoom']);
-    for (let i = 4; i < dim.length; i += 2) {
-      expect(dim[i][0]).toBe('*');
-      expect(dim[i][1]).toBe(0.35);
-      expect(dim[i][2][2]).toEqual(['get', 'heat_score']);
-    }
+  it('the LINE opacity is data-driven only: × mult is [*, mult, ramp], with no zoom anywhere', () => {
+    // No zoom dependence any more (the density layer it was fighting is gone),
+    // so the "Apparence" / route-mode / hero multipliers wrap it directly.
+    expect(containsZoom(LINE_OPACITY_RAMP)).toBe(false);
+    expect(withMult(LINE_OPACITY_RAMP, 0.35)).toEqual(['*', 0.35, LINE_OPACITY_RAMP]);
+    expect(zoomIsLegal(withMult(LINE_OPACITY_RAMP, 0.35))).toBe(true);
   });
 });
 
@@ -116,7 +143,7 @@ describe('communityTrailsSourceSpec', () => {
 });
 
 describe('layer specs — line/glow are LINE over "trails"', () => {
-  it('glow + line specs are LINE layers over the PMTiles "trails" source-layer (the density field is a SEPARATE heatmap spec over heat_points)', () => {
+  it('glow + line specs are LINE layers over the PMTiles "trails" source-layer', () => {
     for (const spec of [communityTrailsGlowLayerSpec(), communityTrailsLineLayerSpec()]) {
       expect(spec.type).toBe('line');
       expect(spec['source-layer']).toBe('trails');
@@ -136,26 +163,27 @@ describe('layer specs — line/glow are LINE over "trails"', () => {
       // useMapLayerSync / useHeatmapControl which re-set it on /map.
       expect(spec.paint['line-opacity'][0]).toBe('interpolate');
     }
-    // Zoom-driven (lisibilité par zoom, 2026-11-11). At MID zoom (z13–15) it is
-    // still capped at 0.6 (was 1.0) so dense repeated traces accumulate into
-    // intensity rather than a solid "pâté"; the floor stays 0.4 (desire lines).
-    const op = line.paint['line-opacity'];
-    expect(op.slice(0, 3)).toEqual(['interpolate', ['linear'], ['zoom']]);
-    const mid = ['interpolate', ['linear'], ['get', 'heat_score'], 0, 0.4, 0.3, 0.45, 0.7, 0.52, 1.0, 0.6];
-    expect(lineOpacityAt(op, 13)).toEqual(mid);
-    expect(lineOpacityAt(op, 15)).toEqual(mid);
+    // The ramp validated live on prod (2026-11-15): data-driven only, stops over
+    // the heat_score range the data actually spans (0.2–0.85).
+    expect(line.paint['line-opacity']).toBe(LINE_OPACITY_RAMP);
+    expect(line.paint['line-opacity']).toEqual(
+      ['interpolate', ['linear'], ['get', 'heat_score'], 0.2, 0.5, 0.45, 0.75, 0.65, 0.9, 0.85, 1]);
   });
 
   it('hero options: visible, custom minzoom, opacity ramp multiplied', () => {
     const spec = communityTrailsLineLayerSpec({ visible: true, minzoom: 8, opacityMult: 0.9 });
     expect(spec.layout.visibility).toBe('visible');
     expect(spec.minzoom).toBe(8);
-    // Zoom ramp: the multiplier is folded into every zoom stop's output.
-    const op = spec.paint['line-opacity'];
-    expect(op.slice(0, 3)).toEqual(['interpolate', ['linear'], ['zoom']]);
-    for (let i = 4; i < op.length; i += 2) {
-      expect(op[i].slice(0, 2)).toEqual(['*', 0.9]);
-      expect(op[i][2][0]).toBe('interpolate');
+    // Data-driven ramp: a plain ['*', mult, ramp] wrapper (legal, no zoom inside).
+    expect(spec.paint['line-opacity']).toEqual(['*', 0.9, LINE_OPACITY_RAMP]);
+  });
+
+  it('every line-layer paint value is legal for maplibre (zoom only as a top-level input)', () => {
+    for (const opts of [{}, { opacityMult: HERO_HEATMAP.lineOpacity, widthMult: HERO_HEATMAP.lineWidth }]) {
+      const paint = communityTrailsLineLayerSpec(opts).paint as Record<string, unknown>;
+      for (const [prop, v] of Object.entries(paint)) {
+        expect(zoomIsLegal(v), `${prop} ${JSON.stringify(opts)}`).toBe(true);
+      }
     }
   });
 
@@ -169,42 +197,59 @@ describe('layer specs — line/glow are LINE over "trails"', () => {
     });
     expect(HERO_HEATMAP.lineOpacity).toBeLessThanOrEqual(0.6);
     expect(HERO_HEATMAP.lineWidth).toBeLessThanOrEqual(0.7);
-    expect(HERO_HEATMAP.heatOpacity).toBeLessThanOrEqual(0.75);
-    // Both stay top-level ZOOM interpolates with the multiplier folded into
+    // The hero has no density layer any more, hence no density multiplier.
+    expect(HERO_HEATMAP).not.toHaveProperty('heatOpacity');
+    // Width stays a top-level ZOOM interpolate with the multiplier folded into
     // each stop (a wrapper around a zoom ramp is silently dropped by maplibre).
-    for (const prop of ['line-width', 'line-opacity'] as const) {
-      const v = hero.paint[prop];
-      expect(v[0]).toBe('interpolate');
-      expect(v[2]).toEqual(['zoom']);
-      for (let i = 4; i < v.length; i += 2) expect(v[i][0]).toBe('*');
-    }
-    // /map is untouched: default widthMult → the SSOT ramp itself.
+    const w = hero.paint['line-width'];
+    expect(w[0]).toBe('interpolate');
+    expect(w[2]).toEqual(['zoom']);
+    for (let i = 4; i < w.length; i += 2) expect(w[i][0]).toBe('*');
+    expect(hero.paint['line-opacity']).toEqual(['*', HERO_HEATMAP.lineOpacity, LINE_OPACITY_RAMP]);
+    // /map is untouched: default multipliers → the SSOT ramps themselves.
     expect(map.paint['line-width']).toBe(LINE_WIDTH_RAMP);
-    // At the hero's zoom the most popular corridor stays under ~1.6 px / 0.5.
+    expect(map.paint['line-opacity']).toBe(LINE_OPACITY_RAMP);
+    // At the hero's zoom the most popular corridor stays under 1 px and the
+    // most opaque line under 0.6 — a background, not the subject.
     const top = (ramp: unknown[], z: number) => (lineOpacityAt(ramp as unknown[], z) as unknown[])[2] as unknown[];
-    expect((top(hero.paint['line-width'], 10)[10] as number) * HERO_HEATMAP.lineWidth).toBeLessThanOrEqual(1.6);
-    expect((top(hero.paint['line-opacity'], 8)[10] as number) * HERO_HEATMAP.lineOpacity).toBeLessThanOrEqual(0.5);
+    expect((top(hero.paint['line-width'], 10)[10] as number) * HERO_HEATMAP.lineWidth).toBeLessThanOrEqual(1);
+    expect((LINE_OPACITY_RAMP[LINE_OPACITY_RAMP.length - 1] as number) * HERO_HEATMAP.lineOpacity)
+      .toBeLessThanOrEqual(0.6);
   });
 
-  it('lisibilité par zoom : traits plus opaques et plus épais aux zooms région et rue', () => {
-    // Non-régression (Paul, 2026-11-11) : à z8–10 les traits fins et pâles se
-    // perdaient dans le fond de carte ; à z16+ il ne restait que des traces pâles.
+  it('traits fins : hairlines at regional zoom, widths grow with zoom AND popularity', () => {
+    // Non-régression (2026-11-15) : à z8, ~55k traits de 0.8–2.6 px remplissaient
+    // des zones entières. Les traits fins (0.4–1.2 px) gardent un réseau lisible.
     const line = communityTrailsLineLayerSpec();
-    const scoreAt = (ramp: unknown[], i: number) => ramp[4 + 2 * i] as number; // i-th heat_score stop
-    const op = line.paint['line-opacity'];
-    const [o8, o13, o17] = [8, 13, 17].map((z) => lineOpacityAt(op, z));
-    for (const i of [0, 3]) {
-      expect(scoreAt(o8, i)).toBeGreaterThan(scoreAt(o13, i));
-      expect(scoreAt(o17, i)).toBeGreaterThan(scoreAt(o13, i));
-    }
-    expect(scoreAt(o8, 0)).toBeGreaterThanOrEqual(0.6);
-    expect(scoreAt(o17, 0)).toBeGreaterThanOrEqual(0.6);
     const w = line.paint['line-width'];
     expect(w.slice(0, 3)).toEqual(['interpolate', ['exponential', 1.5], ['zoom']]);
-    const widthAt = (z: number) => lineOpacityAt(w, z);
-    expect(scoreAt(widthAt(8), 0)).toBeGreaterThanOrEqual(0.8);   // was 0.4 px hairlines
-    expect(scoreAt(widthAt(16), 0)).toBeGreaterThanOrEqual(1.5);  // was 1 px
-    expect(scoreAt(widthAt(18), 3)).toBeLessThanOrEqual(7);       // still no fat blob
+    const zooms: number[] = [];
+    for (let i = 3; i < w.length; i += 2) zooms.push(w[i]);
+    expect(zooms).toEqual([8, 10, 13, 16, 18]);
+    const widths = (z: number) => {
+      const r = lineOpacityAt(w, z) as unknown[];
+      expect(r.slice(0, 3)).toEqual(['interpolate', ['linear'], ['get', 'heat_score']]);
+      return [r[4], r[6], r[8], r[10]] as number[];
+    };
+    expect(widths(8)).toEqual([0.4, 0.55, 0.8, 1.2]);
+    expect(widths(8)[3]).toBeLessThanOrEqual(1.2); // hairlines, even the busiest
+    expect(widths(18)[3]).toBeLessThanOrEqual(7);   // still no fat blob at street zoom
+    for (const z of zooms) {
+      const ws = widths(z);
+      for (let i = 1; i < ws.length; i++) expect(ws[i], `z${z} popularity`).toBeGreaterThan(ws[i - 1]);
+    }
+    for (let k = 1; k < zooms.length; k++) {
+      const [lo, hi] = [widths(zooms[k - 1]), widths(zooms[k])];
+      for (let i = 0; i < lo.length; i++) expect(hi[i], `z${zooms[k]} > z${zooms[k - 1]}`).toBeGreaterThan(lo[i]);
+    }
+  });
+
+  it('opacity grows with popularity: rare traces half-transparent, frequent ones opaque', () => {
+    const op = LINE_OPACITY_RAMP as unknown[];
+    const outs = [op[4], op[6], op[8], op[10]] as number[];
+    for (let i = 1; i < outs.length; i++) expect(outs[i]).toBeGreaterThan(outs[i - 1]);
+    expect(outs[0]).toBeGreaterThanOrEqual(0.5);
+    expect(outs[outs.length - 1]).toBe(1);
   });
 });
 
@@ -237,110 +282,111 @@ describe('glow layer — anti-oversaturation invariants (fix/heatmap-oversaturat
     expect(topOpacity).toBeLessThanOrEqual(0.2);
   });
 
-  it('low-density desire lines stay visible (LINE layer opacity at heat_score 0)', () => {
+  it('low-density desire lines stay visible (LINE layer opacity at its lowest stop)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const op = communityTrailsLineLayerSpec().paint['line-opacity'] as any[];
-    // first stop is heat_score 0 → its value must remain clearly visible.
-    // Zoom ramp → check the heat_score-0 output at EVERY zoom stop.
-    for (let i = 4; i < op.length; i += 2) {
-      expect(op[i][4]).toBeGreaterThanOrEqual(0.4);
-    }
+    // ['interpolate',['linear'],['get','heat_score'], 0.2, v, …]: the rarest
+    // traces (and anything below, clamped) must remain clearly visible.
+    expect(op[2]).toEqual(['get', 'heat_score']);
+    expect(op[4]).toBeGreaterThanOrEqual(0.4);
   });
 });
 
-describe('raster-style density heatmap layer (feat/raster-heatmap)', () => {
-  it('is a `heatmap` layer over the STATIC PMTiles `heat_points` source-layer', () => {
-    const spec = communityTrailsHeatLayerSpec();
-    expect(spec.id).toBe(COMMUNITY_TRAILS_HEAT_LAYER);
-    expect(spec.type).toBe('heatmap');
-    expect(spec.source).toBe(COMMUNITY_TRAILS_SOURCE);
-    expect(spec['source-layer']).toBe(HEAT_POINTS_SOURCE_LAYER);
-    expect(HEAT_POINTS_SOURCE_LAYER).toBe('heat_points');
+/** WCAG relative luminance of a #rrggbb colour (0 = black, 1 = white). */
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** HSL hue of a #rrggbb colour, in degrees [0, 360). */
+function hue(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+/**
+ * Lisibilité (2026-11-15, mesuré sur la prod, Montpellier) : la heatmap commune
+ * n'est plus que des traits fins, d'un seul ton, clair = rare → foncé = fréquent.
+ * Each test here FAILS on the previous code: a `heatmap` density layer spec
+ * existed (its blurred halos merged into a pink mat up to z13), and the
+ * plum → pink → orange ramp neither kept one hue nor darkened with frequency.
+ */
+describe('lisibilité — traits fins, un seul ton, clair = rare → foncé = fréquent', () => {
+  it('no community layer spec builds a blurred `heatmap` density layer', () => {
+    const specFactories = Object.entries(communityLayers)
+      .filter(([name, v]) => name.endsWith('LayerSpec') && typeof v === 'function');
+    // Guard against a vacuous pass: the line/glow/arrow factories are found.
+    expect(specFactories.map(([name]) => name)).toEqual(
+      expect.arrayContaining(['communityTrailsLineLayerSpec', 'communityTrailsArrowLayerSpec']));
+    for (const [name, factory] of specFactories) {
+      const spec = (factory as (o: object) => { type: string; 'source-layer'?: string })({ visible: true });
+      expect(spec.type, name).not.toBe('heatmap');
+      expect(spec['source-layer'], name).not.toBe('heat_points');
+    }
+    expect(Object.keys(communityLayers).some((k) => /^HEAT_(INTENSITY|RADIUS|WEIGHT|COLOR|OPACITY)_RAMP$/.test(k)))
+      .toBe(false);
   });
 
-  it('starts hidden by default at minzoom 6; opt-in visible', () => {
-    expect(communityTrailsHeatLayerSpec().layout.visibility).toBe('none');
-    expect(communityTrailsHeatLayerSpec().minzoom).toBe(6);
-    expect(communityTrailsHeatLayerSpec({ visible: true }).layout.visibility).toBe('visible');
+  it('the line colour is exactly the ramp validated on prod (light pink → dark burgundy)', () => {
+    expect(communityTrailsLineLayerSpec().paint['line-color']).toEqual(
+      ['interpolate', ['linear'], ['get', 'heat_score'],
+        0.2, '#f5b3cf', 0.4, '#e0619e', 0.6, '#c2185b', 0.75, '#8e0f4a', 0.9, '#5c0a33']);
   });
 
-  it('weight reads the point `w` property (backend density weight)', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = communityTrailsHeatLayerSpec().paint['heatmap-weight'] as any[];
-    // ['interpolate', ['linear'], ['get','w'], 0, 0.15, ...]
-    expect(w[0]).toBe('interpolate');
-    expect(w[2]).toEqual(['get', 'w']);
+  it('luminance strictly DECREASES along the stops: light = rare, dark = frequent', () => {
+    const lum = HEAT_RAMP_STOPS.map(([, c]) => luminance(c));
+    for (let i = 1; i < lum.length; i++) {
+      expect(lum[i], `${HEAT_RAMP_STOPS[i][1]} darker than ${HEAT_RAMP_STOPS[i - 1][1]}`).toBeLessThan(lum[i - 1]);
+    }
+    // A real light → dark spread, not five near-identical pinks.
+    expect(lum[0] / lum[lum.length - 1]).toBeGreaterThan(10);
   });
 
-  it('color gradient starts FULLY TRANSPARENT so the basemap shows through (no fog)', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const color = communityTrailsHeatLayerSpec().paint['heatmap-color'] as any[];
-    expect(color[0]).toBe('interpolate');
-    // ['interpolate',['linear'],['heatmap-density'], 0, <transparent>, ...]
-    expect(color[3]).toBe(0);
-    expect(String(color[4]).replace(/\s/g, '')).toMatch(/,0\)$/); // rgba(...,0)
-    // top of the ramp is the warm brand orange.
-    expect(color[color.length - 1]).toBe('#ff8c42');
+  it('the ramp is ONE hue (every stop within 15° of the others)', () => {
+    const hues = HEAT_RAMP_STOPS.map(([, c]) => hue(c));
+    for (const a of hues) {
+      for (const b of hues) {
+        const d = Math.abs(a - b);
+        expect(Math.min(d, 360 - d)).toBeLessThanOrEqual(15);
+      }
+    }
   });
 
-  it('radius grows to a MODEST cap (~12px@z18) so dense corridors do not merge into a blob', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const r = communityTrailsHeatLayerSpec().paint['heatmap-radius'] as any[];
-    // ['interpolate',['linear'],['zoom'], 6,v, 10,v, 13,v, 16,v, 18,v]
-    const stops: Record<number, number> = {};
-    for (let i = 3; i < r.length; i += 2) stops[r[i]] = r[i + 1];
-    expect(stops[10]).toBe(5.5);
-    // Regional zoom: big enough to read where the data is (was 2px@z6).
-    expect(stops[6]).toBeGreaterThanOrEqual(3);
-    // Capped well below the old 26px kernel that filled the Lez into a mass.
-    expect(stops[18]).toBeLessThanOrEqual(14);
+  it('stops sit where the data is (heat_score ≈ 0.2–0.85 on prod), strictly increasing', () => {
+    const pos = HEAT_RAMP_STOPS.map(([p]) => p);
+    for (let i = 1; i < pos.length; i++) expect(pos[i]).toBeGreaterThan(pos[i - 1]);
+    expect(pos[0]).toBeGreaterThanOrEqual(0.15);
+    expect(pos[pos.length - 1]).toBeLessThanOrEqual(0.9);
   });
 
-  it('intensity DECAYS at street zoom (de-blob): peak mid, lower at z18 than its mid peak', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const intens = communityTrailsHeatLayerSpec().paint['heatmap-intensity'] as any[];
-    const stops: Record<number, number> = {};
-    for (let i = 3; i < intens.length; i += 2) stops[intens[i]] = intens[i + 1];
-    // The old ramp climbed monotonically to 2.0@z18 → clamped the densest
-    // corridors to solid orange. The de-blob design peaks by mid zoom and
-    // decays after, so street zoom stays legible.
-    const peak = Math.max(...Object.values(stops));
-    expect(stops[18]).toBeLessThan(peak);
-    expect(stops[18]).toBeLessThanOrEqual(0.5);
+  it('the legend shows the whole ramp, left = rare (lightest) → right = frequent (darkest)', () => {
+    expect(HEAT_RAMP_LEGEND_STOPS[0]).toEqual([0, HEAT_RAMP_STOPS[0][1]]);
+    expect(HEAT_RAMP_LEGEND_STOPS[HEAT_RAMP_LEGEND_STOPS.length - 1])
+      .toEqual([1, HEAT_RAMP_STOPS[HEAT_RAMP_STOPS.length - 1][1]]);
+    expect(HEAT_RAMP_CSS.startsWith('linear-gradient(to right, #f5b3cf 0%, ')).toBe(true);
+    expect(HEAT_RAMP_CSS.endsWith(', #5c0a33 100%)')).toBe(true);
   });
 
-  it('opacity ~0.85, opt-in dimmed via opacityMult (hero) — dim stays a VALID zoom ramp', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const base = communityTrailsHeatLayerSpec().paint['heatmap-opacity'] as any[];
-    expect(base[0]).toBe('interpolate');
-    expect(base[2]).toEqual(['zoom']);
-    expect(base[4]).toBe(0.85); // z6 stop
-    // Regression pin (hero raster heatmap silently not rendering): heatmap-opacity
-    // is a ZOOM ramp, so the multiplier must NOT wrap it as `['*', mult, ramp]`
-    // — maplibre forbids a `zoom` expression under `*` and drops the layer. It
-    // must stay a top-level `interpolate` over `['zoom']`, with the multiplier
-    // folded into the OUTPUT stops. This assertion FAILS on the old `['*', …]`
-    // shape and PASSES on the fold-into-outputs fix.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dim = communityTrailsHeatLayerSpec({ opacityMult: 0.9 }).paint['heatmap-opacity'] as any[];
-    expect(dim[0]).toBe('interpolate'); // NOT '*'
-    expect(dim[1]).toEqual(['linear']);
-    expect(dim[2]).toEqual(['zoom']); // zoom is still the DIRECT top-level input
-    // z6 output scaled by the multiplier: 0.9 * 0.85 = 0.765
-    expect(dim[3]).toBe(6);
-    expect(dim[4]).toBeCloseTo(0.765, 5);
-    // Every output stop is a plain number (no illegal nested `zoom`/`*` wrapper).
-    for (let i = 4; i < dim.length; i += 2) expect(typeof dim[i]).toBe('number');
+  it('the default IGN plan basemap is muted so the heatmap is the strongest colour on screen', () => {
+    const ign = (IGN_PLANV2_STYLE.layers as Array<{ id: string; paint?: Record<string, number> }>)
+      .find((l) => l.id === 'ign-planv2-layer');
+    expect(ign?.paint).toEqual({
+      'raster-saturation': -0.75, 'raster-contrast': -0.15, 'raster-brightness-min': 0.08,
+    });
+    expect(BASEMAPS.find((b) => b.key === 'ign')?.style).toBe(IGN_PLANV2_STYLE);
+    // Only the plain IGN plan: the satellite + IGN hybrid keeps its own overlay.
+    const hybridIgn = (HYBRID_STYLE.layers as Array<{ id: string; paint?: Record<string, number> }>)
+      .find((l) => l.id === 'ign-planv2-layer');
+    expect(hybridIgn?.paint).toEqual({ 'raster-opacity': 0.5 });
   });
+});
 
-  it('the same sport chip filter applies (points carry `sport`)', () => {
-    // The heat layer is filtered by communityHeatSportFilter just like the
-    // lines — its point features carry the `sport` property.
-    expect(communityHeatSportFilter('gravel')).toEqual(
-      ['in', ['get', 'sport'], ['literal', ['gravel']]],
-    );
-  });
-
+describe('line floor (LINE_CRISP_MINZOOM)', () => {
   it('LINE_CRISP_MINZOOM equals the SOURCE minzoom — lines draw wherever the tileset has data', () => {
     // 14→9 (2026-08-07), then 9→6 (2026-10-12). The z9 floor hid a dense network:
     // measured on the real prod tileset at z8.4 over Montpellier, the viewport
@@ -561,8 +607,8 @@ describe('direction-arrow dominance — the DOMINANT direction reads stronger', 
  * updated React state but nothing called `setFilter` on the map (home filtered
  * inline in app/page.tsx; /map's useMapLayerSync never did). The fix extracts the
  * SSOT helper `applyCommunityHeatSportFilter` that BOTH call. This drives the REAL
- * helper against a fake map and asserts it pushes the sport filter to the density
- * + line + hit layers — a filter that never reaches the map = the exact bug.
+ * helper against a fake map and asserts it pushes the sport filter to the line +
+ * hit layers — a filter that never reaches the map = the exact bug.
  */
 describe('applyCommunityHeatSportFilter (SSOT — home + /map)', () => {
   function fakeMap() {
@@ -575,7 +621,11 @@ describe('applyCommunityHeatSportFilter (SSOT — home + /map)', () => {
     };
   }
 
-  it('pushes the sport filter to the density + line + hit layers', () => {
+  it('filters exactly the line + hit layers (no density layer any more)', () => {
+    expect([...COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS]).toEqual([COMMUNITY_TRAILS_LINE_LAYER, 'community-trails-hit']);
+  });
+
+  it('pushes the sport filter to the line + hit layers', () => {
     const m = fakeMap();
     applyCommunityHeatSportFilter(m, 'gravel');
     for (const id of COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS) {
@@ -588,7 +638,7 @@ describe('applyCommunityHeatSportFilter (SSOT — home + /map)', () => {
   it('offroad expands to mtb+offroad+gravel (matches communityHeatSportFilter)', () => {
     const m = fakeMap();
     applyCommunityHeatSportFilter(m, 'offroad');
-    expect(m.calls[COMMUNITY_TRAILS_HEAT_LAYER]).toEqual(communityHeatSportFilter('offroad'));
+    expect(m.calls[COMMUNITY_TRAILS_LINE_LAYER]).toEqual(communityHeatSportFilter('offroad'));
   });
 
   it("'all' clears the filter (setFilter(null)) on every layer", () => {
@@ -602,21 +652,5 @@ describe('applyCommunityHeatSportFilter (SSOT — home + /map)', () => {
   it('is safe on a partial map (community layers skipped when URL unset)', () => {
     const m = { getLayer: () => undefined, setFilter: () => { throw new Error('should not be called'); } };
     expect(() => applyCommunityHeatSportFilter(m, 'road')).not.toThrow();
-  });
-});
-
-// fix/heatmap-beads (2026-11): the backend thins `heat_points` per zoom so the
-// spacing along a lone trace stays below THIS kernel radius (else beads). It
-// reads the radius from backend/app/services/heatmap_radius_ramp.json — pin the
-// frontend ramp to that SSOT so retuning one without the other fails here.
-describe('HEAT_RADIUS_RAMP ↔ backend heatmap_radius_ramp.json', () => {
-  it('matches the backend LOD radius stops exactly', () => {
-    const json = JSON.parse(readFileSync(
-      path.resolve(__dirname, '../../../backend/app/services/heatmap_radius_ramp.json'), 'utf8'));
-    const ramp = HEAT_RADIUS_RAMP as unknown[];
-    expect(ramp.slice(0, 3)).toEqual(['interpolate', ['linear'], ['zoom']]);
-    const stops: number[][] = [];
-    for (let i = 3; i < ramp.length; i += 2) stops.push([ramp[i] as number, ramp[i + 1] as number]);
-    expect(stops).toEqual(json.stops);
   });
 });

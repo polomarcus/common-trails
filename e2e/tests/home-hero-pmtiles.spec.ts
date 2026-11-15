@@ -22,12 +22,17 @@
  * `withMult` wrapped the zoom-driven heatmap-opacity ramp as `['*', 0.9, …]`,
  * which maplibre rejects → the density layer was SILENTLY dropped and the hero
  * rendered no community heatmap. Fixed in lib/community-heatmap-layers.ts.
+ *
+ * THIN LINES ONLY (2026-11-15): the density layer is gone again, on purpose —
+ * its blurred kernel drew a pink halo around every trace and merged into a
+ * solid mat at regional zoom. The hero (like /map) now draws only the crisp
+ * `line` layer over `trails`; a `heatmap` layer is once more a regression.
  */
 import { test, expect } from '@playwright/test';
 
 
-test.describe('Home hero — static PMTiles density + line, no live-MVT fog', () => {
-  test('hero renders the static-PMTiles density heatmap, never the live MVT endpoint', async ({ page }) => {
+test.describe('Home hero — static PMTiles thin lines, no blur, no live-MVT fog', () => {
+  test('hero renders the static-PMTiles heatmap as thin lines, never the live MVT endpoint', async ({ page }) => {
     await page.goto('/');
     // Wait for the MapLibre instance the hero exposes for E2E.
     await page.waitForFunction(() => !!(window as any).__heroMapInstance, null, { timeout: 30000 });
@@ -59,25 +64,24 @@ test.describe('Home hero — static PMTiles density + line, no live-MVT fog', ()
     }
 
     // If the PMTiles file is served (local dev / prod), the community source
-    // must be the pmtiles:// one, and the hero must render the raster DENSITY
-    // heatmap (a `heatmap` layer over `heat_points`) plus the crisp `line`
-    // overlay (over `trails`). (In CI without the binary the hero legitimately
-    // stays a plain basemap — the doctrine pin above is the load-bearing one.)
+    // must be the pmtiles:// one, and the hero must render the crisp `line`
+    // layer over `trails` — and NO blurred `heatmap` density layer. (In CI
+    // without the binary the hero legitimately stays a plain basemap — the
+    // doctrine pin above is the load-bearing one.)
     const community = style.sources.find((s: { id: string }) => s.id === 'community-trails');
     if (community) {
       expect(community.url).toMatch(/^pmtiles:\/\//);
       const communityLayers = style.layers.filter(
         (l: { id: string }) => l.id.startsWith('community-trails-'),
       );
-      // The primary density visual: exactly one `heatmap` layer over the
-      // weighted `heat_points` source-layer. (Regression guard: the old
-      // withMult bug dropped this layer entirely, leaving 0 heatmap layers.)
-      const density = communityLayers.filter((l: { type: string }) => l.type === 'heatmap');
-      expect(density.length).toBe(1);
-      expect(density[0].sourceLayer).toBe('heat_points');
-      // The street-zoom crisp overlay: at least one `line` layer over `trails`.
+      // No density layer: its halos turned the hero into a pink mat.
+      expect(communityLayers.filter((l: { type: string }) => l.type === 'heatmap')).toEqual([]);
+      expect(communityLayers.some((l: { sourceLayer: string | null }) => l.sourceLayer === 'heat_points')).toBe(false);
+      // The heatmap itself: the `line` layer over `trails`. It must have
+      // survived style validation (an invalid paint — e.g. a multiplier wrapped
+      // around a zoom ramp — drops the layer silently), so look it up by id.
       const lines = communityLayers.filter((l: { type: string }) => l.type === 'line');
-      expect(lines.length).toBeGreaterThanOrEqual(1);
+      expect(lines.map((l: { id: string }) => l.id)).toContain('community-trails-line');
       for (const l of lines) expect(l.sourceLayer).toBe('trails');
     }
   });

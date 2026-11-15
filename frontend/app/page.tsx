@@ -14,9 +14,9 @@ import { useI18n } from '@/lib/i18n';
 import { fetchCommunityStats, getPmtilesUrl } from '@/lib/cdn-cache';
 import { type CommunityStats, formatStatValue } from '@/lib/community-stats';
 import {
-  communityTrailsSourceSpec, communityTrailsHeatLayerSpec, communityTrailsLineLayerSpec,
+  communityTrailsSourceSpec, communityTrailsLineLayerSpec,
   applyCommunityHeatSportFilter, LINE_CRISP_MINZOOM, COMMUNITY_TRAILS_SOURCE, HERO_HEATMAP,
-  HEAT_RAMP_STOPS, HEAT_RAMP_CSS,
+  HEAT_RAMP_STOPS, HEAT_RAMP_LEGEND_STOPS, HEAT_RAMP_CSS,
 } from '@/lib/community-heatmap-layers';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
@@ -383,21 +383,16 @@ export default function HomePage() {
         if (m.getSource(COMMUNITY_TRAILS_SOURCE)) return;
         m.addSource(COMMUNITY_TRAILS_SOURCE, communityTrailsSourceSpec(url));
         // Hero background tuning: visible immediately, slightly translucent
-        // (it sits behind the title/CTAs + dark gradient). The raster-style
-        // DENSITY heatmap (over heat_points) is the hero visual — a clean
-        // purple→orange field, no diffuse pâté — from minzoom 6 so the map is
-        // never empty at the hero's default z10. The crisp line layer is added
-        // from LINE_CRISP_MINZOOM (lowered 14→9 on 2026-08-07): at the hero's
-        // default zoom the tippecanoe-thinned raster alone dotted out in sparse
-        // areas, so the continuous line draws the corridors from regional zoom.
+        // (it sits behind the title/CTAs + dark gradient). The hero draws the
+        // SAME thin crisp lines as /map (one hue, light = rare → dark =
+        // frequent), from LINE_CRISP_MINZOOM so the map is never empty at its
+        // default zoom. No blurred density layer under them any more
+        // (2026-11-15): its halos merged into a pink mat at regional zoom.
         // Inserted below the DFCI layers so the red/white DFCI tracks keep
         // rendering on top, like before.
-        // Lightened 2026-11-11 (Paul: "l'accueil est bien chargé"): the /map
-        // readability retune made the lines thicker and more opaque at the
-        // hero's regional zoom, drowning the title and CTAs. The hero keeps its
-        // own, lighter look — see HERO_HEATMAP in community-heatmap-layers.ts.
-        m.addLayer(communityTrailsHeatLayerSpec({ visible: true, minzoom: 6, opacityMult: HERO_HEATMAP.heatOpacity }),
-          'dfci-trails-casing');
+        // Lighter than /map (Paul, 2026-11-11: "l'accueil est bien chargé"):
+        // thinner, more transparent lines so the title and CTAs stay readable —
+        // see HERO_HEATMAP in community-heatmap-layers.ts.
         m.addLayer(
           communityTrailsLineLayerSpec({
             visible: true, minzoom: LINE_CRISP_MINZOOM,
@@ -794,8 +789,8 @@ export default function HomePage() {
                   {/* Stops derive from the ramp SSOT (lib/community-heatmap-layers.ts)
                       so a paint retune can't leave this illustration stale. */}
                   <linearGradient id="heat-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                    {HEAT_RAMP_STOPS.map(([pos, color]) => (
-                      <stop key={pos} offset={`${pos * 100}%`} stopColor={color} />
+                    {HEAT_RAMP_LEGEND_STOPS.map(([pos, color]) => (
+                      <stop key={color} offset={`${pos * 100}%`} stopColor={color} />
                     ))}
                   </linearGradient>
                 </defs>

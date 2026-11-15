@@ -12,10 +12,17 @@
  *   - /     → app/page.tsx hero background (layers visible immediately,
  *             slightly translucent, filtered per sport by the hero chips)
  *
- * The paint/layout expressions are the single source of truth extracted from
- * init-map-layers.ts (Komoot-style warm ramp). NOTE: useMapLayerSync /
- * useHeatmapControl re-set the opacity ramps on /map — if you change the
- * base ramps here, keep those hooks in sync.
+ * The paint/layout expressions are the single source of truth. NOTE:
+ * useMapLayerSync / useHeatmapControl re-set the opacity ramps on /map — they
+ * IMPORT the constants below, so a retune here reaches /map too.
+ *
+ * Look (2026-11-15, "traits fins"): the community heatmap is THIN CRISP LINES
+ * ONLY, one hue, light = rare → dark = frequent (the Strava heatmap read). The
+ * blurred kernel-density `heatmap` layer that used to sit under the lines is
+ * GONE from the map: up to z13 it drew a 10–16 px pink halo around every trace,
+ * at z9 the halos merged into a solid mat, and the map only became readable
+ * once it faded out (z14–16). The tileset still ships its `heat_points`
+ * source-layer (backend unchanged); nothing draws it any more.
  */
 
 import { directionArrowLayout } from '@/lib/map-arrows';
@@ -24,25 +31,12 @@ export const COMMUNITY_TRAILS_SOURCE = 'community-trails';
 export const COMMUNITY_TRAILS_GLOW_LAYER = 'community-trails-glow';
 export const COMMUNITY_TRAILS_LINE_LAYER = 'community-trails-line';
 export const COMMUNITY_TRAILS_ARROW_LAYER = 'community-trails-arrows';
-/** Raster-style DENSITY heatmap (maplibre `heatmap` type) over the PMTiles
- *  `heat_points` point layer — the PRIMARY density visual (the Strava look).
- *  Replaces the diffuse vector-line "pâté": overlapping traces accumulate into
- *  a clean purple→orange density FIELD with the basemap showing through. */
-export const COMMUNITY_TRAILS_HEAT_LAYER = 'community-trails-heat';
 
-/** Source-layer name of the weighted density points the backend build emits
- *  (raw_trace_display._emit_run_points → build_pmtiles multi-layer tippecanoe). */
-export const HEAT_POINTS_SOURCE_LAYER = 'heat_points';
-
-/** Zoom floor for the THIN crisp line overlay — pinned to the SOURCE's own
+/** Zoom floor for the thin crisp line layer — pinned to the SOURCE's own
  *  `minzoom` (communityTrailsSourceSpec), i.e. the lines draw wherever the
- *  tileset actually has data.
- *
- *  The raster heatmap carries the density look, but its tippecanoe-thinned
- *  points render as scattered DOTS in sparse areas rather than continuous
- *  corridors (Paul, 2026-08-07: "on voit des points plutôt que des lignes au
- *  zoom par défaut"). The `trails` layer is continuous LineStrings, so showing
- *  it draws clean lines instead of dots.
+ *  tileset actually has data. Since the density layer was removed (2026-11-15)
+ *  the lines are the ONLY community visual, so this floor is also the zoom at
+ *  which the heatmap appears at all.
  *
  *  Was 9, on the assumption that below that the lines "would just be noise".
  *  Measured on the real prod tileset instead (2026-10-12) — at z8.4 over
@@ -130,18 +124,17 @@ export interface CommunityLayerOptions {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Expr = any;
 
-// Exported SSOT: the /map hooks (useHeatmapControl) that re-set opacity at
-// runtime MUST route through this instead of hand-writing `['*', mult, ramp]`,
-// or they reintroduce the invalid-zoom-wrapper bug for the raster heatmap-opacity
-// ramp (which is zoom-driven). See useHeatmapControl.ts.
+// Exported SSOT: the /map hooks (useMapLayerSync, useHeatmapControl) that re-set
+// paint at runtime MUST route through this instead of hand-writing
+// `['*', mult, ramp]`, or they reintroduce the invalid-zoom-wrapper bug for any
+// zoom-driven ramp (LINE_WIDTH_RAMP × the hero's widthMult, today).
 export function withMult(ramp: Expr, mult: number): Expr {
   if (mult === 1) return ramp;
   // maplibre forbids a `zoom` expression ANYWHERE except as the direct input to
   // a top-level step/interpolate. So `['*', mult, <zoom-interpolate>]` is an
   // INVALID paint value — the layer fails style validation and is SILENTLY
-  // dropped (no throw; an `error` event fires). That is exactly how the hero's
-  // raster `heatmap` layer stopped rendering: heatmap-opacity is a ZOOM ramp and
-  // the hero passes opacityMult 0.9, so `withMult` produced the illegal wrapper.
+  // dropped (no throw; an `error` event fires). That is how the hero's former
+  // density layer once stopped rendering (its zoom-driven opacity × 0.9).
   // For a zoom-driven ramp, fold the multiplier into the interpolate OUTPUT stops
   // instead (numerically identical, and legal). Data-driven ramps (`['get', …]`,
   // e.g. line/glow opacity) keep the simple `['*', …]` wrapper — legal there.
@@ -169,46 +162,58 @@ export const GLOW_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['get', 'heat
   0, 0.04, 0.5, 0.07, 1.0, 0.1,
 ];
 
-// Capped at 0.6 (was 1.0): where a rider repeats a route 100+×, the raw traces
-// overlap; full opacity turned that into a solid orange "pâté" (blob). A cap lets
-// overlaps ACCUMULATE into intensity (Strava-raster feel) instead of a solid mass.
+// heat_score → value, with stops spread over the range the data ACTUALLY spans.
+// Measured on prod (Montpellier, 2026-11-15): heat_score sits almost entirely in
+// 0.2–0.85 — none below 0.1, none above 0.9. The old ramps spent their stops on
+// 0 and 1.0, so nearly every trace got the same mid value; here every stop lands
+// where there is data, and the tails just clamp.
 const byScore = (a: number, b: number, c: number, d: number): Expr =>
-  ['interpolate', ['linear'], ['get', 'heat_score'], 0, a, 0.3, b, 0.7, c, 1.0, d];
+  ['interpolate', ['linear'], ['get', 'heat_score'], 0.2, a, 0.45, b, 0.65, c, 0.85, d];
 
-// Lisibilité par zoom (Paul, 2026-11-11). Mid zoom (z13–15) keeps the tuned
-// 0.4→0.6 (the anti-"pâté" values). At REGIONAL zoom (≤ z8) the hairlines were
-// lost in the basemap's roads → more opaque; at STREET zoom (z17+) the raster
-// has faded out and the line carries the read alone → more opaque too.
-// ZOOM is the top-level input (maplibre requires it); `withMult` folds a
-// multiplier into the per-zoom outputs.
-export const LINE_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
-  8, byScore(0.65, 0.72, 0.8, 0.88),
-  11, byScore(0.5, 0.56, 0.64, 0.72),
-  13, byScore(0.4, 0.45, 0.52, 0.6),
-  15, byScore(0.4, 0.45, 0.52, 0.6),
-  17, byScore(0.7, 0.76, 0.84, 0.92),
-];
+// Line opacity — data-driven ONLY, no zoom ramp. The old zoom dependence (more
+// opaque at z8 and z17, capped at 0.6 in between) existed to fight the blurred
+// density layer drawn underneath: hairlines lost at regional zoom, an orange
+// "pâté" where both stacked. That layer is gone, so the line carries the read
+// alone at every zoom and opacity simply grows with popularity: a rare trace is
+// half-transparent, a frequent one fully opaque. Validated live on prod at
+// z7.9 / 9.2 / 11.6 / 13. `withMult` wraps it as ['*', mult, ramp] — legal for a
+// data-driven ramp — for the hero and the "Apparence" opacity setting.
+export const LINE_OPACITY_RAMP: Expr = byScore(0.5, 0.75, 0.9, 1);
 
+// ⭐ SSOT colour ramp: ONE hue (magenta → burgundy, ~330–336°), LIGHT = rare →
+// DARK = frequent — the Strava heatmap read. The old plum → pink → orange ramp
+// did not encode frequency: its stops sat on 0…1 while the data lives in
+// 0.2–0.85, so nearly everything rendered the same mid pink (and the darkest
+// colour went to the RAREST traces). Luminance strictly decreases along the
+// stops (pinned by a test). The legends and the home illustration read it too.
 export const HEAT_RAMP_STOPS: ReadonlyArray<readonly [number, string]> = [
-  [0, '#7a2058'], [0.25, '#a83275'], [0.5, '#d63384'],
-  [0.75, '#f06595'], [0.9, '#ff7e3a'], [1.0, '#ff8c42'],
+  [0.2, '#f5b3cf'], [0.4, '#e0619e'], [0.6, '#c2185b'],
+  [0.75, '#8e0f4a'], [0.9, '#5c0a33'],
 ];
-// The same ramp as a CSS gradient (left = rare, right = very popular), with the
-// TRUE stop positions — for legends/illustrations in plain HTML/SVG.
-export const HEAT_RAMP_CSS = `linear-gradient(to right, ${HEAT_RAMP_STOPS
-  .map(([pos, color]) => `${color} ${pos * 100}%`).join(', ')})`;
+// The ramp for legends/illustrations, stretched to 0…1 (left = rare, right =
+// frequent). The paint stops span 0.2–0.9 and clamp outside, so drawing them at
+// their raw positions would give every legend flat 20 % / 10 % tails.
+const RAMP_LO = HEAT_RAMP_STOPS[0][0];
+const RAMP_HI = HEAT_RAMP_STOPS[HEAT_RAMP_STOPS.length - 1][0];
+export const HEAT_RAMP_LEGEND_STOPS: ReadonlyArray<readonly [number, string]> = HEAT_RAMP_STOPS
+  .map(([pos, color]) => [(pos - RAMP_LO) / (RAMP_HI - RAMP_LO), color] as const);
+// The same as a CSS gradient — for legends in plain HTML.
+export const HEAT_RAMP_CSS = `linear-gradient(to right, ${HEAT_RAMP_LEGEND_STOPS
+  .map(([pos, color]) => `${color} ${Math.round(pos * 1000) / 10}%`).join(', ')})`;
 
-// ⭐ SSOT width ramps — the /map hooks (useMapLayerSync, useHeatmapControl) IMPORT
-// these instead of re-declaring them, so a paint retune here can't silently fail
-// to reach /map (the 2026-08-05 pâté-fix bug: the spec was thinned but the hooks
-// still re-set the OLD fat ramps on heatmap-toggle). Thinned ~half at the
-// high-heat end (z16 core 8→3.6) so dense repeated traces don't merge into a blob.
+// ⭐ SSOT width ramp — the /map hooks (useMapLayerSync) IMPORT it instead of
+// re-declaring it, so a paint retune here can't silently fail to reach /map
+// (the 2026-08-05 bug: the spec was thinned but the hooks re-set the OLD ramp).
+// THIN at regional zoom: ~55k features can be on screen at z8, and the old
+// 0.8–2.6 px lines filled whole areas in. 0.4–1.2 px at z8 keeps a network of
+// hairlines in which the frequent corridors still stand out; widths then grow
+// with zoom up to street level. Validated live on prod at z7.9 / 9.2 / 11.6 / 13.
 export const LINE_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoom'],
-  8, byScore(0.8, 1.2, 1.8, 2.6),
-  10, byScore(0.8, 1.2, 1.8, 2.6),
-  13, byScore(0.9, 1.4, 2.2, 3.2),
-  16, byScore(1.6, 2.4, 3.6, 5),
-  18, byScore(2.2, 3.2, 4.8, 6.5),
+  8, byScore(0.4, 0.55, 0.8, 1.2),
+  10, byScore(0.5, 0.7, 1, 1.5),
+  13, byScore(0.9, 1.3, 1.9, 2.8),
+  16, byScore(1.6, 2.3, 3.4, 4.6),
+  18, byScore(2.2, 3.2, 4.6, 6),
 ];
 export const GLOW_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoom'],
   10, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1, 0.3, 1.6, 0.7, 2.6, 1, 3.6],
@@ -216,11 +221,12 @@ export const GLOW_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoo
   16, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1.8, 0.3, 2.8, 0.7, 4, 1, 5.5],
 ];
 
-/** Home hero: the heatmap is a BACKGROUND behind the title and CTAs, so it is
- *  drawn lighter than on /map (thinner, more transparent lines; dimmer density).
- *  At the hero's zoom (~z9–10) this lands near the pre-retune look: line
- *  opacity ≈ 0.3–0.5, width ≈ 0.5–1.6 px. */
-export const HERO_HEATMAP = { heatOpacity: 0.7, lineOpacity: 0.55, lineWidth: 0.6 } as const;
+/** Home hero: the heatmap is a BACKGROUND behind the title and CTAs, so its
+ *  lines are drawn lighter than on /map (thinner, more transparent). With the
+ *  ramps above, at the hero's zoom (~z9–10) that is opacity ≈ 0.28–0.55 and
+ *  width ≈ 0.3–0.9 px — and no blurred halo any more (the density layer the
+ *  hero used to draw under its lines is gone). */
+export const HERO_HEATMAP = { lineOpacity: 0.55, lineWidth: 0.6 } as const;
 
 /** Soft bloom around popular trails — Garmin-style diffused edges. */
 export function communityTrailsGlowLayerSpec(opts: CommunityLayerOptions = {}) {
@@ -262,7 +268,9 @@ export function communityTrailsGlowLayerSpec(opts: CommunityLayerOptions = {}) {
   };
 }
 
-/** Crisp core trail lines — thickness driven by popularity (Garmin-style). */
+/** Crisp trail lines — THE community heatmap visual (the only one since the
+ *  blurred density layer was removed). Popularity (`heat_score`) drives colour
+ *  (light → dark), width and opacity together. */
 export function communityTrailsLineLayerSpec(opts: CommunityLayerOptions = {}) {
   const { visible = false, minzoom = 10, opacityMult = 1, widthMult = 1 } = opts;
   return {
@@ -278,103 +286,16 @@ export function communityTrailsLineLayerSpec(opts: CommunityLayerOptions = {}) {
       'line-sort-key': ['get', 'user_count'],
     },
     paint: {
-      // Core line ramp — derived from HEAT_RAMP_STOPS (the SSOT the legends
-      // also read), dark plum (rare) → hot pink → orange (very popular).
+      // Single-hue ramp from HEAT_RAMP_STOPS (the SSOT the legends also read):
+      // light pink (rare) → dark burgundy (frequent).
       'line-color': ['interpolate', ['linear'], ['get', 'heat_score'],
         ...HEAT_RAMP_STOPS.flatMap(([pos, color]) => [pos, color]),
       ],
-      // Thinned (~half at the high-heat end): 8px cores made dense repeated
-      // traces merge into a blob. See the pâté fix (2026-08-05). SSOT const.
+      // Hairlines at regional zoom, growing with zoom and popularity. SSOT const.
       'line-width': withMult(LINE_WIDTH_RAMP, widthMult),
       'line-blur': 0,
       'line-opacity': withMult(LINE_OPACITY_RAMP, opacityMult),
       'line-opacity-transition': { duration: 300, delay: 0 },
-    },
-  };
-}
-
-// ── Raster-style density heatmap (SSOT paint) ────────────────────────────────
-// The prototype-validated paint for the maplibre `heatmap` layer over the
-// `heat_points` source-layer. Exported so any hook that re-sets these on toggle
-// reads the SAME expressions (the 2026-08-05 divergence lesson: retuning a spec
-// while the hooks re-set the old values silently fails to reach /map).
-
-// Values below are the prototype-validated paint (Paul: "looks great" on the
-// real Le Lez prod data) extended down to z6 for the hero. Low-zoom intensity
-// is kept LOW (0.4–0.6) so a whole-city view reads as a density field, not a
-// solid blob; it climbs at street zoom where points spread out.
-
-/** heatmap-weight: point `w` (backend log-normalised corridor popularity, the
- *  same density scale as the line heat_score) → contribution. Floor 0.4 so a
- *  solo desire line still registers; overlaps accumulate further via density. */
-export const HEAT_WEIGHT_RAMP: Expr = ['interpolate', ['linear'], ['get', 'w'],
-  0, 0.4, 1, 1,
-];
-
-/** heatmap-intensity PEAKS at mid zoom then DECAYS at street zoom. The old ramp
- *  climbed to 2.0@z18 on the assumption points spread out; but on the most-ridden
- *  corridors (the Lez, 100+ passes) even spread points accumulate density >>1 →
- *  the color ramp clamps to solid orange = the "pâté" blob. Decaying intensity
- *  (0.9@z13 → 0.5@z16 → 0.35@z18) keeps the densest area in the mid-range so
- *  individual traces stay legible; the thin crisp line (z14+) carries the
- *  street-level "this is a road" read. Validated on real prod Le Lez data
- *  (2026-08-06): z16.5 solid-blob+dark-beads → readable corridors, overview
- *  (z12) unchanged (only z13+ diverges). */
-export const HEAT_INTENSITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
-  6, 0.7, 8, 0.85, 10, 0.9, 13, 0.9, 14, 0.8, 16, 0.5, 18, 0.35,
-];
-
-/** heatmap-radius grows to a MODEST cap (~12px@z18, was 26px). A 26px kernel at
- *  street zoom made overlapping traces merge into a filled mass (and its
- *  low-density tail drew ugly dark "beads"). ~10-12px lets corridors read as
- *  corridors, not a field.
- *  PINNED to backend/app/services/heatmap_radius_ramp.json (vitest): the backend
- *  thins `heat_points` per zoom so the gap along a lone trace stays < this radius
- *  (fix/heatmap-beads). Change both together. */
-export const HEAT_RADIUS_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
-  6, 3, 8, 4.5, 10, 5.5, 13, 8, 16, 10, 18, 12,
-];
-
-/** heatmap-opacity ~0.85 through mid zoom, then fades HARDER from z15 (was z16)
- *  so the THIN crisp line (z14+) takes over the street-level read and the raster
- *  stops fighting it into a blob. */
-export const HEAT_OPACITY_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
-  6, 0.85, 13, 0.8, 15, 0.55, 16.5, 0.35, 18, 0.25,
-];
-
-/** Brand density gradient: transparent → dark plum → hot pink → orange. The
- *  0-density stop MUST be fully transparent so the basemap shows through. */
-export const HEAT_COLOR_RAMP: Expr = ['interpolate', ['linear'], ['heatmap-density'],
-  0, 'rgba(122,32,88,0)',
-  0.15, 'rgba(122,32,88,0.55)',
-  0.4, '#a83275',
-  0.6, '#d63384',
-  0.8, '#f06595',
-  0.95, '#ff7e3a',
-  1.0, '#ff8c42',
-];
-
-/**
- * Raster-style density heatmap layer over the PMTiles `heat_points` point
- * layer — the PRIMARY community density visual (fixes the vector-line pâté).
- * `opacityMult` dims it for the hero background (matches the line/glow specs).
- */
-export function communityTrailsHeatLayerSpec(opts: CommunityLayerOptions = {}) {
-  const { visible = false, minzoom = 6, opacityMult = 1 } = opts;
-  return {
-    id: COMMUNITY_TRAILS_HEAT_LAYER,
-    type: 'heatmap',
-    source: COMMUNITY_TRAILS_SOURCE,
-    'source-layer': HEAT_POINTS_SOURCE_LAYER,
-    minzoom,
-    layout: { visibility: visible ? 'visible' : 'none' },
-    paint: {
-      'heatmap-weight': HEAT_WEIGHT_RAMP,
-      'heatmap-intensity': HEAT_INTENSITY_RAMP,
-      'heatmap-radius': HEAT_RADIUS_RAMP,
-      'heatmap-color': HEAT_COLOR_RAMP,
-      'heatmap-opacity': withMult(HEAT_OPACITY_RAMP, opacityMult),
-      'heatmap-opacity-transition': { duration: 300, delay: 0 },
     },
   };
 }
@@ -394,10 +315,9 @@ export function communityHeatSportFilter(sport: string): Expr | null {
   return ['in', ['get', 'sport'], ['literal', sports]];
 }
 
-/** Layer ids the sport chip filters: the density (`heat_points`) + crisp line +
- *  invisible click-hit layer all carry `sport`. */
+/** Layer ids the sport chip filters: the crisp line + the invisible click-hit
+ *  layer (both over `trails`, whose features carry `sport`). */
 export const COMMUNITY_TRAILS_SPORT_FILTERED_LAYERS = [
-  COMMUNITY_TRAILS_HEAT_LAYER,
   COMMUNITY_TRAILS_LINE_LAYER,
   'community-trails-hit',
 ] as const;

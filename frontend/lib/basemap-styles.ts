@@ -3,6 +3,18 @@
  * Extracted from map/page.tsx for reuse and clarity.
  */
 
+/** Muted IGN Plan v2 (the /map default basemap). The raw plan is very
+ *  colourful — orange/yellow roads, saturated greens — and competed with the
+ *  community heatmap's pink → burgundy lines. Desaturated, slightly flattened
+ *  and lifted off pure black so the heatmap is the strongest colour on screen
+ *  (the Strava look). Validated live on prod (2026-11-15). Applied ONLY to the
+ *  plain IGN basemap: the satellite + IGN hybrid keeps its own overlay. */
+export const IGN_PLANV2_MUTED_PAINT = {
+  'raster-saturation': -0.75,
+  'raster-contrast': -0.15,
+  'raster-brightness-min': 0.08,
+} as const;
+
 // IGN Plan v2 — free WMTS, no API key, topographic detail for France
 export const IGN_PLANV2_STYLE: Record<string, unknown> = {
   version: 8,
@@ -19,7 +31,7 @@ export const IGN_PLANV2_STYLE: Record<string, unknown> = {
       maxzoom: 18,
     },
   },
-  layers: [{ id: 'ign-planv2-layer', type: 'raster', source: 'ign-planv2' }],
+  layers: [{ id: 'ign-planv2-layer', type: 'raster', source: 'ign-planv2', paint: { ...IGN_PLANV2_MUTED_PAINT } }],
 };
 
 // CyclOSM — cycling-focused basemap with elevation contours
