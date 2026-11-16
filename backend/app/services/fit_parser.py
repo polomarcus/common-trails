@@ -220,6 +220,7 @@ def parse_fit(content: bytes) -> dict:
                 activity_date = ts
 
     # Get distance from session summary
+    start_time = None
     for session in fit.get_messages("session"):
         d = session.get_value("total_distance")
         if d:
@@ -227,9 +228,11 @@ def parse_fit(content: bytes) -> dict:
         n = session.get_value("sport")
         if n:
             name = n.capitalize()
-        if not activity_date:
-            ts = session.get_value("start_time")
-            if ts and isinstance(ts, datetime):
+        ts = session.get_value("start_time")
+        if ts and isinstance(ts, datetime):
+            if start_time is None:
+                start_time = ts
+            if not activity_date:
                 activity_date = ts
 
     # If no elevation data found, strip any partial 3rd element
@@ -251,6 +254,10 @@ def parse_fit(content: bytes) -> dict:
         "coord_count": len(coords),
         "invalid_point_count": invalid_point_count,
         "activity_date": activity_date,
+        # The FIT session start (naive UTC) — ``activity_date`` is the first GPS
+        # fix, which can lag it. Join key with the Garmin Connect summary of an
+        # "Export all" archive (``garmin_connect.ConnectIndex.lookup``).
+        "start_time": start_time,
         "sport": sport,
     }
 

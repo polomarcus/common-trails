@@ -286,7 +286,11 @@ def test_synthetic_garmin_export_full_pipeline(pipeline):
     )
     assert res["outcomes"] == _expected_outcomes(expected)
     assert _outcomes_by_reason(res["outcomes"]) == expected["skipped_by_reason"]
-    _assert_imported(pipeline["user_id"], expected)
+    acts = _assert_imported(pipeline["user_id"], expected)
+    # Garmin Connect summary: the name the rider set in Connect, not "Cycling".
+    names = {a["start"]: a["name"] for a in acts}
+    for start, name in expected["names_by_start"].items():
+        assert names[start] == name, names
 
     _to, subject, html = res["emails"][-1]
     assert subject == "Ton archive est importée 🚴"

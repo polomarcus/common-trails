@@ -300,10 +300,21 @@ def classify_sport(
     Case-insensitive, whitespace/punctuation-tolerant. Never raises.
     """
     sport, _known = lookup_activity_type(activity_type)
-    if sport in _NAME_REFINABLE and activity_name:
-        n = activity_name.lower()
-        if "gravel" in n:
-            return "gravel"
-        if "vtt" in n or "mtb" in n or "mountain bike" in n or "mountain" in n:
-            return "mtb"
+    if sport in _NAME_REFINABLE:
+        return refine_sport_by_name(activity_name) or sport
     return sport
+
+
+def refine_sport_by_name(activity_name: str | None) -> str | None:
+    """The gravel/mtb keyword refinement (#430) of a GENERIC bike ride's name:
+    "gravel" → gravel; "vtt" / "mtb" / "mountain bike" / "mountain" → mtb;
+    anything else (or no name) → None. Only meaningful for a ride whose type
+    said nothing finer than "a bike ride" — callers apply it to those only."""
+    if not activity_name:
+        return None
+    n = activity_name.lower()
+    if "gravel" in n:
+        return "gravel"
+    if "vtt" in n or "mtb" in n or "mountain bike" in n or "mountain" in n:
+        return "mtb"
+    return None

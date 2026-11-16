@@ -36,7 +36,7 @@ import time
 
 from sqlalchemy import text as sa_text
 
-from app.services import archive_intake, surface_inference
+from app.services import archive_intake, garmin_connect, surface_inference
 from app.services import email as email_service
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
@@ -357,15 +357,29 @@ def _effective_sport(
 
 
 def _effective_sport_with_default(
-    parsed: dict, csv_sport: str | None, fallback_sport: str | None = None,
+    parsed: dict,
+    csv_sport: str | None,
+    fallback_sport: str | None = None,
+    connect: garmin_connect.ConnectActivity | None = None,
 ) -> tuple[str | None, bool]:
     """``_effective_sport`` + ``is_default``: True when the sport is ``road``
     only because every source was a GENERIC bike ride (CSV "Ride" the name did
-    not refine, FIT generic Bike profile) — stored as
+    not refine, FIT generic Bike profile, Connect "cycling") — stored as
     ``activities.sport_is_default`` so the rider is asked to classify it. The
-    user's explicit pick (last resort) is never a default."""
+    user's explicit pick (last resort) is never a default.
+
+    ``connect`` (Garmin "Export all" archive: the member's row of Garmin
+    Connect's summary, see :mod:`app.services.garmin_connect`): an EXPLICIT
+    Connect type (road_biking, gravel_cycling, mountain_biking, running…) is
+    the rider's latest word — re-typed after the ride — so it wins over the
+    FIT device profile. A bare Connect "cycling" only joins the cascade AFTER
+    the file's own sport (``hint``: generic road, or gravel/mtb from the
+    Connect name), so the FIT discipline still decides when it has one."""
+    if connect is not None and connect.sport is not None:
+        return connect.sport, False
     sport, is_default = resolve_sport_cascade_with_default(
         csv_sport, parsed.get("sport"), parsed.get("sport_from_gpx"),
+        connect.hint if connect is not None else None,
     )
     if sport is not None:
         # The rider picked "road" for the whole zip: a generic ride that lands
@@ -422,6 +436,7 @@ def _ingest_member_bytes(
     fallback_sport: str | None = None,
     fallback_date=None,
     stats: dict | None = None,
+    connect_index: garmin_connect.ConnectIndex | None = None,
 ) -> tuple[str, str | None, str | None]:
     """Parse + ingest ONE archive member. Shared by both drains (per-member
     queue AND the whole-archive streaming drain) so provenance stamping +
@@ -435,7 +450,14 @@ def _ingest_member_bytes(
 
     ``stats``: optional out-param; ``stats["imported_default_sport"]`` is
     incremented when the member created an activity whose sport is only a
-    generic default (``sport_is_default``) — one sentence in the done email.
+    generic default (``sport_is_default``) — one sentence in the done email;
+    ``stats["garmin_connect_matched"]`` counts members matched to a Garmin
+    Connect summary row.
+
+    ``connect_index``: the archive's Garmin Connect summary
+    (:func:`garmin_connect.build_index`), joined on the file's start time. A
+    matched row brings the type and name the rider set in Connect (see
+    ``_effective_sport_with_default``); no row → exactly the old behaviour.
 
     Returns ``(outcome, activity_id, error)`` where ``outcome`` is
     ``"imported"`` (``created``/``promoted``) or ``"skipped"``. For an
@@ -458,10 +480,21 @@ def _ingest_member_bytes(
     if not parsed.get("geometry_geojson"):
         return "skipped", None, "no_geometry"
 
+    connect = None
+    if connect_index:
+        connect = connect_index.lookup(parsed.get("start_time") or parsed.get("activity_date"))
+        if connect is not None and stats is not None:
+            stats["garmin_connect_matched"] = stats.get("garmin_connect_matched", 0) + 1
+    if connect is not None and connect.skip:
+        # Re-typed in Connect as indoor / virtual / swim…: skip beats pollute.
+        return "skipped", None, "Garmin Connect activity type is out of scope for the community heatmap"
+
     # Unknown / ambiguous sport (no CSV row, FIT without a usable
     # sport/sub_sport, GPX typed only "cycling" or untyped) → SKIP. Never a
     # default layer: skip beats pollute.
-    sport, sport_is_default = _effective_sport_with_default(parsed, resolved_sport, fallback_sport)
+    sport, sport_is_default = _effective_sport_with_default(
+        parsed, resolved_sport, fallback_sport, connect,
+    )
     if sport is None:
         return "skipped", None, "sport_unknown"
 
@@ -471,7 +504,8 @@ def _ingest_member_bytes(
         "source": source or archive_intake.ARCHIVE_PROVENANCE,
         "sport": sport,
         "sport_is_default": sport_is_default,
-        "name": parsed.get("name"),
+        # The name the rider sees in Garmin Connect beats the FIT's "Cycling".
+        "name": (connect.name if connect is not None and connect.name else None) or parsed.get("name"),
         "geometry_geojson": parsed.get("geometry_geojson"),
         "distance_m": parsed.get("distance_m"),
         "elevation_gain_m": parsed.get("elevation_gain_m"),
@@ -916,6 +950,9 @@ def drain_pending_archives(
                 # activities.csv dates, the fallback for a listed activity
                 # whose file has no timestamp (best-effort, {} otherwise).
                 csv_dates = archive_intake.csv_activity_dates(zf)
+                # Garmin "Export all": the type + name the rider set in Garmin
+                # Connect, by start time (best-effort, empty otherwise).
+                connect_index = garmin_connect.build_index(zf)
                 first = True
                 ingested = 0
                 last_work_s: float | None = None
@@ -964,6 +1001,7 @@ def drain_pending_archives(
                             source=arch["source"],
                             fallback_date=csv_dates.get(name),
                             stats=counts,
+                            connect_index=connect_index,
                         )
                         counts[outcome] += 1
                         if outcome == "imported" and _err == UNDATED:
@@ -981,6 +1019,11 @@ def drain_pending_archives(
                         log.error("archive %s member %s failed", arch["id"], name, exc_info=True)
                     finally:
                         last_work_s = time.monotonic() - _t0
+                if len(connect_index):
+                    log.info(
+                        "archive %s: %d member(s) matched a Garmin Connect summary row (of %d)",
+                        arch["id"], counts.get("garmin_connect_matched", 0), len(connect_index),
+                    )
             # Generic bike rides (Garmin "Bike" profile, Strava "Ride") that
             # run mostly off pavement → ``offroad`` (OSM terrain, see
             # surface_inference). Before the rebuild ping so the new build
