@@ -176,7 +176,7 @@ test.describe('Community heatmap — static PMTiles source + layers', () => {
     for (const l of w.community) expect(l.source).toBe('community-trails');
   });
 
-  test('the line layer paints the single-hue ramp, light = rare → dark = frequent', async ({ page }) => {
+  test('the line layer paints the single-hue ramp, light = rare → dark = frequent; blur only fuses bundles from z15', async ({ page }) => {
     await openMap(page, 12);
     const w = await readWiring(page);
     test.skip(!w.present, 'community source not built (NEXT_PUBLIC_HEATMAP_URL unset)');
@@ -193,7 +193,14 @@ test.describe('Community heatmap — static PMTiles source + layers', () => {
     });
     expect(paint.color).toEqual(['interpolate', ['linear'], ['get', 'heat_score'],
       0.2, '#f5b3cf', 0.4, '#e0619e', 0.6, '#c2185b', 0.75, '#8e0f4a', 0.9, '#5c0a33']);
-    expect(paint.blur ?? 0).toBe(0);
+    // Bundle-merge blur (2026-11-16): a zoom ramp, CRISP (0) up to z13, then a
+    // pass_count-driven blur that fuses near-identical traces into one band.
+    // Reading it back from the live map proves maplibre accepted the nested
+    // data expression (zoom stays the top-level interpolate input).
+    expect(Array.isArray(paint.blur)).toBe(true);
+    expect(paint.blur.slice(0, 5)).toEqual(['interpolate', ['linear'], ['zoom'], 13, 0]);
+    expect(JSON.stringify(paint.blur)).toContain('["get","pass_count"]');
+    expect(JSON.stringify(paint.blur)).not.toContain('heat_score');
   });
 
   test('no density heatmap layer; no circle/points and no removed glow', async ({ page }) => {
