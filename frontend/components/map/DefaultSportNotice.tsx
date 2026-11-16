@@ -202,6 +202,14 @@ export default function DefaultSportNotice({ dateLocale, refreshKey = 0, onChang
                     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
                       {a.name || t('map.activityDefaultName')}
                     </span>
+                    {a.sport === 'offroad' && (
+                      <span
+                        data-testid={`default-sport-offroad-${a.id}`}
+                        style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: SPORT_COLORS.offroad, borderRadius: 8, padding: '1px 6px', whiteSpace: 'nowrap' }}
+                      >
+                        {t('map.defaultSport.offroadTag')}
+                      </span>
+                    )}
                     <span style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap' }}>
                       {a.activity_date ? `${fmtDate(a.activity_date, dateLocale)} · ` : ''}{formatDist(a.distance_m ?? undefined)}
                     </span>

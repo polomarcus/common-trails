@@ -566,12 +566,13 @@ def test_done_email_mentions_default_sport_rides():
     _s, html = render_archive_done_email(
         imported=10, skipped=0, failed=0, locale="fr", imported_default_sport=7
     )
-    assert "<strong>7</strong> sorties vélo classées « Route » par défaut" in html
+    assert "<strong>7</strong> sorties vélo sans type précis" in html
+    assert "« Route » ou « Off-road » d'après le terrain" in html
     assert "tu peux les reclasser depuis la carte" in html
     _s, html = render_archive_done_email(
         imported=10, skipped=0, failed=0, locale="en", imported_default_sport=1
     )
-    assert "<strong>1</strong> bike ride filed under Road by default" in html
+    assert "<strong>1</strong> bike ride with no specific type" in html
     for locale in ("fr", "en"):
         _s, html = render_archive_done_email(imported=10, skipped=0, failed=0, locale=locale)
         assert "par défaut" not in html and "by default" not in html

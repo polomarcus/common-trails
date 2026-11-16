@@ -239,7 +239,8 @@ def render_archive_done_email(
         if default_sport:
             lines.append(
                 f"<strong>{default_sport}</strong> bike ride{'s' if default_sport != 1 else ''} "
-                "filed under Road by default (the archive does not say road, gravel or MTB) — "
+                "with no specific type (the archive does not say road, gravel or MTB), filed "
+                "under Road or Off-road by default from the terrain — "
                 "you can re-classify them from the map"
             )
         if no_sport:
@@ -287,8 +288,9 @@ def render_archive_done_email(
         if default_sport:
             plural = "s" if default_sport > 1 else ""
             lines.append(
-                f"<strong>{default_sport}</strong> sortie{plural} vélo classée{plural} « Route » par défaut "
-                "(l'archive ne précise pas route, gravel ou VTT) — "
+                f"<strong>{default_sport}</strong> sortie{plural} vélo sans type précis "
+                "(l'archive ne précise pas route, gravel ou VTT), classée{plural} par défaut "
+                "« Route » ou « Off-road » d'après le terrain — "
                 "tu peux les reclasser depuis la carte"
             )
         if no_sport:

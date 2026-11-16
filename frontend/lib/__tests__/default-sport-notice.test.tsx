@@ -98,7 +98,7 @@ describe('DefaultSportNotice', () => {
     vi.stubGlobal('fetch', fetchMock);
     await mount();
     expect(q('default-sport-notice')!.textContent).toContain(
-      '212 sorties vélo sont classées « Route » par défaut : Strava ne précise pas le type.',
+      '212 sorties vélo n’ont pas de type précis : elles sont classées « Route » ou « Off-road » d’après le terrain.',
     );
     expect(q('default-sport-open')!.textContent).toBe('Les reclasser');
     await click('default-sport-dismiss');
@@ -127,7 +127,18 @@ describe('DefaultSportNotice', () => {
     expect((q('default-sport-apply') as HTMLButtonElement).disabled).toBe(true); // nothing ticked
   });
 
-  it('re-classifies the ticked rides, then « Ce sont bien des sorties route » confirms the rest: the notice disappears', async () => {
+  it('a ride the terrain moved to Off-road carries the « Off-road (terrain) » tag; the others do not', async () => {
+    const rows = rides();
+    rows[1].sport = 'offroad';
+    vi.stubGlobal('fetch', fakeBackend(rows).fetchMock);
+    await mount();
+    await click('default-sport-open');
+    expect(q('default-sport-offroad-r2')!.textContent).toBe('Off-road (terrain)');
+    expect(q('default-sport-offroad-r3')).toBeNull();
+    expect(q('default-sport-offroad-r1')).toBeNull();
+  });
+
+  it('re-classifies the ticked rides, then « Ce sont toutes des sorties route » confirms the rest: the notice disappears', async () => {
     const { state, fetchMock } = fakeBackend(rides());
     vi.stubGlobal('fetch', fetchMock);
     const onChanged = vi.fn();
@@ -150,7 +161,7 @@ describe('DefaultSportNotice', () => {
     expect(q('default-sport-list')!.querySelectorAll('li').length).toBe(1);
     expect(q('default-sport-list')!.textContent).toContain('Tour du lac');
 
-    expect(q('default-sport-confirm-road')!.textContent).toBe('Ce sont bien des sorties route');
+    expect(q('default-sport-confirm-road')!.textContent).toBe('Ce sont toutes des sorties route');
     await click('default-sport-confirm-road');
     expect(state.patches[1]).toEqual({ from_default: true, sport: 'road' });
     expect(onChanged).toHaveBeenLastCalledWith({ sport: 'road', updatedIds: [], cleared: 'all' });
@@ -242,7 +253,7 @@ describe('DefaultSportNotice', () => {
     state.rows[0].flagged = false;
     state.rows[1].flagged = false;
     await act(async () => { root!.render(el(undefined, 1)); });
-    expect(q('default-sport-notice')!.textContent).toContain('1 sortie vélo est classée');
+    expect(q('default-sport-notice')!.textContent).toContain('1 sortie vélo n’a pas de type précis');
   });
 });
 
