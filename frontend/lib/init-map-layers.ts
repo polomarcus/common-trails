@@ -470,8 +470,13 @@ export function wireMapEventHandlers(
         const pc = Number(f.properties?.pass_count || 0);
         const prev = bySport[sport];
         if (prev) {
-          prev.userCount = Math.max(prev.userCount, uc);
-          prev.passCount = Math.max(prev.passCount, pc);
+          // Keep passes AND contributors from the SAME feature (the busiest
+          // one under the cursor): two separate maxima could pair one trace's
+          // passes with another trace's contributor count (2026-11-16).
+          if (pc > prev.passCount || (pc === prev.passCount && uc > prev.userCount)) {
+            prev.userCount = uc;
+            prev.passCount = pc;
+          }
         } else {
           bySport[sport] = { userCount: uc, passCount: pc };
         }

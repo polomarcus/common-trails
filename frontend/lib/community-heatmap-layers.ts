@@ -215,6 +215,30 @@ export const LINE_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoo
   16, byScore(1.6, 2.3, 3.4, 4.6),
   18, byScore(2.2, 3.2, 4.6, 6),
 ];
+// BUNDLE MERGE at street zoom (Paul, 2026-11-16: « fusionner les traces très
+// proches »). Each activity is its own feature, so a corridor ridden 500× is
+// 500 near-parallel 1–3 px lines a few metres apart: at z15+ it reads as a
+// hatched comb, not one path. A blur that grows with the number of OVERLAPPING
+// traces (`pass_count`, the real distinct-activity count at that spot — NOT
+// heat_score, which is a per-contributor-capped popularity and stays low on a
+// one-rider bundle) melts a busy bundle into one soft band, while a lone trace
+// (pass ≤ 3) keeps a crisp edge. Nothing below z13: at regional zoom the lines
+// are hairlines and a blur would only wash them out. Zoom stays the top-level
+// input (maplibre requirement); line-blur is data-driven so the inner ramp may
+// read a feature property. Merge validated live on prod (Le Lez, z15.5/z17.2).
+// CAP: the blur never exceeds the THINNEST line width at that zoom (~1.27 px
+// at z15, ~1.84 px at z17, 2.2 px at z18 — LINE_WIDTH_RAMP's lowest stop). A
+// blur wider than its line drops the line's peak alpha, so a busy-but-unpopular
+// bundle (high pass_count, low capped heat_score → thinnest width) would fade
+// into a smear instead of merging. The hero scales it with its widthMult.
+const byPasses = (a: number, b: number, c: number): Expr =>
+  ['interpolate', ['linear'], ['get', 'pass_count'], 3, a, 15, b, 60, c];
+export const LINE_BLUR_RAMP: Expr = ['interpolate', ['linear'], ['zoom'],
+  13, 0,
+  15, byPasses(0, 0.8, 1.2),
+  17, byPasses(0.2, 1.4, 1.8),
+  18, byPasses(0.3, 1.8, 2.2),
+];
 export const GLOW_WIDTH_RAMP: Expr = ['interpolate', ['exponential', 1.5], ['zoom'],
   10, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1, 0.3, 1.6, 0.7, 2.6, 1, 3.6],
   13, ['interpolate', ['linear'], ['get', 'heat_score'], 0, 1.4, 0.3, 2.2, 0.7, 3.4, 1, 4.6],
@@ -293,7 +317,9 @@ export function communityTrailsLineLayerSpec(opts: CommunityLayerOptions = {}) {
       ],
       // Hairlines at regional zoom, growing with zoom and popularity. SSOT const.
       'line-width': withMult(LINE_WIDTH_RAMP, widthMult),
-      'line-blur': 0,
+      // Busy bundles of near-parallel traces melt into one band at street
+      // zoom; lone traces stay crisp. SSOT const (see LINE_BLUR_RAMP).
+      'line-blur': withMult(LINE_BLUR_RAMP, widthMult),
       'line-opacity': withMult(LINE_OPACITY_RAMP, opacityMult),
       'line-opacity-transition': { duration: 300, delay: 0 },
     },

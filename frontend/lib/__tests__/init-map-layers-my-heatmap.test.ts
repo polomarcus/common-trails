@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { addMapSourcesAndLayers } from '@/lib/init-map-layers';
 import { MY_TRACES_COLOR, SPORT_COLORS } from '@/lib/constants';
-import { HEAT_RAMP_STOPS, LINE_CRISP_MINZOOM } from '@/lib/community-heatmap-layers';
+import { HEAT_RAMP_STOPS, LINE_BLUR_RAMP, LINE_CRISP_MINZOOM } from '@/lib/community-heatmap-layers';
 import { DFCI_MIN_ZOOM } from '@/lib/routing-style';
 
 interface LayerSpec {
@@ -116,7 +116,10 @@ describe('/map — "Ma heatmap" layers vs the community heatmap', () => {
     expect(line?.type).toBe('line');
     expect(line?.['source-layer']).toBe('trails');
     expect(line?.minzoom).toBe(LINE_CRISP_MINZOOM);
-    expect(line?.paint?.['line-blur']).toBe(0);
+    // No halo at regional zoom: the only blur is the street-zoom bundle merge
+    // (LINE_BLUR_RAMP), which is 0 up to z13 whatever the bundle size.
+    expect(line?.paint?.['line-blur']).toEqual(LINE_BLUR_RAMP);
+    expect((LINE_BLUR_RAMP as unknown[]).slice(0, 5)).toEqual(['interpolate', ['linear'], ['zoom'], 13, 0]);
     expect(line?.paint?.['line-color']).toEqual(['interpolate', ['linear'], ['get', 'heat_score'],
       ...HEAT_RAMP_STOPS.flatMap(([pos, color]) => [pos, color])]);
   });

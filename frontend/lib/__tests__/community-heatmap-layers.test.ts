@@ -386,6 +386,75 @@ describe('lisibilité — traits fins, un seul ton, clair = rare → foncé = fr
   });
 });
 
+describe('fusion des faisceaux — line-blur selon le nombre de traces superposées', () => {
+  type Stops = Array<[number, number]>;
+  // Evaluate the zoom → pass_count ramp at a given zoom stop (exact stops only).
+  const blurAt = (zoom: number, passes: number): number => {
+    const ramp = communityLayers.LINE_BLUR_RAMP as unknown[];
+    expect(ramp[0]).toBe('interpolate');
+    expect(ramp[2]).toEqual(['zoom']);
+    for (let i = 3; i < ramp.length; i += 2) {
+      if (ramp[i] !== zoom) continue;
+      const out = ramp[i + 1];
+      if (typeof out === 'number') return out;
+      const inner = out as unknown[];
+      expect(inner[2]).toEqual(['get', 'pass_count']);
+      const stops: Stops = [];
+      for (let j = 3; j < inner.length; j += 2) stops.push([inner[j] as number, inner[j + 1] as number]);
+      if (passes <= stops[0][0]) return stops[0][1];
+      for (let k = 1; k < stops.length; k++) {
+        const [x0, y0] = stops[k - 1];
+        const [x1, y1] = stops[k];
+        if (passes <= x1) return y0 + ((y1 - y0) * (passes - x0)) / (x1 - x0);
+      }
+      return stops[stops.length - 1][1];
+    }
+    throw new Error(`no stop at z${zoom}`);
+  };
+
+  it('the line layer uses the SSOT blur ramp (was a flat 0: bundles drew as a hatched comb)', () => {
+    const spec = communityLayers.communityTrailsLineLayerSpec({ visible: true }) as { paint: Record<string, unknown> };
+    expect(spec.paint['line-blur']).toEqual(communityLayers.LINE_BLUR_RAMP);
+  });
+
+  it('no blur at regional zoom, whatever the bundle size', () => {
+    expect(blurAt(13, 1)).toBe(0);
+    expect(blurAt(13, 500)).toBe(0);
+  });
+
+  it('a lone trace stays crisp at street zoom, a busy bundle melts', () => {
+    for (const z of [15, 17, 18]) {
+      expect(blurAt(z, 1), `z${z} lone`).toBeLessThanOrEqual(0.3);
+      expect(blurAt(z, 500), `z${z} bundle`).toBeGreaterThanOrEqual(1);
+      expect(blurAt(z, 500)).toBeGreaterThan(blurAt(z, 15));
+      expect(blurAt(z, 15)).toBeGreaterThan(blurAt(z, 3));
+    }
+  });
+
+  it('never blurs wider than the thinnest line at that zoom (else the line fades instead of merging)', () => {
+    // Thinnest width = LINE_WIDTH_RAMP's lowest heat stop, interpolated with its
+    // exponential(1.5) zoom curve: z15 ≈ 1.27 px, z17 ≈ 1.84 px, z18 = 2.2 px.
+    const thinnest: Record<number, number> = { 15: 1.27, 17: 1.84, 18: 2.2 };
+    for (const [z, w] of Object.entries(thinnest)) {
+      expect(blurAt(Number(z), 10_000), `z${z}`).toBeLessThanOrEqual(w);
+    }
+  });
+
+  it('the hero scales the blur with its thinner lines (HERO_HEATMAP.lineWidth)', () => {
+    const hero = communityLayers.communityTrailsLineLayerSpec({
+      visible: true, widthMult: communityLayers.HERO_HEATMAP.lineWidth,
+    }) as { paint: Record<string, unknown> };
+    expect(hero.paint['line-blur']).toEqual(
+      communityLayers.withMult(communityLayers.LINE_BLUR_RAMP, communityLayers.HERO_HEATMAP.lineWidth));
+    expect(hero.paint['line-blur']).not.toEqual(communityLayers.LINE_BLUR_RAMP);
+  });
+
+  it('keys on the REAL overlap count (pass_count), not the capped popularity', () => {
+    expect(JSON.stringify(communityLayers.LINE_BLUR_RAMP)).toContain('"pass_count"');
+    expect(JSON.stringify(communityLayers.LINE_BLUR_RAMP)).not.toContain('"heat_score"');
+  });
+});
+
 describe('line floor (LINE_CRISP_MINZOOM)', () => {
   it('LINE_CRISP_MINZOOM equals the SOURCE minzoom — lines draw wherever the tileset has data', () => {
     // 14→9 (2026-08-07), then 9→6 (2026-10-12). The z9 floor hid a dense network:
