@@ -8,8 +8,10 @@ passed through). The click-tooltip reported e.g. "88 passages" on a spot that
 saw far fewer, and ``heat_score`` (derived from the same MAX) lit the whole ride
 at its busiest cell's brightness instead of grading it.
 
-Fix: split each run into contiguous PIECES by the underlying cell's popularity
-BUCKET (coarse log2) and emit each piece with its OWN local count. These pins
+Fix: split each run into contiguous PIECES by the underlying popularity LEVEL
+(coarse: a factor of 2 — a fixed log2 bucket until fix/heatmap-popularite-locale,
+see test_raw_trace_local_popularity) and emit each piece with its OWN local
+count. These pins
 FAIL on the old whole-run-MAX code and PASS on the fix:
 
   * ``_split_run_by_local_pass`` cuts ONLY at existing vertices, shares the cut
@@ -31,8 +33,8 @@ from app.services import raw_trace_display as rtd
 from app.services.geo import haversine_m
 from app.services.raw_trace_display import (
     _cell_key,
-    _pass_bucket,
-    _piece_feature_props,
+    _iter_local_pieces,
+    _level_moved,
     _split_run_by_local_pass,
     _sport_id,
     export_raw_geojson,
@@ -51,19 +53,29 @@ def _north(n: int, lon: float = _LON, lat0: float = LAT) -> list:
     return [[lon, lat0 + i * STEP] for i in range(n)]
 
 
-# ── _pass_bucket: coarse log2 bins ───────────────────────────────────────────
+# ── _level_moved: coarse factor-2 popularity resolution ───────────────────────
+# RE-PINNED (fix/heatmap-popularite-locale): the split's resolution was a FIXED
+# log2 bin (``_pass_bucket``: 1→0, 2-3→1, 4-7→2, …). Once the series is
+# smoothed, a level sitting near a bin edge (55–75 around 64) crossed it back
+# and forth and cut pieces for no visible grade change (+88 % features on the
+# dev corpus), so the split now asks "has the level moved by a factor ≥ 2 from
+# the current piece's level?" — the same one-log2-step coarseness, without
+# fixed edges. ``_pass_bucket`` is gone; this pins its replacement.
 
-def test_pass_bucket_is_coarse_log2():
-    # 0 and 1 share bucket 0; then floor(log2): 2-3→1, 4-7→2, 8-15→3, …
-    assert _pass_bucket(0) == 0
-    assert _pass_bucket(1) == 0
-    assert _pass_bucket(2) == 1 and _pass_bucket(3) == 1
-    assert _pass_bucket(4) == 2 and _pass_bucket(7) == 2
-    assert _pass_bucket(8) == 3 and _pass_bucket(15) == 3
-    assert _pass_bucket(88) == 6
-    # Coarse: even the prod max (~88) fits in ~7 buckets, so a ride yields a
-    # handful of pieces, never one-per-11 m-cell.
-    assert _pass_bucket(10_000) < 14
+def test_level_moved_is_a_coarse_factor_two():
+    # One log2 step away from the committed level, either way, has moved...
+    assert _level_moved(1, 2) and _level_moved(2, 1)
+    assert _level_moved(4, 8) and _level_moved(8, 4)
+    assert _level_moved(13, 1) and _level_moved(1, 13)
+    assert _level_moved(540, 52) and _level_moved(52, 540)
+    # ...anything closer is the same level — including values straddling an
+    # old log2 bin edge (55 vs 75 around 64; 3 vs 4 around 4).
+    assert not _level_moved(1, 1)
+    assert not _level_moved(2, 3) and not _level_moved(3, 2)
+    assert not _level_moved(3, 4) and not _level_moved(3, 5)
+    assert not _level_moved(55, 75) and not _level_moved(75, 55)
+    assert not _level_moved(52, 71) and not _level_moved(88, 45)
+    assert _level_moved(88, 44)
 
 
 # ── _split_run_by_local_pass: cut-at-vertex, share vertex, reconstruct ────────
@@ -113,25 +125,23 @@ def test_split_cuts_at_bucket_change_and_reconstructs_exactly():
             assert tuple(c) in orig, "split must not resample/snap/move a vertex"
 
 
-# ── _piece_feature_props: the graded slice excludes the shared cut vertex ─────
+# ── Piece props: the graded slice excludes the shared cut vertex ──────────────
 # The reviewer's exact reproduction: a 40-pt run, first 20 cells pass=1, last 20
 # pass=13. HOT→QUIET must grade [13, 1]; QUIET→HOT must grade [1, 13]. The
 # half-fix (grade over ALL piece points) gives QUIET→HOT [13, 13] because the
 # shared cut vertex is the HOT band's start. Drives the REAL functions.
 
 def _grade_pieces(sub, pass_by_cell, sid, deg):
-    """Split ``sub`` and grade every piece via the REAL _piece_feature_props;
-    return the list of per-piece pass_counts in drawn order."""
-    log_max = 1.0  # heat_score irrelevant here; pass_count is what we assert
-    pieces = _split_run_by_local_pass(sub, sid, deg, pass_by_cell)
-    last = len(pieces) - 1
-    out = []
-    for idx, piece in enumerate(pieces):
-        _, props = _piece_feature_props(
-            piece, idx == last, sid, "road", deg, pass_by_cell, {}, {}, {}, {},
-            {}, log_max)
-        out.append(props["pass_count"])
-    return out
+    """Split ``sub`` and grade every piece through the PRODUCTION path
+    (``_iter_local_pieces`` → ``_piece_feature_props`` on the whole-run
+    smoothed series); return the per-piece pass_counts in drawn order.
+    RE-PINNED (fix/heatmap-popularite-locale): this used to split, then call
+    ``_piece_feature_props`` per piece on its own — a path production never
+    takes now that the series is smoothed over the whole run."""
+    return [props["pass_count"] for _piece, props in _iter_local_pieces(
+        sub, sid, "road", deg, pass_by_cell, {}, {}, {}, {}, {}, 1.0,
+        cap=rtd.passes_per_user_cap(), smooth_m=rtd.pass_smooth_m(),
+        min_piece_m=pass_piece_min_m())]
 
 
 def test_piece_grade_excludes_shared_vertex_both_directions():
@@ -360,7 +370,14 @@ def test_cell_to_cell_noise_does_not_fragment(monkeypatch):
 
     # BEFORE (naive per-change split, reproduced via min_piece_m→0): explodes to
     # ~one piece per segment — the 1.3 M-feature prod OOM in miniature.
-    before = len(_split_run_by_local_pass(sub, sid, deg, pbc, min_piece_m=1e-6))
+    # RE-PINNED (fix/heatmap-popularite-locale): the series is now rolling-median
+    # smoothed before splitting by default; the pre-fix naive split had NO
+    # smoothing, so the BEFORE leg turns it off (smooth_m=0) to keep reproducing
+    # the raw per-cell explosion (with smoothing on, the run's edges lose a few
+    # flips to the window, and `before >= n - 2` would be measuring the median
+    # filter, not the explosion).
+    before = len(_split_run_by_local_pass(sub, sid, deg, pbc, min_piece_m=1e-6,
+                                          smooth_m=0.0))
     assert before >= n - 2, (
         f"sanity: near-zero min must reproduce the per-segment explosion "
         f"(got {before} for {n} points)")

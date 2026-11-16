@@ -156,7 +156,15 @@ def run_tippecanoe(geojson_path: str, output: str, min_zoom: int, max_zoom: int,
         "--maximum-tile-bytes=500000",
         "--drop-densest-as-needed",
         "--coalesce-densest-as-needed",
-        "--accumulate-attribute=user_count:sum",
+        # When --coalesce-densest-as-needed merges features at a crowded low
+        # zoom, keep the BUSIEST values of the merged traces. Each feature is
+        # one activity's piece, so summing user_count over 500 overlapping
+        # rides of the same corridor reported thousands of "contributeurs"
+        # (2026-11-16); the colour and the tooltip pass count must likewise
+        # come from the busiest merged trace, not an arbitrary first one.
+        "--accumulate-attribute=user_count:max",
+        "--accumulate-attribute=pass_count:max",
+        "--accumulate-attribute=heat_score:max",
         # Stronger simplification at low zooms, raw geometry at z14.
         "--simplification=10",
         "--simplify-only-low-zooms",

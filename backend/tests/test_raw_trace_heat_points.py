@@ -221,6 +221,12 @@ def test_run_tippecanoe_multi_layer_command(monkeypatch):
     # -r1: no rate-based dot dropping of heat_points (the export sets a per-point
     # minzoom instead) — the default -r 2.5 drew lone traces as beads.
     assert "-r1" in cmd
+    # Coalesced features keep the busiest merged values — never a SUM of
+    # contributors over overlapping rides of one corridor (2026-11-16).
+    assert "--accumulate-attribute=user_count:max" in cmd
+    assert "--accumulate-attribute=pass_count:max" in cmd
+    assert "--accumulate-attribute=heat_score:max" in cmd
+    assert not any(a.startswith("--accumulate-attribute=") and a.endswith(":sum") for a in cmd)
 
     # Single-layer (matched mode / no points)
     bp.run_tippecanoe("/tmp/trails.geojsonl", "/tmp/out.pmtiles", 6, 15)

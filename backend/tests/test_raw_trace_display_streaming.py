@@ -36,7 +36,6 @@ from app.services.raw_trace_display import (
     _accumulate_lattice,
     _cell_key,
     _run_flow_sign,
-    _split_run_by_local_pass,
     _sport_id,
     _user_count,
     export_raw_geojson,
@@ -75,13 +74,23 @@ def _reference_materialized_export(db, path: str) -> int:
     win we are claiming.
 
     Local-count split (fix/pass-count-local): the emitter now SPLITS each
-    (sub-)run into contiguous local-pass PIECES (``_split_run_by_local_pass``)
+    (sub-)run into contiguous local-pass PIECES (``_iter_local_pieces``)
     so a quiet stretch reports its own count, not a distant junction's MAX. This
     reference mirrors that: it derives its OWN per-cell pass counts from the
     materialised ``density`` sets (the independent cross-check this test exists
     for), splits each sub with them, and grades each NON-TERMINAL piece over
     ``piece[:-1]`` (the shared trailing vertex belongs to the next bucket) — the
-    exact graded-slice rule the emitter uses. Direction ORIENTATION (#618) can
+    exact graded-slice rule the emitter uses. RE-PINNED for
+    fix/heatmap-popularite-locale: the emitter now smooths the per-point counts
+    (rolling median by distance) before the split and reports the lower MEDIAN
+    of the smoothed pass / user values over the graded slice (no longer the
+    MAX), with ``heat_score`` = the median of the smoothed per-cell
+    effective popularity (``min(pass, users × cap)``) over a high percentile
+    of that per-cell value (``HEATMAP_HEAT_NORM_PCTL``). The reference
+    keeps deriving every COUNT independently from the materialised sets and
+    reuses the module's smoothing/split helpers (their own behaviour is pinned
+    in test_raw_trace_local_popularity), so this test still cross-checks the
+    streaming COUNTING. Direction ORIENTATION (#618) can
     reverse a directional piece's coordinate order; the coords are part of the
     canonical form, so we orient identically (flow sign on the SAME graded slice,
     reversal on the full drawn piece) using the REAL direction accumulator
@@ -106,44 +115,53 @@ def _reference_materialized_export(db, path: str) -> int:
     # set == streaming's pass_by_cell counter). Direction stores come from the
     # real accumulator purely so orientation (which flips coords) matches.
     ref_pass_by_cell = {k: len(v) for k, v in density.items()}
+    # Model the streaming path's bounded per-cell distinct-user counter:
+    # ``_add_user`` caps each cell's user set at ``_USER_CAP``, so ``user_count``
+    # SATURATES there — a documented, intended memory bound ("always >= any
+    # realistic K"). Capping each cell's set BEFORE the series is exactly
+    # equivalent (only the count matters), so this faithfully pins the intended
+    # equivalence rather than relaxing it.
+    ref_users = {k: (v if len(v) <= _USER_CAP else set(sorted(v)[:_USER_CAP]))
+                 for k, v in users.items()}
     _p, _u, dir_vec, _dw, _fw, _bw = _accumulate_lattice(db, deg)
 
-    max_pop = max((len(v) for v in density.values()), default=1)
-    log_max = math.log1p(max_pop) or 1.0
+    cap = rtd.passes_per_user_cap()
+    smooth_m = rtd.pass_smooth_m()
+    min_piece_m = rtd.pass_piece_min_m()
+    # Normaliser: the configured percentile of the per-cell eff, histogrammed
+    # here from the materialised sets (the percentile pick itself reuses the
+    # module helper).
+    ref_hist: dict = {}
+    for k in density:
+        e = rtd._effective_pass(len(density[k]), len(ref_users[k]), cap)
+        ref_hist[e] = ref_hist.get(e, 0) + 1
+    log_norm = math.log1p(rtd._heat_normaliser(ref_hist, rtd.heat_norm_pctl()))
 
     written = 0
     with open(path, "w") as f:
         for _aid, _uid, sport, run in runs:
             sid = _sport_id(sport)
             for sub in gate_run(run, sport, users, deg, min_u):
-                pieces = _split_run_by_local_pass(sub, sid, deg, ref_pass_by_cell)
-                last = len(pieces) - 1
-                for idx, piece in enumerate(pieces):
+                # Smoothed per-point series over the WHOLE sub-run (from the
+                # independent reference counts), then the bounded split.
+                pass_s, users_s, eff_s, cum = rtd._local_series(
+                    sub, sid, deg, ref_pass_by_cell, ref_users, cap, smooth_m)
+                bounds = rtd._piece_bounds(pass_s, eff_s, cum, min_piece_m)
+                last = len(bounds) - 1
+                for idx, (a, b) in enumerate(bounds):
+                    piece = sub[a:b + 1]
                     # Grade a non-terminal piece over piece[:-1] (the shared
-                    # trailing vertex belongs to the next bucket) — mirrors
+                    # trailing vertex belongs to the next piece) — mirrors
                     # _piece_feature_props exactly.
-                    grade = piece if idx == last else piece[:-1]
-                    local_pass = 1
-                    local_users = 1
-                    for pt in grade:
-                        key = _cell_key(sid, pt[0], pt[1], deg)
-                        local_pass = max(local_pass, len(density.get(key, ())))
-                        local_users = max(local_users, _user_count(users.get(key)))
-                    # Model the streaming path's bounded per-cell distinct-user
-                    # counter: ``_add_user`` caps each cell's user set at
-                    # ``_USER_CAP``, so ``user_count`` SATURATES there — a
-                    # documented, intended memory bound ("always >= any realistic
-                    # K"). This uncapped reference set would otherwise report the
-                    # TRUE count on hyper-popular cells (>64 distinct users),
-                    # diverging from the shipped export on ``user_count`` ALONE
-                    # while geometry / gate / pass_count / heat stay identical.
-                    # Capping the final count is exactly equivalent to the capped
-                    # set's len() (min(cap, max(v)) == max(min(cap, v))), so this
-                    # faithfully pins the intended equivalence rather than
-                    # relaxing it: a real regression in geometry/gate/pass/heat
-                    # still fails.
-                    local_users = min(_USER_CAP, local_users)
-                    heat = round(min(1.0, math.log1p(local_pass) / log_max), 3)
+                    end = len(piece) if idx == last else len(piece) - 1
+                    grade = piece[:end]
+                    p_vals = sorted(pass_s[a:a + end]) or [1]
+                    u_vals = sorted(users_s[a:a + end]) or [1]
+                    e_vals = sorted(eff_s[a:a + end]) or [1]
+                    local_pass = p_vals[(len(p_vals) - 1) // 2]
+                    local_users = u_vals[(len(u_vals) - 1) // 2]
+                    eff = e_vals[(len(e_vals) - 1) // 2]
+                    heat = round(min(1.0, math.log1p(eff) / log_norm), 3)
                     # Orient the FULL drawn piece to the dominant direction like
                     # the emitter — flow sign decided on the SAME graded slice —
                     # so directional pieces' coords match (counts are irrelevant

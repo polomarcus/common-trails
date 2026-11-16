@@ -355,6 +355,43 @@ def test_run_direction_counts_picks_the_busiest_cell(monkeypatch):
     assert fwd + bwd == pass_by_cell[hot_key]
 
 
+def test_piece_direction_counts_follow_the_typical_pass_count(monkeypatch):
+    """fix/heatmap-popularite-locale: a piece now reports its TYPICAL
+    (median) ``pass_count``, so its forward/backward split must come from a
+    cell with that pass count — not the busiest cell, which would show a
+    direction split (N+3 / M) summing above the headline. Same booster set-up
+    as above: typical = the base corridor (N + M), split = N / M."""
+    lon = -50.7
+    n_pts = 40
+    N, M = 4, 2
+    hot_i = 20
+    runs = ([("gravel", _north_line(n_pts, lon))] * N
+            + [("gravel", _south_line(n_pts, lon))] * M)
+    booster = _north_line(n_pts, lon)[hot_i - 1:hot_i + 2]
+    runs += [("gravel", booster)] * 3
+    _patch_runs(monkeypatch, runs)
+    deg = lattice_deg()
+    pass_by_cell, users, dir_vec, dir_wt, fwd_c, bwd_c = _accumulate_lattice(None, deg)
+    sid = _sport_id("gravel")
+    full = _north_line(n_pts, lon)
+
+    # The helper: closest-to-target cell, tie → most direction data.
+    assert _run_direction_counts(full, sid, deg, pass_by_cell, fwd_c, bwd_c,
+                                 target_pass=N + M) == (N, M)
+    # The emitter's piece props (production path): headline and split
+    # describe the same point. The 45 m booster is shorter than the split
+    # hysteresis, so the whole run is one piece.
+    pieces = list(rtd._iter_local_pieces(
+        full, sid, "gravel", deg, pass_by_cell, users, dir_vec, dir_wt,
+        fwd_c, bwd_c, math.log1p(N + M + 3), cap=rtd.passes_per_user_cap(),
+        smooth_m=rtd.pass_smooth_m(), min_piece_m=rtd.pass_piece_min_m()))
+    assert len(pieces) == 1
+    _oriented, props = pieces[0]
+    assert props["pass_count"] == N + M
+    assert (props["forward_count"], props["backward_count"]) == (N, M)
+    assert props["forward_count"] + props["backward_count"] == props["pass_count"]
+
+
 # ── Dominant-direction orientation (feat/arrow-direction-clarity) ─────────────
 # The arrow layer follows each feature's coordinate order, so to make ALL arrows
 # on a trail point the more-popular way the emitter reverses runs that oppose the

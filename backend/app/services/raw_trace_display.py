@@ -48,6 +48,7 @@ import math
 import os
 import struct
 import zlib
+from bisect import bisect_left, insort
 
 from sqlalchemy import text as sa_text
 
@@ -349,27 +350,37 @@ def _run_oneway_score(sub: list, sid: int, deg: float,
 
 
 def _run_direction_counts(sub: list, sid: int, deg: float, pass_by_cell: dict,
-                          fwd_by_cell: dict, bwd_by_cell: dict) -> tuple[int, int]:
+                          fwd_by_cell: dict, bwd_by_cell: dict,
+                          target_pass: int | None = None) -> tuple[int, int]:
     """Representative ``(forward_count, backward_count)`` for a drawn (sub-)run.
 
-    Reports the distinct-activity direction counts of the run's BUSIEST distinct
-    cell (max ``pass_count``) — the SAME cell-aggregation choice the emitters use
-    for the feature's headline ``pass_count`` / ``user_count`` (both a MAX over
-    the run's cells), so all three describe the same busiest point: "at the
-    busiest point of this segment, X went one way and Y the other". On a
-    ``pass_count`` tie, prefer the cell carrying the MOST direction data
-    (``forward + backward``) — busy cells often tie, and a run's endpoint cell
-    (which one direction only arrives at, never departs) would otherwise report a
+    Reports the distinct-activity direction counts of ONE representative
+    distinct cell of the run, chosen to match the feature's headline
+    ``pass_count`` so the popup reads coherently ("at this segment: N passages,
+    X one way, Y the other"):
+
+    * ``target_pass`` given (what the emitters pass: the piece's TYPICAL
+      ``pass_count``, see ``_piece_feature_props``) → the cell whose
+      ``pass_count`` is CLOSEST to it. Before fix/heatmap-popularite-locale the
+      headline was the piece's MAX and this picked the busiest cell; with a
+      typical (median) headline the busiest cell — e.g. a junction the piece
+      merely crosses — would report ``fwd + bwd`` ≫ ``pass_count``.
+    * ``target_pass`` None → the run's BUSIEST cell (max ``pass_count``), the
+      historical choice (still what a bare call reports).
+
+    On a tie, prefer the cell carrying the MOST direction data (``forward +
+    backward``) — cells often tie, and a run's endpoint cell (which one
+    direction only arrives at, never departs) would otherwise report a
     degenerate one-sided split; the tie-break picks a mid-run cell both
     directions actually traverse.
 
     Returns ``(0, 0)`` for a run with no direction data (a non-mtb/gravel run,
     or an all-jitter mtb/gravel run whose cells never got a bearing). The counts
-    are distinct-activity tallies per side, so ``fwd + bwd`` tracks the cell's
-    ``pass_count`` (a both-ways activity contributes to both sides) and a high
-    ``oneway_score`` implies one side dominates.
+    are distinct-activity tallies per side, so ``fwd + bwd`` tracks the chosen
+    cell's ``pass_count`` (a both-ways activity contributes to both sides) and a
+    high ``oneway_score`` implies one side dominates.
     """
-    best_pass = -1
+    best_gap: int | None = None
     best_dir = -1
     fwd = 0
     bwd = 0
@@ -382,8 +393,10 @@ def _run_direction_counts(sub: list, sid: int, deg: float, pass_by_cell: dict,
         cp = pass_by_cell.get(key, 0)
         cf = fwd_by_cell.get(key, 0)
         cb = bwd_by_cell.get(key, 0)
-        if cp > best_pass or (cp == best_pass and (cf + cb) > best_dir):
-            best_pass = cp
+        # Smaller gap = better: distance to the target, or -pass (busiest).
+        gap = -cp if target_pass is None else abs(cp - target_pass)
+        if best_gap is None or gap < best_gap or (gap == best_gap and (cf + cb) > best_dir):
+            best_gap = gap
             best_dir = cf + cb
             fwd = cf
             bwd = cb
@@ -458,17 +471,26 @@ def _orient_directional_run(sub: list, sid: int, deg: float, dir_vec: dict,
 # and ``heat_score`` (derived from the same MAX) lit the WHOLE ride at its
 # busiest cell's brightness instead of grading it.
 #
-# Fix: split each run into contiguous PIECES whenever the underlying cell's
-# ``pass_count`` changes BUCKET, and emit each piece carrying its OWN local
-# count (max within the piece). Now the tooltip reports the count where you
-# actually clicked and busy corridors burn bright while quiet stretches stay dim
-# (the Strava-like graded look).
+# Fix: split each run into contiguous PIECES whenever the underlying
+# popularity changes LEVEL, and emit each piece carrying its OWN local count.
+# Now the tooltip reports the count where you actually clicked and busy
+# corridors burn bright while quiet stretches stay dim (the Strava-like graded
+# look). Since fix/heatmap-popularite-locale the per-point series is SMOOTHED
+# before the split and the piece reports a TYPICAL (median) count, not its max
+# — see "Smoothed local counts" below.
 #
-# BUCKETING = a coarse log2 bin (``floor(log2(pass_count))``: 1→0, 2-3→1, 4-7→2,
-# 8-15→3, …). Coarse ON PURPOSE — a per-11 m-cell split would balloon the
-# PMTiles feature count; log2 gives only ~log2(max_pop) DISTINCT bucket VALUES
-# (≈7 at prod max_pop≈88). But log2 bounds the number of distinct popularity
-# BANDS, NOT the number of TRANSITIONS — and that gap is what OOM'd prod.
+# LEVEL RESOLUTION = a factor of 2 (one log2 step): a point has MOVED when its
+# (smoothed) count is ≥ 2× or ≤ ½× the CURRENT piece's level (``_level_moved``).
+# Coarse ON PURPOSE — a per-11 m-cell split would balloon the PMTiles feature
+# count. Until fix/heatmap-popularite-locale this was a FIXED log2 bin
+# (``floor(log2)``: 1→0, 2-3→1, 4-7→2, …); on the now-smoothed series a stretch
+# whose level sits near a bin edge (55–75 around 64) crossed it back and forth
+# and cut a piece at each sustained crossing for no visible change of grade
+# (+88 % features on the dev corpus vs +38 % with the factor-2 level, see the
+# "Smoothed local counts" block). A factor measured from the piece's own level
+# has no fixed edge to hover on. Either way the resolution bounds the number of
+# distinct popularity BANDS, NOT the number of TRANSITIONS — and that gap is
+# what OOM'd prod.
 #
 # 🔴 THE OOM (fix/regrade-oom-and-pool). The naive "cut wherever the bucket
 # changes" fragmented REAL prod data catastrophically: GPS noise makes a cell's
@@ -480,33 +502,33 @@ def _orient_directional_run(sub: list, sid: int, deg: float, dir_vec: dict,
 # features.
 #
 # THE BOUND (hysteresis + minimum piece length). We walk the run accumulating
-# into the current piece and only CUT to a new piece when the bucket changes AND
-# the new bucket PERSISTS for ≥ ``min_piece_m`` of travel (env
+# into the current piece and only CUT to a new piece when the level moves AND
+# the move PERSISTS for ≥ ``min_piece_m`` of travel (env
 # ``HEATMAP_PASS_PIECE_MIN_M``, default ``DEFAULT_PASS_PIECE_MIN_M``). A short
-# flicker — a noise cell whose different bucket does NOT sustain that distance,
-# or one that flickers straight back to the committed bucket — is ABSORBED into
+# flicker — a noise cell whose moved level does NOT sustain that distance, or
+# one that flickers straight back to the committed level — is ABSORBED into
 # the current piece. This caps pieces-per-run to ~``run_length / min_piece_m``
-# (each cut consumes ≥ ``min_piece_m`` of sustained travel in the NEW bucket),
+# (each cut consumes ≥ ``min_piece_m`` of sustained travel at the NEW level),
 # so a noisy 30 km ride yields ~O(run_km · 1000 / min_piece_m) pieces, NOT one
-# per 11 m cell. On a CLEAN single-transition run (the #621 goldens, and every
-# real ride whose popularity changes once through a junction) the sustained band
-# is far longer than ``min_piece_m``, so the cut lands at the SAME vertex the
-# naive split chose — behaviour is unchanged there. At the K=1 beta almost every
-# cell is pass≈1 (one bucket → uniform run → strict no-op).
+# per 11 m cell. The bound holds whatever the "moved" test is (it is a
+# property of the walk, not of the level resolution), so it survives the
+# smoothing and the 2-D (pass, effective-pass) level added by
+# fix/heatmap-popularite-locale. At the K=1 beta almost every cell is pass≈1
+# (one level → uniform run → strict no-op).
 #
 # TRACE INTEGRITY: splitting only CUTS the polyline at EXISTING vertices — it
 # never resamples / simplifies / snaps / moves a coordinate. Adjacent pieces
 # SHARE the cut vertex, so the union of the pieces reconstructs the run
 # byte-for-byte and the drawn line stays continuous.
 
-# Minimum sustained travel (metres) a NEW pass_count bucket must persist before
+# Minimum sustained travel (metres) a NEW popularity level must persist before
 # the local-count split cuts a new piece — the hysteresis that stops GPS-noise
-# bucket flicker from fragmenting a run into millions of features. ~200 m is far
+# flicker from fragmenting a run into millions of features. ~200 m is far
 # longer than any noise flicker (an 11 m cell, a handful of densified ~3 m
 # points) yet far SHORTER than a real popularity band (a junction/corridor spans
 # hundreds of metres), so it absorbs noise without merging away genuine
 # hot/quiet transitions. Tunable via ``HEATMAP_PASS_PIECE_MIN_M``; a value ≥ any
-# run length collapses every run to one piece (the whole-run-MAX pre-#621 look).
+# run length collapses every run to one piece.
 DEFAULT_PASS_PIECE_MIN_M = 200.0
 
 
@@ -525,122 +547,424 @@ def pass_piece_min_m() -> float:
     return val if val > 0 else DEFAULT_PASS_PIECE_MIN_M
 
 
-def _pass_bucket(pass_count: int) -> int:
-    """Coarse log2 popularity bucket of a cell's ``pass_count`` (``floor(log2)``,
-    with 0 and 1 both in bucket 0). The split cuts a run wherever this bucket
-    changes AND the change sustains ≥ ``min_piece_m`` (see
-    ``_split_run_by_local_pass``), so the piece count is bounded by
-    ``run_length / min_piece_m`` — NOT by the 11 m cell count, and NOT by the
-    number of noise-driven bucket TRANSITIONS."""
-    return pass_count.bit_length() - 1 if pass_count > 0 else 0
+# ── Smoothed local counts (fix/heatmap-popularite-locale, 2026-11) ───────────
+# BUG (measured on prod): a spot that really sees ~40 passes / 2 contributors
+# showed "540 passages, 6 contributeurs" and heat 0.97 — the 540 is a junction
+# ~2 km away on the SAME piece. Lateral GPS spread makes the per-cell count
+# along ONE ride flicker across log2 buckets (real profile along the road: 540
+# at the junction, then 108, 33, 71, 132, 79, 92…). The junction is shorter
+# than ``min_piece_m`` so the hysteresis absorbs it, the flicker keeps
+# re-touching the committed log2 bucket so no cut ever fires, and the piece then
+# reported the MAX of each count over 2 km: the junction's 540, and the
+# junction's 6 contributors (a max taken at another cell than the 540's, even).
+#
+# FIX, two halves:
+#   1. SMOOTH before splitting. Each point's pass count, user count and
+#      effective pass (``eff``, see "Popularity = people") — each read from the
+#      point's OWN cell — are replaced by their rolling (lower) MEDIAN over a
+#      centred TRAVELLED-DISTANCE window (``HEATMAP_PASS_SMOOTH_M``, default
+#      100 m ≈ 33 densified points). A median ignores a lone hot/cold cell
+#      (lateral flicker, a crossing) yet keeps a sustained change (a real band)
+#      with a sharp edge, so the level + hysteresis split above now cuts on
+#      real bands and stays put on noise. The hysteresis and its OOM bound are
+#      unchanged — they simply run on the smoothed series; the level test
+#      became a factor of 2 from the piece's own level (it was a fixed log2
+#      bin, whose edges the smoothed series hovered across — see "LEVEL
+#      RESOLUTION").
+#   2. Report a TYPICAL point, not the max. A piece's ``pass_count``,
+#      ``user_count`` and ``eff`` are each the lower median of the smoothed
+#      per-point values over the graded slice — the same statistic for all
+#      three. ``eff`` is smoothed as its OWN series (never recombined from the
+#      pass and user medians: those can come from different cells, and
+#      min(median pass, median users × CAP) can be a popularity no cell of the
+#      stretch has — 1-user/100-pass cells next to 10-user/10-pass cells would
+#      read as a 50 they never are). A lower median is always one of its
+#      inputs, so every smoothed value — and every piece's value — is the
+#      value of some real cell. A junction shorter than the piece can no
+#      longer leak its count into it; a junction long enough to matter becomes
+#      its own piece.
+#
+# Cost: O(points) memory per run (the run is already a list in memory); the
+# window is three sorted lists of ≤ 2·``_SMOOTH_MAX_HALF_PTS`` ints maintained
+# by insort/bisect — each point enters and leaves once, ~33 points per window at
+# the 3 m densify spacing.
+#
+# Feature count (the OOM guard), measured on the bundled dev corpus (2,239 real
+# activities, one rider, whole-corpus build): 15,501 trails features before →
+# 21,447 after (+38 %; geojsonl 16.4 → 18.1 MB; heat_points unchanged), still
+# ~O(corpus), nowhere near the 1.3 M-feature OOM. The increase is the point of
+# the fix: the raw flicker used to re-touch the committed level and hide real
+# level changes (smoothing OFF + factor-2 level: 12,096). Peak RSS unchanged.
+DEFAULT_PASS_SMOOTH_M = 100.0
+# Per-side point cap of the smoothing window. Bounds the window (and the insort
+# memmove) on a degenerate stretch where many fixes pile up within a few metres
+# (a long stop logged at 1 Hz). The normal case is ~17 points per side.
+_SMOOTH_MAX_HALF_PTS = 256
+
+
+def pass_smooth_m() -> float:
+    """Resolve the smoothing window (full width, metres, centred on each point)
+    from ``HEATMAP_PASS_SMOOTH_M`` (default ``DEFAULT_PASS_SMOOTH_M`` = 100 m).
+    ``0`` disables the smoothing (raw per-cell series — still bounded by the
+    hysteresis); negative / unparseable falls back to the default."""
+    raw = os.environ.get("HEATMAP_PASS_SMOOTH_M", "").strip()
+    if not raw:
+        return DEFAULT_PASS_SMOOTH_M
+    try:
+        val = float(raw)
+    except ValueError:
+        return DEFAULT_PASS_SMOOTH_M
+    return val if val >= 0 else DEFAULT_PASS_SMOOTH_M
+
+
+# ── Popularity = people, not passes (fix/heatmap-popularite-locale) ──────────
+# BUG: at that junction 528 of the 540 passes come from ONE contributor (every
+# ride of theirs leaves home that way), so the darkest lines of the public map
+# were one person's habitual routes. POPULARITY (``heat_score`` → line colour,
+# and the ``heat_points`` weight ``w``) now counts at most ``CAP`` passes per
+# contributor, PER CELL:
+#
+#     eff = min(pass_count, user_count × CAP)   (HEATMAP_PASSES_PER_USER_CAP, default 5)
+#
+# This APPROXIMATES the exact Σ_users min(passes_u, CAP). It is exact when all
+# contributors sit on the same side of CAP (all ≥ CAP, all ≤ CAP — so always
+# for a single contributor, the habitual-route case) and otherwise
+# OVER-estimates, never under (1 user × 100 passes + 9 users × 1 pass: exact
+# 5 + 9 = 14, approximation min(109, 50) = 50). The exact form needs a per-user
+# pass counter PER CELL — an int per (cell, user) on top of the user set — a
+# non-starter at prod scale (~8.7 M occupied cells; the pass-1 accumulator IS
+# the build's memory budget). The approximation needs only the two counters the
+# lattice already keeps. (The per-cell user set saturates at ``_USER_CAP`` = 64,
+# so ``eff`` saturates at 64 × CAP — far above any beta cell.)
+#
+# ``pass_count`` / ``user_count`` in the feature props stay the REAL counts
+# (what the tooltip shows); only the popularity uses ``eff``. ``eff`` is
+# computed per cell and smoothed / aggregated as its own series (see "Smoothed
+# local counts"). ``HEATMAP_PASSES_PER_USER_CAP=0`` disables the cap
+# (eff = pass_count, the pre-fix popularity) — an env-only rollback.
+#
+# NORMALISER (one scale for lines, heat_points and the export):
+#     heat = min(1, log1p(eff) / log1p(N))
+# where N is a HIGH PERCENTILE of the per-cell ``eff`` (``HEATMAP_HEAT_NORM_PCTL``,
+# default p99.9; 100 = the max), not the max: a handful of extreme cells (a
+# start-line, a car park everyone crosses) set the max, and a smoothed TYPICAL
+# piece value then never got near the top of the ramp while the per-cell
+# heat_points did. Cells above N clamp to 1. N comes from a histogram of cell
+# ``eff`` built in one sweep after pass 1 — a dict of distinct values (≤ 64 ×
+# CAP + 1 keys when capped), no per-cell storage. The percentile is BY CELL, so
+# the long tail of once-ridden cells weighs in: dev corpus (2.56 M cells), one
+# rider → p99 = max = 5; the same traces spread over 25 pseudo-contributors →
+# p99 = 14, p99.9 = 75, max = 125. Prod corpus (2026-11-16, 8.7 M cells, CAP 5,
+# measured read-only): p90 = 3, p95 = 5, p99 = 15, p99.5 = 20, p99.9 = 25,
+# max = 30. p99.9 is the default: with p99 every cell shared by just 3 riders
+# (eff 15) would already burn at the darkest stop, whereas p99.9 keeps the top
+# of the ramp for the ~5-contributor corridors and still ignores a lone extreme
+# cell. The value is logged with every build.
+DEFAULT_PASSES_PER_USER_CAP = 5
+DEFAULT_HEAT_NORM_PCTL = 99.9
+
+
+def passes_per_user_cap() -> int:
+    """Resolve ``HEATMAP_PASSES_PER_USER_CAP`` (default
+    ``DEFAULT_PASSES_PER_USER_CAP`` = 5). ``0`` disables the cap; negative /
+    unparseable falls back to the default."""
+    raw = os.environ.get("HEATMAP_PASSES_PER_USER_CAP", "").strip()
+    if not raw:
+        return DEFAULT_PASSES_PER_USER_CAP
+    try:
+        val = int(raw)
+    except ValueError:
+        return DEFAULT_PASSES_PER_USER_CAP
+    return val if val >= 0 else DEFAULT_PASSES_PER_USER_CAP
+
+
+def heat_norm_pctl() -> float:
+    """Resolve ``HEATMAP_HEAT_NORM_PCTL`` — the percentile (by cell) of the
+    per-cell ``eff`` that maps to heat 1.0 (default ``DEFAULT_HEAT_NORM_PCTL``
+    = 99; ``100`` = the max). Outside (0, 100] / unparseable → default."""
+    raw = os.environ.get("HEATMAP_HEAT_NORM_PCTL", "").strip()
+    if not raw:
+        return DEFAULT_HEAT_NORM_PCTL
+    try:
+        val = float(raw)
+    except ValueError:
+        return DEFAULT_HEAT_NORM_PCTL
+    return val if 0 < val <= 100 else DEFAULT_HEAT_NORM_PCTL
+
+
+def _effective_pass(pass_count: int, user_count: int, cap: int) -> int:
+    """Popularity counting at most ``cap`` passes per contributor:
+    ``min(pass_count, user_count × cap)`` (``cap`` 0 = uncapped)."""
+    return min(pass_count, user_count * cap) if cap > 0 else pass_count
+
+
+def _eff_histogram(pass_by_cell: dict, users_by_cell: dict, cap: int) -> dict:
+    """``{eff: number of cells}`` over every occupied cell — one O(cells) sweep
+    after pass 1, a few hundred keys at most. A cell whose pass count is ≤
+    ``cap`` (or 1) has ``eff == pass`` whatever its users (≥ 1), so only the
+    busier cells pay the user lookup."""
+    hist: dict[int, int] = {}
+    for key, pc in pass_by_cell.items():
+        e = pc
+        if cap > 0 and pc > cap:
+            e = _effective_pass(pc, max(1, _user_count(users_by_cell.get(key))), cap)
+        hist[e] = hist.get(e, 0) + 1
+    return hist
+
+
+def _heat_normaliser(hist: dict, pctl: float) -> int:
+    """The ``pctl``-th percentile (nearest rank, by cell count) of the per-cell
+    ``eff`` histogram — the ``eff`` that maps to heat 1.0. ≥ 1; 1 when empty."""
+    total = sum(hist.values())
+    if total <= 0:
+        return 1
+    rank = max(1, math.ceil(total * pctl / 100.0))
+    seen = 0
+    for e in sorted(hist):
+        seen += hist[e]
+        if seen >= rank:
+            return max(1, e)
+    return max(1, max(hist))  # pragma: no cover - rank ≤ total always hits above
+
+
+def _heat(eff: int, log_norm: float) -> float:
+    """Popularity on the shared scale: ``min(1, log1p(eff) / log1p(N))``."""
+    return round(min(1.0, math.log1p(eff) / log_norm), 3)
+
+
+def _level_moved(ref: int, value: int) -> bool:
+    """True when ``value`` is at least a factor 2 away from the committed level
+    ``ref`` (``value ≥ 2·ref`` or ``value ≤ ref/2``) — the local split's
+    popularity resolution (one log2 step), measured from the CURRENT piece's
+    level rather than from fixed log2 bin edges (see "LEVEL RESOLUTION")."""
+    return value >= 2 * ref or 2 * value <= ref
+
+
+def _rolling_median3(a: list, b: list, c: list, cum: list,
+                     half_w: float) -> tuple[list, list, list]:
+    """Centred rolling LOWER median of three aligned per-point series over a
+    TRAVELLED-DISTANCE window: point ``i`` takes, for each series, the median
+    over the points ``j`` with ``|cum[j] - cum[i]| ≤ half_w`` (and ``|j - i| ≤
+    _SMOOTH_MAX_HALF_PTS``). Each series is smoothed INDEPENDENTLY (they share
+    only the window). Both window edges only move forward, so each point is
+    inserted and removed once (insort/bisect on a ~33-element list). The lower
+    median is always one of the input values, so integer counts stay integers
+    and every output is a value some point of the window really has."""
+    n = len(a)
+    out_a = [0] * n
+    out_b = [0] * n
+    out_c = [0] * n
+    win_a: list = []
+    win_b: list = []
+    win_c: list = []
+    lo = hi = 0
+    for i in range(n):
+        reach = cum[i] + half_w
+        last = i + _SMOOTH_MAX_HALF_PTS
+        while hi < n and hi <= last and cum[hi] <= reach:
+            insort(win_a, a[hi])
+            insort(win_b, b[hi])
+            insort(win_c, c[hi])
+            hi += 1
+        start = cum[i] - half_w
+        first = i - _SMOOTH_MAX_HALF_PTS
+        while lo < first or cum[lo] < start:
+            del win_a[bisect_left(win_a, a[lo])]
+            del win_b[bisect_left(win_b, b[lo])]
+            del win_c[bisect_left(win_c, c[lo])]
+            lo += 1
+        mid = (len(win_a) - 1) >> 1
+        out_a[i] = win_a[mid]
+        out_b[i] = win_b[mid]
+        out_c[i] = win_c[mid]
+    return out_a, out_b, out_c
+
+
+def _local_series(sub: list, sid: int, deg: float, pass_by_cell: dict,
+                  users_by_cell: dict, cap: int,
+                  smooth_m: float) -> tuple[list, list, list, list | None]:
+    """Per-point ``(pass, users, eff)`` along a drawn (sub-)run, SMOOTHED, plus
+    the cumulative travelled distance.
+
+    Raw values come from the point's OWN cell: its pass count, its user count
+    (both floored at 1 — a drawn point's cell always holds ≥ 1 of each; the
+    floor only matters for hand-built lattices) and its ``eff`` =
+    ``_effective_pass(pass, users, cap)``. When the series are constant — the
+    common single-user corridor — they are returned as-is with ``cum=None``: no
+    distance is computed and the split is a no-op. Otherwise each series is
+    replaced by its rolling median over a centred ``smooth_m``-wide window
+    (``smooth_m`` 0 = raw)."""
+    n = len(sub)
+    p = [1] * n
+    u = [1] * n
+    e = [1] * n
+    uniform = True
+    for i, pt in enumerate(sub):
+        key = _cell_key(sid, pt[0], pt[1], deg)
+        pc = max(1, pass_by_cell.get(key, 0))
+        uc = max(1, _user_count(users_by_cell.get(key)))
+        p[i] = pc
+        u[i] = uc
+        e[i] = _effective_pass(pc, uc, cap)
+        if uniform and (pc != p[0] or uc != u[0]):
+            uniform = False
+    if uniform:
+        return p, u, e, None
+    cum = [0.0] * n
+    dist = 0.0
+    prev = sub[0]
+    for i in range(1, n):
+        pt = sub[i]
+        dist += haversine_m(prev[0], prev[1], pt[0], pt[1])
+        cum[i] = dist
+        prev = pt
+    if smooth_m > 0:
+        p, u, e = _rolling_median3(p, u, e, cum, smooth_m / 2.0)
+    return p, u, e, cum
+
+
+def _piece_bounds(pass_s: list, eff_s: list, cum: list | None,
+                  min_piece_m: float) -> list[tuple[int, int]]:
+    """Index bounds ``(first, last)`` (inclusive) of the local PIECES of a run
+    whose smoothed per-point series are ``pass_s`` / ``eff_s`` — BOUNDED so
+    GPS-noise flicker cannot fragment the run into millions of features
+    (the fix/regrade-oom-and-pool OOM).
+
+    A piece's LEVEL is the (smoothed pass, smoothed EFFECTIVE pass) pair at its
+    first vertex; a point has MOVED when either value is a factor ≥ 2 away from
+    it (``_level_moved``), so a piece is homogeneous both in what the tooltip
+    shows and in what the colour shows. We walk the run; a moved point starts a
+    candidate stretch and we accumulate its travel distance. Only when the
+    stretch of moved points PERSISTS for ≥ ``min_piece_m`` do we CUT — at the
+    vertex where the stretch BEGAN, which sets the new level. A flicker back
+    within the committed level (or a stretch that never sustains the distance)
+    is ABSORBED into the current piece. Every cut consumes ≥ ``min_piece_m`` of
+    travel since the previous one, so pieces-per-run ≤
+    ``run_length / min_piece_m`` + 1.
+
+    Adjacent pieces SHARE the cut vertex (``last`` of one == ``first`` of the
+    next). ``cum`` None (a uniform run, see ``_local_series``) or < 2 points →
+    one piece."""
+    n = len(pass_s)
+    if n < 2 or cum is None:
+        return [(0, n - 1)]
+    bounds: list[tuple[int, int]] = []
+    g0 = 0  # first point index of the current committed piece
+    ref_p = pass_s[0]  # the committed piece's level (pass, effective pass)
+    ref_e = eff_s[0]
+    diff_start = -1  # first vertex index of the current "moved" stretch (-1 = none)
+    for j in range(1, n):
+        if not (_level_moved(ref_p, pass_s[j]) or _level_moved(ref_e, eff_s[j])):
+            # Within ×2 of the committed level → absorb (drop the candidate).
+            diff_start = -1
+            continue
+        if diff_start < 0:
+            diff_start = j
+        # Travel accumulated over the stretch, INCLUDING the segment into its
+        # first vertex (the historical accounting).
+        if cum[j] - cum[diff_start - 1] >= min_piece_m:
+            # The move has PERSISTED ≥ min_piece_m → cut at its start.
+            bounds.append((g0, diff_start))  # shared trailing vertex
+            g0 = diff_start
+            ref_p = pass_s[diff_start]
+            ref_e = eff_s[diff_start]
+            diff_start = -1
+    bounds.append((g0, n - 1))
+    return bounds
+
+
+def _run_piece_bounds(sub: list, sid: int, deg: float, pass_by_cell: dict,
+                      users_by_cell: dict, *, cap: int, smooth_m: float,
+                      min_piece_m: float):
+    """THE split path: the smoothed series of the WHOLE run, then its piece
+    bounds. Returns ``((pass_s, users_s, eff_s), bounds)``."""
+    pass_s, users_s, eff_s, cum = _local_series(sub, sid, deg, pass_by_cell,
+                                                users_by_cell, cap, smooth_m)
+    return (pass_s, users_s, eff_s), _piece_bounds(pass_s, eff_s, cum, min_piece_m)
 
 
 def _split_run_by_local_pass(sub: list, sid: int, deg: float,
                              pass_by_cell: dict,
-                             min_piece_m: float | None = None) -> list[list]:
-    """Split a drawn (sub-)run into contiguous PIECES by ``_pass_bucket``, so
-    each emitted feature carries a LOCAL count instead of the whole-run MAX —
-    BOUNDED so GPS-noise bucket flicker cannot fragment the run into millions of
-    features (the fix/regrade-oom-and-pool OOM).
-
-    Each point is bucketed by its cell's ``pass_count``. We walk the run holding
-    a COMMITTED bucket for the current piece; a point whose bucket DIFFERS starts
-    a candidate stretch and we accumulate its travel distance. Only when that
-    different bucket PERSISTS for ≥ ``min_piece_m`` (``HEATMAP_PASS_PIECE_MIN_M``,
-    default ``DEFAULT_PASS_PIECE_MIN_M``) do we CUT — at the vertex where the
-    stretch BEGAN. A flicker back to the committed bucket (or one that never
-    sustains the distance) is ABSORBED into the current piece. This caps
-    pieces-per-run to ~``run_length / min_piece_m``.
-
-    On a CLEAN single-transition run the sustained band far exceeds
-    ``min_piece_m``, so the cut lands at the exact bucket-boundary vertex the
-    naive per-change split chose (the #621 goldens are unchanged). A uniform run
-    (one bucket throughout — the common single-user corridor) returns ``[sub]``
-    unchanged, a strict no-op.
+                             min_piece_m: float | None = None,
+                             users_by_cell: dict | None = None,
+                             smooth_m: float | None = None,
+                             cap: int | None = None) -> list[list]:
+    """Point-list view of the local split — a thin wrapper over the SAME
+    ``_run_piece_bounds`` the emitters use (``_iter_local_pieces``), for
+    callers that only need the pieces' geometry. ``None`` parameters resolve
+    from the environment (``users_by_cell`` None = 1 user per cell).
 
     TRACE INTEGRITY: cuts only at EXISTING vertices; adjacent pieces SHARE the
-    cut vertex, so the union reconstructs ``sub`` byte-for-byte.
+    cut vertex, so the union reconstructs ``sub`` byte-for-byte. A uniform run
+    returns ``[sub]`` unchanged, a strict no-op.
     """
     if len(sub) < 2:
         return [sub]
-    if min_piece_m is None:
-        min_piece_m = pass_piece_min_m()
-    pieces: list[list] = []
-    g0 = 0  # first point index of the current committed piece
-    cur = _pass_bucket(pass_by_cell.get(_cell_key(sid, sub[0][0], sub[0][1], deg), 0))
-    diff_start: int | None = None  # first vertex index of the current != cur stretch
-    diff_dist = 0.0                # travel accumulated in that stretch
-    prev = sub[0]
-    for j in range(1, len(sub)):
-        pt = sub[j]
-        b = _pass_bucket(pass_by_cell.get(_cell_key(sid, pt[0], pt[1], deg), 0))
-        if b == cur:
-            # Flicker back to the committed bucket → absorb (drop the candidate).
-            diff_start = None
-            diff_dist = 0.0
-        else:
-            if diff_start is None:
-                diff_start = j
-                diff_dist = 0.0
-            diff_dist += haversine_m(prev[0], prev[1], pt[0], pt[1])
-            if diff_dist >= min_piece_m:
-                # The new bucket has PERSISTED ≥ min_piece_m → cut at its start.
-                pieces.append(sub[g0:diff_start + 1])  # shared trailing vertex
-                g0 = diff_start
-                cur = _pass_bucket(pass_by_cell.get(
-                    _cell_key(sid, sub[diff_start][0], sub[diff_start][1], deg), 0))
-                diff_start = None
-                diff_dist = 0.0
-        prev = pt
-    pieces.append(sub[g0:])
-    return pieces
+    _series, bounds = _run_piece_bounds(
+        sub, sid, deg, pass_by_cell, users_by_cell or {},
+        cap=passes_per_user_cap() if cap is None else cap,
+        smooth_m=pass_smooth_m() if smooth_m is None else smooth_m,
+        min_piece_m=pass_piece_min_m() if min_piece_m is None else min_piece_m)
+    return [sub[a:b + 1] for a, b in bounds]
+
+
+def _lower_median(vals: list) -> int:
+    """Lower median (an actual element — counts stay integers); 1 if empty."""
+    if not vals:
+        return 1
+    s = sorted(vals)
+    return s[(len(s) - 1) >> 1]
 
 
 def _piece_feature_props(piece: list, terminal: bool, sid: int, sport: str,
-                         deg: float, pass_by_cell: dict, users_by_cell: dict,
-                         dir_vec: dict, dir_wt: dict, fwd_by_cell: dict,
-                         bwd_by_cell: dict, log_max: float) -> tuple[list, dict]:
+                         deg: float, pass_by_cell: dict, dir_vec: dict,
+                         dir_wt: dict, fwd_by_cell: dict, bwd_by_cell: dict,
+                         log_norm: float, *, pass_s: list, users_s: list,
+                         eff_s: list) -> tuple[list, dict]:
     """LOCAL feature props for ONE split piece (+ its directional orientation).
 
-    ``pass_count`` / ``user_count`` are the MAX over the PIECE's own cells — a
-    LOCAL grade, not the whole-run MAX (the bug fix) — and ``heat_score`` derives
-    from that local pass via the SAME log-normalisation the ungraded code used.
+    ``pass_s`` / ``users_s`` / ``eff_s`` are the piece's slice of the run's
+    SMOOTHED per-point series (``_local_series`` over the WHOLE run, so the
+    window sees across the cut) — only ``_iter_local_pieces`` calls this.
 
-    GRADED SLICE (the half-fix correction): ``_split_run_by_local_pass`` makes
-    adjacent pieces SHARE the cut vertex, and that shared TRAILING vertex is the
-    START of the NEXT bucket's segment — it belongs to the next piece's bucket.
-    Grading a non-terminal piece over ALL its points would let that single
-    boundary vertex dominate the max (a QUIET approach into a HOT band would
-    report the HOT count — the exact bug). So a NON-TERMINAL piece is graded over
-    ``piece[:-1]`` (excluding the shared trailing vertex); the TERMINAL piece,
-    whose last vertex is a genuine endpoint, is graded over all its points. The
-    DRAWN geometry is always the FULL piece, so adjacent pieces still share the
-    cut vertex and the union reconstructs the run byte-for-byte.
+    ``pass_count`` / ``user_count`` are the lower MEDIAN of the smoothed pass /
+    user values over the graded slice — a TYPICAL point of the piece, the same
+    statistic for both (fix/heatmap-popularite-locale; it used to be the MAX of
+    each, taken at different cells, so a junction the piece merely crossed set
+    both). They stay REAL counts (what the tooltip shows). ``heat_score`` is
+    ``_heat(eff)`` where ``eff`` is the lower median of the smoothed per-cell
+    EFFECTIVE pass (passes per contributor capped — popularity counts people)
+    over the same slice, on the shared ``log_norm`` scale.
+
+    GRADED SLICE: the split makes adjacent pieces SHARE the cut vertex, and that
+    shared TRAILING vertex is the START of the NEXT piece's band — it belongs to
+    the next piece. So a NON-TERMINAL piece is graded over ``piece[:-1]``; the
+    TERMINAL piece, whose last vertex is a genuine endpoint, over all its
+    points. The DRAWN geometry is always the FULL piece, so adjacent pieces
+    still share the cut vertex and the union reconstructs the run
+    byte-for-byte.
 
     The directional props (``oneway_score`` / ``forward_count`` /
     ``backward_count``) and the dominant-direction FLOW SIGN (#618) are computed
-    on the SAME graded slice (so the excluded next-bucket cell can't skew the
-    busiest-cell pick or the score), while the reversal is applied to the full
-    drawn piece. Returns ``(oriented_piece, props)``; callers add their own
-    geometry wrapper (and ``highway_type`` for the PMTiles path).
+    on the SAME graded slice. ``forward_count`` / ``backward_count`` come from
+    the cell whose pass_count is closest to the reported (typical)
+    ``pass_count`` (``_run_direction_counts`` with ``target_pass``), so the
+    popup's direction split describes the same kind of point as its headline.
+    The reversal is applied to the full drawn piece. Returns
+    ``(oriented_piece, props)``; callers add their own geometry wrapper (and
+    ``highway_type`` for the PMTiles path).
     """
-    grade = piece if terminal else piece[:-1]
-    local_pass = 1
-    local_users = 1
-    for pt in grade:
-        key = _cell_key(sid, pt[0], pt[1], deg)
-        cell_pass = pass_by_cell.get(key, 0)
-        if cell_pass > local_pass:
-            local_pass = cell_pass
-        cell_users = _user_count(users_by_cell.get(key))
-        if cell_users > local_users:
-            local_users = cell_users
-    heat_score = round(min(1.0, math.log1p(local_pass) / log_max), 3)
-    oneway_score = _run_oneway_score(grade, sid, deg, dir_vec, dir_wt)
+    end = len(piece) if terminal else len(piece) - 1
+    grade = piece[:end]
+    local_pass = _lower_median(pass_s[:end])
+    local_users = _lower_median(users_s[:end])
+    heat_score = _heat(_lower_median(eff_s[:end]), log_norm)
     directional = sport in _DIRECTIONAL_SPORTS
     if directional:
+        oneway_score = _run_oneway_score(grade, sid, deg, dir_vec, dir_wt)
         fwd_count, bwd_count = _run_direction_counts(
-            grade, sid, deg, pass_by_cell, fwd_by_cell, bwd_by_cell)
+            grade, sid, deg, pass_by_cell, fwd_by_cell, bwd_by_cell,
+            target_pass=local_pass)
         # Orient the DRAWN geometry (the FULL piece, so the cut vertex stays
         # shared) to the dominant flow, decided on the graded slice for
         # consistency with the counts; then report the busier side as forward.
@@ -649,6 +973,9 @@ def _piece_feature_props(piece: list, terminal: bool, sid: int, sport: str,
         if bwd_count > fwd_count:
             fwd_count, bwd_count = bwd_count, fwd_count
     else:
+        # Only mtb/gravel cells ever enter the direction stores (keys carry the
+        # sport id), so any other sport scores 0 — skip the per-point walk.
+        oneway_score = 0.0
         fwd_count, bwd_count = 0, 0
     return piece, {
         "sport": sport,
@@ -659,6 +986,28 @@ def _piece_feature_props(piece: list, terminal: bool, sid: int, sport: str,
         "heat_score": heat_score,
         "oneway_score": oneway_score,
     }
+
+
+def _iter_local_pieces(sub: list, sid: int, sport: str, deg: float,
+                       pass_by_cell: dict, users_by_cell: dict, dir_vec: dict,
+                       dir_wt: dict, fwd_by_cell: dict, bwd_by_cell: dict,
+                       log_norm: float, *, cap: int, smooth_m: float,
+                       min_piece_m: float):
+    """Split ONE drawn (sub-)run into local pieces and yield
+    ``(oriented_piece, props)`` per piece — the single path shared by the
+    PMTiles build and the export (map and export must not diverge). The
+    smoothed series is computed once over the whole run and sliced per piece.
+    """
+    (pass_s, users_s, eff_s), bounds = _run_piece_bounds(
+        sub, sid, deg, pass_by_cell, users_by_cell, cap=cap, smooth_m=smooth_m,
+        min_piece_m=min_piece_m)
+    last = len(bounds) - 1
+    for idx, (a, b) in enumerate(bounds):
+        yield _piece_feature_props(
+            sub[a:b + 1], idx == last, sid, sport, deg, pass_by_cell, dir_vec,
+            dir_wt, fwd_by_cell, bwd_by_cell, log_norm,
+            pass_s=pass_s[a:b + 1], users_s=users_s[a:b + 1],
+            eff_s=eff_s[a:b + 1])
 
 
 # Server-side cursor batch — how many activity rows psycopg2 buffers per
@@ -1204,16 +1553,21 @@ def _accumulate_lattice(db, deg: float, *, bbox=None, sport=None,
 
 
 def _emit_run_points(sub: list, sid: int, deg: float, pass_by_cell: dict,
-                     log_max: float, sport: str, stride_m: float, fpts) -> int:
+                     users_by_cell: dict, cap: int, log_norm: float, sport: str,
+                     stride_m: float, fpts) -> int:
     """Write density POINTS for one drawn (sub-)run to the ``heat_points``
     GeoJSONL, returning the number written.
 
     Walks ``sub`` at ~``stride_m`` spacing (ALWAYS the first vertex) and writes
     one ``Point`` feature per emitted vertex carrying:
 
-      * ``w`` — the vertex's fine-cell log-normalised popularity, the SAME
-        density scale as the ``trails`` line ``heat_score`` (so the maplibre
-        ``heatmap-weight`` reads the same "how busy is this corridor" signal).
+      * ``w`` — the vertex's fine-cell EFFECTIVE popularity on the shared
+        scale (``_heat(min(pass, users × cap), log_norm)``, passes per
+        contributor capped — see ``_effective_pass``), the SAME scale as the
+        ``trails`` line ``heat_score`` (so the maplibre ``heatmap-weight``
+        reads the same "how busy is this corridor" signal). Per CELL, not
+        smoothed: the density field is unaffected by how the line is
+        partitioned.
       * ``sport`` — so the frontend sport chip filters the raster layer the same
         way it filters the lines.
 
@@ -1245,7 +1599,9 @@ def _emit_run_points(sub: list, sid: int, deg: float, pass_by_cell: dict,
             continue
         acc = 0.0
         key = _cell_key(sid, pt[0], pt[1], deg)
-        w = round(min(1.0, math.log1p(pass_by_cell.get(key, 0)) / log_max), 3)
+        eff = _effective_pass(pass_by_cell.get(key, 0),
+                              max(1, _user_count(users_by_cell.get(key))), cap)
+        w = _heat(eff, log_norm)
         feature = {
             "type": "Feature",
             "geometry": {
@@ -1290,24 +1646,36 @@ def export_raw_geojson(db, path: str, points_path: str | None = None,
        stays the raw trace geometry.
     2. Re-stream the masked runs and emit each (gated into sub-runs when
        ``min_users >= 2``, then SPLIT into local-count pieces by
-       ``_split_run_by_local_pass``) with ``pass_count`` / ``heat_score`` = the
-       log-normalised max popularity of the PIECE's own cells — so a quiet
-       stretch is graded dim instead of inheriting a distant junction's MAX —
-       writing to disk as we go so the existing colour/width/opacity ramp lights
-       busy corridors and grades the quiet ones.
+       ``_iter_local_pieces``) with ``pass_count`` / ``user_count`` = the
+       TYPICAL (median of the smoothed per-point) counts of the PIECE and
+       ``heat_score`` = its log-normalised EFFECTIVE popularity (passes per
+       contributor capped) — so a quiet stretch is graded dim instead of
+       inheriting a distant junction's MAX, and one rider's habitual route no
+       longer burns like a crowd's — writing to disk as we go so the existing
+       colour/width/opacity ramp lights busy corridors and grades the quiet
+       ones.
 
     Default (``HEATMAP_MIN_USERS=1``) emits whole runs (``gate_run`` is the
     identity) — geometry identical to the ungated path.
     """
     deg = lattice_deg()
     min_u = min_users()
+    cap = passes_per_user_cap()
+    smooth_m = pass_smooth_m()
+    min_piece_m = pass_piece_min_m()
 
     # PASS 1 — bounded lattice (no run/point corpus held in RAM).
     pass_by_cell, users_by_cell, dir_vec, dir_wt, fwd_by_cell, bwd_by_cell = \
         _accumulate_lattice(db, deg)
 
     max_pop = max(pass_by_cell.values(), default=1)
-    log_max = math.log1p(max_pop) or 1.0
+    # ONE popularity scale for lines (heat_score), points (w) and the export:
+    # log1p(eff) over log1p(a high percentile of the per-cell eff).
+    eff_hist = _eff_histogram(pass_by_cell, users_by_cell, cap)
+    norm_pctl = heat_norm_pctl()
+    heat_norm = _heat_normaliser(eff_hist, norm_pctl)
+    max_eff = max(eff_hist, default=1)
+    log_norm = math.log1p(heat_norm)
 
     # Community-NETWORK length estimate for the home "km de chemins" banner —
     # a free by-product of pass 1 (no extra DB work). The lattice is a ~11 m
@@ -1347,19 +1715,16 @@ def export_raw_geojson(db, path: str, points_path: str | None = None,
                 # how the LINE is partitioned) — before the split, O(1)/run.
                 if fpts is not None:
                     points_written += _emit_run_points(
-                        sub, sid, deg, pass_by_cell, log_max, sport,
-                        stride_m, fpts)
+                        sub, sid, deg, pass_by_cell, users_by_cell, cap,
+                        log_norm, sport, stride_m, fpts)
                 # Split the sub-run into local-count PIECES (a quiet stretch must
                 # NOT inherit a distant junction's pass_count / brightness).
                 # pass_count = passes (distinct activities); user_count =
                 # distinct USERS — NEVER conflate the two on a public map.
-                pieces = _split_run_by_local_pass(sub, sid, deg, pass_by_cell)
-                last = len(pieces) - 1
-                for idx, piece in enumerate(pieces):
-                    oriented, props = _piece_feature_props(
-                        piece, idx == last, sid, sport, deg, pass_by_cell,
-                        users_by_cell, dir_vec, dir_wt, fwd_by_cell,
-                        bwd_by_cell, log_max)
+                for oriented, props in _iter_local_pieces(
+                        sub, sid, sport, deg, pass_by_cell, users_by_cell,
+                        dir_vec, dir_wt, fwd_by_cell, bwd_by_cell, log_norm,
+                        cap=cap, smooth_m=smooth_m, min_piece_m=min_piece_m):
                     props["highway_type"] = ""
                     feature = {
                         "type": "Feature",
@@ -1374,10 +1739,12 @@ def export_raw_geojson(db, path: str, points_path: str | None = None,
                     f.write("\n")
                     written += 1
     log.info("raw-trace export (streaming): %d line features, %d heat_points, "
-             "%d cells, max_pop=%d, mask=%.0fm, cell=%.6f°, stride=%.0fm, "
-             "min_users=%d, fully_suppressed_runs=%d",
-             written, points_written, len(pass_by_cell), max_pop, mask_meters(),
-             deg, stride_m, min_u, suppressed)
+             "%d cells, max_pop=%d, heat_norm=eff %d (p%g; max_eff=%d, "
+             "passes/user cap=%d), smooth=%.0fm, min_piece=%.0fm, mask=%.0fm, "
+             "cell=%.6f°, stride=%.0fm, min_users=%d, fully_suppressed_runs=%d",
+             written, points_written, len(pass_by_cell), max_pop, heat_norm,
+             norm_pctl, max_eff, cap, smooth_m, min_piece_m, mask_meters(), deg,
+             stride_m, min_u, suppressed)
     return written
 
 
@@ -1402,11 +1769,14 @@ def aggregate_raw_for_export(db, bbox, sport, min_uc: int,
     HEATMAP_MIN_USERS)`` — an export never leaks below either the export's
     K-anonymity floor or the raw map's own gate. Endpoint masking is always on.
     Geometry is the precise masked polyline (a ``LineString`` per surviving
-    sub-run); ``forward_count`` / ``backward_count`` are the per-direction
-    distinct-activity counts of the run's busiest cell (mtb/gravel ONLY; 0 for
-    every other sport — see ``_run_direction_counts``). Directionality is ALSO
-    surfaced as ``oneway_score`` (circular concentration R∈[0,1], mtb/gravel
-    only) — see ``_run_oneway_score``. ``days`` filters on
+    sub-run, split into local pieces exactly like the map); ``pass_count`` /
+    ``user_count`` are the piece's TYPICAL counts and ``heat_score`` its
+    effective (per-contributor-capped) popularity on the map's scale;
+    ``forward_count`` / ``backward_count`` are the per-direction
+    distinct-activity counts of the piece's representative cell (mtb/gravel
+    ONLY; 0 for every other sport — see ``_run_direction_counts``).
+    Directionality is ALSO surfaced as ``oneway_score`` (circular concentration
+    R∈[0,1], mtb/gravel only) — see ``_run_oneway_score``. ``days`` filters on
     ``activities.activity_date``.
 
     Bounded memory: reuses the two-pass streaming lattice, scoped by bbox +
@@ -1416,13 +1786,17 @@ def aggregate_raw_for_export(db, bbox, sport, min_uc: int,
     deg = lattice_deg()
     gate = max(int(min_uc), min_users())
     since = days if (days and days > 0) else None
+    cap = passes_per_user_cap()
+    smooth_m = pass_smooth_m()
+    min_piece_m = pass_piece_min_m()
 
     # PASS 1 — bounded lattice over the SCOPED corpus (popularity + user gate
     # + mtb/gravel directional accumulator).
     pass_by_cell, users_by_cell, dir_vec, dir_wt, fwd_by_cell, bwd_by_cell = \
         _accumulate_lattice(db, deg, bbox=bbox, sport=sport, since_days=since)
-    max_pop = max(pass_by_cell.values(), default=1)
-    log_max = math.log1p(max_pop) or 1.0
+    # Same effective-popularity scale as the PMTiles build (export_raw_geojson).
+    log_norm = math.log1p(_heat_normaliser(
+        _eff_histogram(pass_by_cell, users_by_cell, cap), heat_norm_pctl()))
 
     # PASS 2 — re-stream the SAME masked runs (identical ORDER BY id) and build
     # one feature per surviving (gated) sub-run. Only one run is ever in flight.
@@ -1432,14 +1806,11 @@ def aggregate_raw_for_export(db, bbox, sport, min_uc: int,
         sid = _sport_id(run_sport)
         for sub in gate_run(run, run_sport, users_by_cell, deg, gate):
             # SAME local-count split as the PMTiles build (map + export must not
-            # diverge): each piece carries its own busiest-cell pass/user/heat.
-            pieces = _split_run_by_local_pass(sub, sid, deg, pass_by_cell)
-            last = len(pieces) - 1
-            for idx, piece in enumerate(pieces):
-                oriented, props = _piece_feature_props(
-                    piece, idx == last, sid, run_sport, deg, pass_by_cell,
-                    users_by_cell, dir_vec, dir_wt, fwd_by_cell, bwd_by_cell,
-                    log_max)
+            # diverge): each piece carries its own typical pass/user + heat.
+            for oriented, props in _iter_local_pieces(
+                    sub, sid, run_sport, deg, pass_by_cell, users_by_cell,
+                    dir_vec, dir_wt, fwd_by_cell, bwd_by_cell, log_norm,
+                    cap=cap, smooth_m=smooth_m, min_piece_m=min_piece_m):
                 props["geometry"] = {
                     "type": "LineString",
                     "coordinates": [[round(p[0], 6), round(p[1], 6)]
