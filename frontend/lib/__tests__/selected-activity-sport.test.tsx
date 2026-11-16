@@ -116,7 +116,7 @@ describe('SelectedActivityCard — sport correction', () => {
     act(() => root?.unmount());
     render(vi.fn(), { ...activity, sport_is_default: true });
     expect(hint()!.textContent).toBe('sport par défaut');
-    expect(hint()!.getAttribute('title')).toContain('Strava ne précise pas');
+    expect(hint()!.getAttribute('title')).toContain('Le type de vélo n’est pas précisé');
   });
 
   it('the hint goes away once the rider picks a sport, and comes back if the PATCH fails', async () => {
