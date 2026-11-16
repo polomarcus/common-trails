@@ -15,8 +15,12 @@ size 1 for type uint32 » (repli fitdecode) et un FIT tronqué, `routes/`
 (itinéraires sans horodatage, l'un typé `running`), doublon octet pour octet,
 trace sans géométrie, fichier absent du CSV, fichier listé sans horodatage
 (daté par `activities.csv`) ; côté Garmin, zip imbriqué, FIT avec sport /
-sub_sport (dont un virtuel et un sans sport) et un GPX sans aucune date
-(importé dans « Ma heatmap », jamais public, ligne dédiée dans l'email).
+sub_sport (dont un virtuel et un sans sport), un GPX sans aucune date
+(importé dans « Ma heatmap », jamais public, ligne dédiée dans l'email) et le
+`<compte>_0_summarizedActivities.json` de Garmin Connect : un FIT enregistré
+sur le profil « Vélo » générique que le cycliste a retypé `gravel_cycling` dans
+Connect doit sortir en gravel, avec le nom donné dans Connect (jointure par
+heure de départ, cf. `app/services/garmin_connect.py`).
 
 ```bash
 python3 backend/tests/synthetic_exports.py strava /tmp/strava.zip   # imprime le résultat attendu (JSON)

@@ -24,7 +24,11 @@ Strava (``build_strava_export``)
 Garmin-like (``build_garmin_export``)
   * no activities.csv; FIT files carrying sport / sub_sport inside a NESTED
     ``UploadedFiles_*.zip`` (+ a top-level GPX typed ``road_biking``), a
-    virtual ride, a FIT with no usable sport, non-ingestible JSON, junk.
+    virtual ride, a FIT with no usable sport, non-ingestible JSON, junk;
+  * Garmin Connect's ``<account>_0_summarizedActivities.json``: a FIT recorded
+    on the generic Bike profile that the rider re-typed ``gravel_cycling`` in
+    Connect (→ gravel, Connect name), a row with no file, and a part with no
+    rows at all.
 
 Deterministic for a given interpreter (fixed zip timestamps, gzip mtime=0);
 the deflate bytes may differ across zlib builds, the content never does.
@@ -352,6 +356,18 @@ def build_strava_export() -> tuple[bytes, dict]:
 # ── Garmin-like export ──────────────────────────────────────────────────
 
 
+def _connect_row(activity_id: int, start: datetime, activity_type: str, name: str) -> dict:
+    """One row of Garmin Connect's ``summarizedActivities.json`` (the fields
+    the import reads + a few neighbours, as in a real export)."""
+    ms = int(start.timestamp() * 1000)
+    return {
+        "activityId": activity_id, "name": name, "activityType": activity_type,
+        "sportType": "RUNNING" if activity_type == "running" else "CYCLING",
+        "beginTimestamp": ms, "startTimeGmt": float(ms), "parent": False,
+        "distance": 2_500_000.0, "duration": 600_000.0,
+    }
+
+
 def build_garmin_export() -> tuple[bytes, dict]:
     """Garmin "Export All Data"-like zip (no activities.csv, nested zip)."""
     inner_files = {
@@ -362,6 +378,8 @@ def build_garmin_export() -> tuple[bytes, dict]:
         "3_ACTIVITY.fit": (make_fit(23, start=_ts(23), sport="cycling", sub_sport="virtual_activity"),
                            "skipped", "out_of_scope"),
         "4_ACTIVITY.fit": (make_fit(24, start=_ts(24), sport="generic"), "skipped", "sport_unknown"),
+        # Generic "Bike" profile, re-typed gravel_cycling in Garmin Connect.
+        "5_ACTIVITY.fit": (make_fit(27, start=_ts(27), sport="cycling"), "imported", "gravel"),
     }
     inner = io.BytesIO()
     with zipfile.ZipFile(inner, "w") as zin:
@@ -378,6 +396,12 @@ def build_garmin_export() -> tuple[bytes, dict]:
         _write(zf, top_gpx, make_gpx("Sortie route", 25, start=_ts(25), trk_type="road_biking"))
         _write(zf, undated_gpx, make_gpx("Itineraire route", 26, start=None, trk_type="road_biking"))
         _write(zf, "DI_CONNECT/DI-Connect-Fitness/summarizedActivities.json", '[{"activityId": 1}]')
+        _write(zf, "DI_CONNECT/DI-Connect-Fitness/rider@example.com_0_summarizedActivities.json",
+               json.dumps([{"summarizedActivitiesExport": [
+                   _connect_row(9001, _ts(27), "gravel_cycling", "Gravel des Causses"),
+                   _connect_row(9002, _ts(21), "mountain_biking", "VTT du Levezou"),
+                   _connect_row(9003, _ts(40), "running", "Footing sans fichier"),
+               ]}]))
         _write(zf, nested, inner.getvalue())
         _write(zf, "__MACOSX/DI_CONNECT/._DI-Connect-Fitness", b"\x00\x05\x16\x07")
 
@@ -386,18 +410,23 @@ def build_garmin_export() -> tuple[bytes, dict]:
     members[undated_gpx] = ("imported", "road")
     sports_by_start = {
         _key(_ts(21)): "mtb", _key(_ts(22)): "gravel", _key(_ts(25)): "road",
+        _key(_ts(27)): "gravel",  # from the Garmin Connect summary
         None: "road",  # the undated itinerary (activity_date NULL)
     }
     expected = {
         "members": members,
-        "imported": 4,
+        "imported": 5,
         "imported_undated": 1,
         "skipped": 2,
         "failed": 0,
         "skipped_by_reason": {"out_of_scope": 1, "sport_unknown": 1},
         "skipped_no_sport": 1,
-        "members_total": 6,
+        "members_total": 7,
         "sports_by_start": sports_by_start,
+        # Names the rider set in Garmin Connect (instead of the FIT "Cycling").
+        "names_by_start": {
+            _key(_ts(27)): "Gravel des Causses", _key(_ts(21)): "VTT du Levezou",
+        },
         "never_ingested": [],
     }
     return buf.getvalue(), expected

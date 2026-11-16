@@ -54,7 +54,7 @@ from collections import Counter
 import sentry_sdk
 
 from app.jobs.ingest_pending_archives import _ingest_member_bytes
-from app.services import archive_intake
+from app.services import archive_intake, garmin_connect
 
 log = logging.getLogger("founder_import")
 
@@ -140,6 +140,8 @@ def import_founder_archive(
             first = True
             # activities.csv dates — fallback for a listed file with no timestamp.
             csv_dates = archive_intake.csv_activity_dates(zf)
+            # Garmin "Export all": Connect's type + name, by start time.
+            connect_index = garmin_connect.build_index(zf)
             for name, raw, csv_sport in archive_intake.iter_zip_members(zf):
                 if pace_seconds > 0 and not first:
                     time.sleep(pace_seconds)
@@ -172,6 +174,7 @@ def import_founder_archive(
                         contribute_heatmap=contribute_heatmap,
                         source=archive_intake.ARCHIVE_PROVENANCE,
                         fallback_date=csv_dates.get(name),
+                        connect_index=connect_index,
                     )
                     if outcome == "imported":
                         summary["imported"] += 1
