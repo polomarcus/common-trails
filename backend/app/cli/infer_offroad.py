@@ -6,6 +6,9 @@ default — nothing changes, the counts are printed per (anonymised) account::
     python -m app.cli.infer_offroad                 # dry run, every account
     python -m app.cli.infer_offroad --apply         # write + request a rebuild
 
+One-shot by design: upload the tiles (``app.cli.build_osm_surface_tiles``),
+run this, then delete the tiles — imports do not infer anything themselves.
+
 ``--threshold`` overrides ``OFFROAD_UNPAVED_SHARE`` (default 0.15);
 ``--url`` overrides where the OSM surface tiles are read.
 """

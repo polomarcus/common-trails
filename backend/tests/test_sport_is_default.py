@@ -567,7 +567,8 @@ def test_done_email_mentions_default_sport_rides():
         imported=10, skipped=0, failed=0, locale="fr", imported_default_sport=7
     )
     assert "<strong>7</strong> sorties vélo sans type précis" in html
-    assert "« Route » ou « Off-road » d'après le terrain" in html
+    assert "classées « Route » par défaut" in html  # the import itself infers nothing
+    assert "{plural}" not in html  # every placeholder rendered
     assert "tu peux les reclasser depuis la carte" in html
     _s, html = render_archive_done_email(
         imported=10, skipped=0, failed=0, locale="en", imported_default_sport=1
