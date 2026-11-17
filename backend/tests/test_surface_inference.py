@@ -13,6 +13,7 @@ import uuid
 import pytest
 from sqlalchemy import text as sa_text
 
+from app.db.models import User
 from app.db.session import SessionLocal
 from app.services import surface_inference as si
 
@@ -28,6 +29,7 @@ def _line(lat, n=60, lon0=LON0, lon1=LON1, jitter=0.00008):
 
 
 def _write_tiles(tmp_path, ways):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     tiles = si.tiles_from_ways(ways)
     for name, (p, u) in tiles.items():
         (tmp_path / name).write_bytes(si.encode_tile(p, u))
@@ -261,71 +263,46 @@ def test_threshold_decides(index, rides):
     assert rep.offroad == 0 and rep.kept_road == 2
 
 
-def test_after_import_hook(tmp_path, monkeypatch, rides):
-    uid, ids = rides
-    monkeypatch.delenv("UPLOADS_BUCKET", raising=False)
-    monkeypatch.delenv("OSM_SURFACE_URL", raising=False)
-    assert si.infer_offroad_after_import(uid) == 0  # not configured → nothing
-    assert _state(ids)["def_track"] == ("road", True)
-
-    monkeypatch.setenv("OSM_SURFACE_URL", _write_tiles(tmp_path, [ROAD, TRACK]))
-    assert si.infer_offroad_after_import(uid) == 1
-    assert _state(ids)["def_track"] == ("offroad", True)
-
-
-def test_after_import_hook_never_raises(monkeypatch, rides):
-    uid, _ids = rides
-
-    def boom(*_a, **_k):
-        raise RuntimeError("tiles unreadable")
-
-    monkeypatch.setattr(si, "load_index", boom)
-    assert si.infer_offroad_after_import(uid) == 0
-
-
-def test_drain_runs_the_inference_for_the_archive_owner_before_the_ping(tmp_path, monkeypatch):
-    """A real archive drain ends with the off-road inference for its owner,
-    BEFORE the rebuild ping (so the requested build already files the rides
-    right) — and a failing inference never fails the import."""
+def test_an_archive_import_infers_nothing_even_with_tiles(tmp_path, monkeypatch, rides):
+    """One-shot backfill only (2026-11-17): even with tiles configured, a real
+    archive drain never re-classifies the owner's default-sport rides — only
+    ``app.cli.infer_offroad`` does."""
     from unittest.mock import MagicMock, patch
 
-    from app.jobs import ingest_pending_archives as drain_mod
     from app.services import archive_intake
     from app.services import email as email_service
     from tests import test_archive_terminal_email as tae
 
+    uid, ids = rides
+    monkeypatch.setenv("OSM_SURFACE_URL", _write_tiles(tmp_path / "tiles", [ROAD, TRACK]))
     monkeypatch.setattr(archive_intake, "ARCHIVE_INTAKE_DIR", str(tmp_path / "intake"))
     monkeypatch.setattr(archive_intake, "UPLOADS_BUCKET", "")
     db = SessionLocal()
     try:
         db.execute(sa_text("TRUNCATE pending_archive_files, pending_archives, contribution_consents"))
+        # The archive's owner IS the account holding the default rides.
+        db.add(
+            User(
+                id=uid, email=f"offroad_{uuid.uuid4().hex[:8]}@example.com", username=f"offroad_{uuid.uuid4().hex[:6]}"
+            )
+        )
         db.commit()
     finally:
         db.close()
-
-    calls: list[str] = []
-    real_finished = drain_mod._ArchiveRebuildPinger.archive_finished
-
-    def hook(user_id):
-        calls.append(f"infer:{user_id}")
-        raise RuntimeError("must not fail the import")  # the real hook never raises; be paranoid
-
-    def ping(self, *a, **k):
-        calls.append("ping")
-        return real_finished(self, *a, **k)
-
-    monkeypatch.setattr(si, "infer_offroad_after_import", hook)
-    monkeypatch.setattr(drain_mod._ArchiveRebuildPinger, "archive_finished", ping)
-    uid = tae._mk_user(f"offroad_{uuid.uuid4().hex[:8]}@example.com")
-    rid = tae._mk_uploaded_archive(uid)
-    with patch.object(email_service, "send_email", MagicMock(return_value=True)):
-        try:
+    try:
+        tae._mk_uploaded_archive(uid)
+        with patch.object(email_service, "send_email", MagicMock(return_value=True)):
             summary = tae._drain()
-        except RuntimeError:
-            pytest.fail("an inference error must not escape the drain")
-    assert calls == [f"infer:{uid}", "ping"]
-    assert summary["imported"] == 2
-    assert tae._row(rid)["status"] == "done"
+        assert summary["imported"] == 2
+        assert _state(ids)["def_track"] == ("road", True)
+    finally:
+        db = SessionLocal()
+        try:
+            db.execute(sa_text("DELETE FROM activities WHERE user_id = :u"), {"u": uid})
+            db.execute(sa_text("DELETE FROM users WHERE id = :u"), {"u": uid})
+            db.commit()
+        finally:
+            db.close()
 
 
 def test_cli_dry_run_output_is_anonymised(tmp_path, rides, caplog):

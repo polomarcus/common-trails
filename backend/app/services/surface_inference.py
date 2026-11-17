@@ -26,6 +26,13 @@ dans le bucket privé des uploads (``gs://<UPLOADS_BUCKET>/osm-surface/v1``,
 surchargeable par ``OSM_SURFACE_URL``). Chaque tuile = deux ensembles de
 cellules de ``GRID_DEG`` (≈ 22 m × 16 m) : goudronnées et non goudronnées.
 Une sortie hors des tuiles couvertes n'est pas mesurée : elle reste telle quelle.
+
+Rattrapage PONCTUEL (décision 2026-11-17, « fix léger ») : les tuiles sont
+déposées le temps de lancer ``app.cli.infer_offroad --apply``, puis effacées.
+Les imports ne déduisent rien eux-mêmes : depuis la lecture du résumé Garmin
+Connect (``garmin_connect``), une sortie retypée dans Connect arrive avec son
+vrai sport ; une sortie restée générique arrive « Route » par défaut, et le
+rattrapage peut être relancé au besoin.
 """
 
 from __future__ import annotations
@@ -487,39 +494,3 @@ def infer_offroad(
             )
             rep.changed_ids.extend(str(r[0]) for r in res)
     return rep
-
-
-def infer_offroad_after_import(user_id: str) -> int:
-    """Best-effort hook at the end of an archive drain: infer this user's
-    default-sport rides. Returns the number moved to ``offroad``; never
-    raises (an inference problem must not fail a user's import)."""
-    try:
-        index = load_index()
-        if index is None:
-            return 0
-        from app.db.session import SessionLocal
-
-        db = SessionLocal()
-        try:
-            rep = infer_offroad(db, index, user_id=user_id, apply=True)
-            db.commit()
-        finally:
-            db.close()
-        if rep.changed_ids:
-            logger.info(
-                "offroad inferred for %d/%d default-sport rides of user %s (unmeasured=%d)",
-                len(rep.changed_ids),
-                rep.examined,
-                user_id,
-                rep.unmeasured,
-            )
-        return len(rep.changed_ids)
-    except Exception:  # noqa: BLE001
-        logger.warning("offroad inference after import failed for user %s", user_id, exc_info=True)
-        try:
-            import sentry_sdk
-
-            sentry_sdk.capture_exception()
-        except Exception:  # noqa: BLE001  # pragma: no cover
-            pass
-        return 0

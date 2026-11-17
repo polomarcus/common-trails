@@ -36,7 +36,7 @@ import time
 
 from sqlalchemy import text as sa_text
 
-from app.services import archive_intake, garmin_connect, surface_inference
+from app.services import archive_intake, garmin_connect
 from app.services import email as email_service
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
@@ -1024,15 +1024,6 @@ def drain_pending_archives(
                         "archive %s: %d member(s) matched a Garmin Connect summary row (of %d)",
                         arch["id"], counts.get("garmin_connect_matched", 0), len(connect_index),
                     )
-            # Generic bike rides (Garmin "Bike" profile, Strava "Ride") that
-            # run mostly off pavement → ``offroad`` (OSM terrain, see
-            # surface_inference). Before the rebuild ping so the new build
-            # already files them right. Best-effort: never fails the import.
-            if counts["imported"]:
-                try:
-                    surface_inference.infer_offroad_after_import(arch["user_id"])
-                except Exception:  # noqa: BLE001 — defense in depth, the hook already never raises
-                    log.warning("offroad inference failed for archive %s", arch["id"], exc_info=True)
             # Rebuild ping BEFORE the email: the email promises the heatmap
             # update within ~30 min, so the build must already be requested.
             pinger.archive_finished(arch["id"], counts["imported"], bool(arch["contribute_heatmap"]))
