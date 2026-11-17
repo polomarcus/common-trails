@@ -271,9 +271,9 @@ def merge_synthetic_account(
         # Reflect the merge on the community map. A merge can DROP duplicate
         # activities and REASSIGN geometry between users, changing what the
         # static PMTiles should show; the build reads consented activities
-        # live, and there is no periodic rebuild scheduler, so
-        # without this trigger the change would not surface until an unrelated
-        # contribution rebuilt. Best-effort: never raises, env-gated no-op
+        # live, and the only periodic rebuild is the weekly backstop, so
+        # without this trigger the change could take up to a week to surface.
+        # Best-effort: never raises, env-gated no-op
         # locally / in TEST_MODE (run_jobs._is_enabled).
         try:
             from app.services.run_jobs import trigger_build_pmtiles_job

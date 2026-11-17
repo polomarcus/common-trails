@@ -1,110 +1,53 @@
-"""Internal endpoint called by Cloud Tasks for post-ingest artefact rebuilds.
+"""Internal endpoint called by Cloud Tasks for the post-ingest community rebuild.
 
 - ``POST /internal/artefacts/rebuild``
-    Rebuilds PMTiles + (in prod) uploads to GCS. Triggered 5 min after
-    the last ingest, deduped via constant Cloud Tasks task name.
+    Fired by the ``artefact-rebuild-{window}`` Cloud Task
+    (``cloud_tasks.enqueue_artefact_rebuild``), scheduled when its 5-min
+    window closes: the uploads of a window collapse into ONE task. The handler only asks for one run of the ``build-pmtiles`` Cloud
+    Run Job (``run_jobs.trigger_build_pmtiles_job``, 8 GiB) — it NEVER builds
+    the heatmap itself. (It used to run ``build_pmtiles.main`` in-process on
+    the 2 GiB worker, which the full build outgrew, and re-uploaded the
+    mutable PMTiles outside the job's compare-and-set publish.)
 
-    (The ``.fgraph`` routing-shard rebuild half was removed with the
-    WASM-routing decommission — internal routing is delegated to
-    external tools; there is no substrate to rebuild a graph from.)
+    No debounce here: the deduplicated task already groups the burst.
+    Trigger failure → 503 so Cloud Tasks retries; overlapping builds are
+    safe (the job publishes its pointer by compare-and-set).
 
     OIDC-protected (``CLOUD_TASKS_INVOKER_SA`` audience-scoped via
-    ``verify_oidc_token`` from ``internal_ingest.py``). Idempotent —
-    Cloud Tasks may retry on 5xx and we'd rather re-do work than wedge
-    the queue.
+    ``verify_oidc_token`` from ``internal_ingest.py``).
 
-Design / rationale: ``docs/prod-ingestion-flow.md`` and
-``docs/migration-runbook.md``.
+Design / rationale: ``docs/prod-ingestion-flow.md``.
 """
 from __future__ import annotations
 
 import logging
-import os
-from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request, status
+from starlette.concurrency import run_in_threadpool
 
 from app.api.internal_ingest import verify_oidc_token
+from app.services import run_jobs
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 log = logging.getLogger(__name__)
 
 
 @router.post("/artefacts/rebuild")
-async def artefacts_rebuild(request: Request) -> dict[str, Any]:
-    """Cloud Tasks → rebuild PMTiles; upload to GCS.
+async def artefacts_rebuild(request: Request) -> dict[str, str]:
+    """Cloud Tasks → one ``jobs:run`` of the build-pmtiles job.
 
-    Triggered 5 min after the last ingest, deduped via constant Cloud
-    Tasks task name. Reads current DB state — no payload needed.
-
-    PMTiles (always): builds locally to /tmp, uploads to
-    ``gs://{HEATMAP_ARTEFACTS_BUCKET}/heatmap-display.pmtiles`` with
-    ``Cache-Control: public, max-age=300``. Cloud CDN sees a fresh file
-    within minutes.
+    200 ``{"status": "ok", "job": "triggered"}`` when the run was requested;
+    503 when it was not (job trigger unconfigured or the Cloud Run API call
+    failed), so Cloud Tasks retries the task.
     """
     verify_oidc_token(request, audience_env="INTERNAL_ARTEFACT_HANDLER_URL")
 
-    pmtiles_status = _rebuild_and_upload_pmtiles()
-    return {
-        "status": "ok",
-        "pmtiles": pmtiles_status,
-    }
-
-
-def _rebuild_and_upload_pmtiles() -> dict[str, Any]:
-    """Build PMTiles into /tmp, upload to the artefacts GCS bucket.
-
-    Returns a status dict; never raises (errors are logged and surfaced
-    in the response so a partial failure doesn't 5xx the whole endpoint
-    and trigger Cloud Tasks retries that would re-do the same work).
-    """
-    import shutil
-    import tempfile
-
-    try:
-        from app.jobs import build_pmtiles
-    except Exception as exc:  # pragma: no cover
-        log.exception("artefact-rebuild: cannot import build_pmtiles")
-        return {"ok": False, "error": f"import: {exc}"}
-
-    target_dir = tempfile.mkdtemp(prefix="artefactrebuild_")
-    # min_uc is only stamped into stats.json now (the render floor is
-    # HEATMAP_MIN_USERS) — kept in step with HEATMAP_K_ANONYMITY as before.
-    k_anon = int(os.environ.get("HEATMAP_K_ANONYMITY", "2"))
-    try:
-        try:
-            build_pmtiles.main(
-                target_dir, min_zoom=6, max_zoom=15, min_uc=k_anon,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.exception("artefact-rebuild: build_pmtiles raised")
-            return {"ok": False, "error": f"build: {exc}"}
-
-        src = os.path.join(target_dir, "heatmap-display.pmtiles")
-        if not os.path.exists(src):
-            return {"ok": False, "error": "build produced no output"}
-
-        bucket = os.environ.get("HEATMAP_ARTEFACTS_BUCKET", "").strip()
-        if not bucket:
-            log.info("artefact-rebuild: HEATMAP_ARTEFACTS_BUCKET unset → skip upload")
-            return {"ok": True, "skipped_upload": True, "size_bytes": os.path.getsize(src)}
-
-        try:
-            from google.cloud import storage  # type: ignore[attr-defined]
-        except ImportError:
-            log.warning("google-cloud-storage not installed; can't upload PMTiles")
-            return {"ok": False, "error": "google-cloud-storage missing"}
-
-        try:
-            client = storage.Client()
-            blob = client.bucket(bucket).blob("heatmap-display.pmtiles")
-            blob.cache_control = "public, max-age=300"
-            blob.upload_from_filename(src, content_type="application/octet-stream")
-            log.info("artefact-rebuild: uploaded PMTiles to gs://%s/heatmap-display.pmtiles (%d bytes)",
-                     bucket, os.path.getsize(src))
-            return {"ok": True, "bucket": bucket, "size_bytes": os.path.getsize(src)}
-        except Exception as exc:
-            log.exception("artefact-rebuild: GCS upload failed")
-            return {"ok": False, "error": f"upload: {exc}"}
-    finally:
-        shutil.rmtree(target_dir, ignore_errors=True)
+    # Sync HTTP (metadata token + jobs:run, ~8 s worst case) → threadpool.
+    if not await run_in_threadpool(run_jobs.trigger_build_pmtiles_job):
+        log.warning("artefact-rebuild: build-pmtiles job trigger failed → 503 (Cloud Tasks retries)")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="build-pmtiles job trigger failed",
+        )
+    log.info("artefact-rebuild: build-pmtiles job triggered")
+    return {"status": "ok", "job": "triggered"}

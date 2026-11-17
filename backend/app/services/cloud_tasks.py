@@ -3,8 +3,10 @@
 Two kinds of tasks, both POSTed to the worker service with an OIDC token:
 
 * the debounced community-artefact rebuild (``enqueue_artefact_rebuild`` /
-  ``request_community_rebuild``) — one constant task name, so a burst of
-  uploads collapses to a single PMTiles rebuild;
+  ``request_community_rebuild``) — one task name per time window, so a
+  burst of uploads collapses to a single task; its worker handler
+  (``/internal/artefacts/rebuild``) only triggers the build-pmtiles Cloud
+  Run Job, it never builds in-process;
 * the per-request heatmap export build (``enqueue_export_build``).
 
 Behavior:
@@ -30,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -40,12 +43,13 @@ logger = logging.getLogger(__name__)
 # The post-ingest PMTiles rebuild is a Cloud Task with:
 #
 #   1. **Its own queue + handler URL** (the worker service's
-#      ``/internal/artefacts/rebuild``).
+#      ``/internal/artefacts/rebuild``, which fires one run of the
+#      build-pmtiles Cloud Run Job).
 #   2. **Constant ``task_name``** so Cloud Tasks dedupes new enqueues
 #      onto the same task. A burst of 50 ingests in 5 min → exactly
 #      ONE rebuild fires (after the schedule time of the first task).
-#      This is the "no cron" event-driven dedup pattern documented in
-#      ``docs/migration-runbook.md`` § "Heatmap artefact freshness".
+#      Design history: ``docs/archive/migration-runbook.md`` § "Heatmap
+#      artefact freshness".
 #
 # Failure mode: if Cloud Tasks enqueue raises (queue not yet
 # terraformed, IAM glitch), we log + return without raising. The
@@ -54,8 +58,8 @@ logger = logging.getLogger(__name__)
 # upload over a downstream rebuild glitch.
 #
 # Local dev (TEST_MODE or no queue env): both enqueue functions short-
-# circuit to a no-op. The threading.Timer pattern in ingest.py runs
-# the rebuild locally so dev gets the same end result.
+# circuit to a no-op; uploads do not rebuild the local PMTiles (run
+# ``make pmtiles``).
 
 
 def _enqueue_with_const_name(
@@ -87,8 +91,8 @@ def _enqueue_with_const_name(
         ``"queued"`` on success, ``"deduped"`` if Cloud Tasks rejected
         the enqueue because the name is in use (this is the success
         case for our pattern), ``"inline"`` if Cloud Tasks isn't
-        configured (dev path; the threading.Timer in ingest.py handles
-        the actual rebuild), ``"failed"`` on any other error.
+        configured (dev path: nothing is enqueued), ``"failed"`` on any
+        other error.
     """
     if not _is_enabled_for_queue(queue_env, handler_url_env):
         return "inline"
@@ -174,18 +178,33 @@ def _resolve_queue_path_for(queue_env: str) -> str:
     return f"projects/{project}/locations/{location}/queues/{raw}"
 
 
-def enqueue_artefact_rebuild() -> str:
-    """Enqueue a debounced PMTiles + .fgraph rebuild.
+def artefact_rebuild_task(now: float | None = None) -> tuple[str, int]:
+    """``(task name, delay s)`` of the community rebuild for an upload at ``now``.
 
-    Constant task name ``"artefact-rebuild"`` + 5 min schedule. A
-    session of 50 uploads → one rebuild after the last upload. See
-    ``docs/migration-runbook.md`` § "Heatmap artefact freshness".
+    One name per ``ARTEFACT_REBUILD_SCHEDULE_S`` window (default 5 min),
+    scheduled just after the window closes: the uploads of a window collapse
+    onto ONE task (Cloud Tasks rejects a duplicate name → ``deduped``), and an
+    upload in a LATER window gets its own task. A constant name could not do
+    the latter: Cloud Tasks keeps an executed task's name reserved for about
+    an hour, so a 2nd upload 7 min after the 1st was silently deduped and
+    waited for the weekly backstop (same scheme as ``my-heatmap-{user}-{window}``).
     """
+    w = max(60, int(os.environ.get("ARTEFACT_REBUILD_SCHEDULE_S", "300")))
+    t = time.time() if now is None else now
+    window = int(t // w)
+    return f"artefact-rebuild-{window}", int((window + 1) * w - t) + 5
+
+
+def enqueue_artefact_rebuild() -> str:
+    """Enqueue the windowed community PMTiles rebuild task (see
+    :func:`artefact_rebuild_task`); its worker handler fires one build-pmtiles
+    job run. See ``docs/prod-ingestion-flow.md``."""
+    name, delay = artefact_rebuild_task()
     return _enqueue_with_const_name(
         queue_env="CLOUD_TASKS_ARTEFACT_QUEUE",
         handler_url_env="INTERNAL_ARTEFACT_HANDLER_URL",
-        task_name="artefact-rebuild",
-        schedule_seconds=int(os.environ.get("ARTEFACT_REBUILD_SCHEDULE_S", "300")),
+        task_name=name,
+        schedule_seconds=delay,
     )
 
 

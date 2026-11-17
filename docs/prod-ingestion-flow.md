@@ -1,6 +1,6 @@
 # Production ingestion flow — how an upload becomes a heatmap update
 
-Current flow (raw-trace display, `HEATMAP_DISPLAY_SOURCE=raw`). The previous
+Current flow (raw-trace display, the only mode in the code). The previous
 version of this doc described the matched pipeline (Valhalla, `heat_edges`,
 matview refresh) and is superseded; see [`archive/`](archive/) for history.
 System overview with diagram: [`architecture.md`](architecture.md).
@@ -12,17 +12,23 @@ file per request** (GPX, FIT, or a small `.zip` of them) with the sport and the
 consent fields (`contribute_heatmap`, `consent_version`, …).
 
 1. The activity is parsed and stored in `activities` (`source='manual_upload'`).
-2. When the request stored at least one community-eligible activity, the web
-   calls `request_community_rebuild()` (`backend/app/services/cloud_tasks.py`)
-   → `enqueue_artefact_rebuild()` → Cloud Task to the **worker**
-   `POST /internal/artefacts/rebuild` (const task name, debounced), which runs
-   `build_pmtiles.main()` in-process. `POST /gpx/upload` does the same. (The
-   former per-activity hop through `POST /internal/ingest/heat` is gone; that
-   route is a 200 no-op kept for one release so already-queued tasks drain.)
+2. `/gpx/upload`: when the request stored a community-eligible, dated
+   activity, the web calls `request_community_rebuild()`
+   (`backend/app/services/cloud_tasks.py`) → `enqueue_artefact_rebuild()` →
+   Cloud Task `artefact-rebuild-{window}`: one name per
+   `ARTEFACT_REBUILD_SCHEDULE_S` (300 s) window, scheduled just after it
+   closes, so the uploads of a burst collapse onto one task and a later upload
+   gets its own. (`/imports/files` does not enqueue it: its batch-end request
+   triggers the job directly, once per batch.) When it fires, the
+   **worker** `POST /internal/artefacts/rebuild` (OIDC) only calls
+   `run_jobs.trigger_build_pmtiles_job()` → one run of the
+   `common-trails-build-pmtiles-prod` Cloud Run Job (8Gi); a failed trigger
+   answers 503 so Cloud Tasks retries. The worker never builds in-process.
+   `POST /gpx/upload` does the same. (The former per-activity hop through
+   `POST /internal/ingest/heat` is gone.)
 3. On the **last file of a batch** (`rebuild_display=True`), the web also fires
-   the `common-trails-build-pmtiles-prod` Cloud Run Job
-   (`run_jobs.trigger_build_pmtiles_job`), debounced per instance by
-   `BUILD_PMTILES_DEBOUNCE_S` (600 s).
+   the build job directly (`run_jobs.trigger_build_pmtiles_job`), debounced per
+   instance by `BUILD_PMTILES_DEBOUNCE_S` (600 s).
 
 ## 2. Archives — signed upload + drain job
 
@@ -63,8 +69,11 @@ immutable snapshot → **pointer compare-and-set** on `heatmap-display.json`
 an older build never overwrites a newer pointer. Details:
 [`heatmap-pipeline.md`](heatmap-pipeline.md#pmtiles-versioning-convention-phase-3).
 
-There is **no periodic build-pmtiles scheduler**: a missed or debounced trigger
-leaves the map stale until the next trigger. Manual run:
+The only periodic run is a **weekly backstop**: Cloud Scheduler
+`common-trails-rebuild-pmtiles-daily-prod` (historical name) runs the build job
+every Saturday at 11:00 Europe/Paris (`0 11 * * 6`, asserted by
+`scripts/deploy-prod.sh` §4). A missed or debounced trigger leaves the map
+stale until the next trigger or that run. Manual run:
 [`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 
 ## 5. What the user sees

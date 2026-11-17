@@ -35,13 +35,13 @@ queue dropped in migration 0055, the export queue, `SKIP_OSM_FETCH`; Overpass is
 off in prod via `OVERPASS_ENABLED=false` alone). `SENTRY_DSN` (secret) and
 `DB_POOL_SIZE`/`DB_MAX_OVERFLOW` have since been added deliberately. Host
 subtleties the script encodes: the heatmap display gate is
-`HEATMAP_DISPLAY_SOURCE=raw` + `HEATMAP_MIN_USERS=1` (distinct-user floor, K=1
-during the beta) + `TRACE_MASK_METERS=200` (`HEATMAP_K_ANONYMITY=1` only feeds
-legacy matched-era paths), and the `INTERNAL_*_HANDLER_URL` vars point at
+`HEATMAP_MIN_USERS=1` (distinct-user floor, K=1
+during the beta) + `TRACE_MASK_METERS=200` (`HEATMAP_K_ANONYMITY=1` is only the
+`k_anonymity` value `/export` advertises), and the `INTERNAL_*_HANDLER_URL` vars point at
 a **`.run.app`** origin (their OIDC audience is bound to it), while the
 user-facing `FRONTEND_URL` uses `chemins-communs.fr`.
-Since the microservice split (§8) the HEAVY handler URLs (heat / artefact)
-point at the **worker** `.run.app` — `deploy-prod.sh` derives it from the
+Since the microservice split (§8) the handler URLs
+(`INTERNAL_ARTEFACT_HANDLER_URL`, `INTERNAL_MY_HEATMAP_HANDLER_URL`) point at the **worker** `.run.app` — `deploy-prod.sh` derives it from the
 project number.
 
 Re-verify + update the block whenever prod's env legitimately changes:
@@ -187,7 +187,7 @@ Since 2026-07-13 prod runs **two Cloud Run services from the SAME image**:
 | Service | Memory | Scale | Serves |
 |---|---|---|---|
 | `common-trails-api-prod` (WEB) | **512Mi** | min=1 (warm), max=1 | static frontend + light API (auth, `/imports` init/complete, heatmap/export reads, `me_activities`) |
-| `common-trails-worker-prod` (WORKER) | **2Gi** | min=0 (scale-to-zero), max=1 | the HEAVY Cloud Tasks handlers: `POST /internal/ingest/heat` (heat compute), `/internal/artefacts/rebuild` (PMTiles build) |
+| `common-trails-worker-prod` (WORKER) | **2Gi** | min=0 (scale-to-zero), max=1 | the Cloud Tasks handlers: `POST /internal/artefacts/rebuild` (fires one run of the `build-pmtiles` job, 8Gi — the worker never builds the community map) and `POST /internal/my-heatmap/rebuild` (per-user private PMTiles) |
 
 **Why.** The 2Gi + heavy CPU were forced by the in-request `/internal/*`
 handlers on the single service. Moving them to a scale-to-zero worker lets the
@@ -196,7 +196,7 @@ spins up (and only bills) when Cloud Tasks has something to do.
 
 **One image, one env, differs only by memory + traffic.** `deploy-prod.sh`
 applies the *identical* env-file + secrets to both. The split is realised by
-where `INTERNAL_HEAT_HANDLER_URL` / `INTERNAL_ARTEFACT_HANDLER_URL`
+where `INTERNAL_ARTEFACT_HANDLER_URL` / `INTERNAL_MY_HEATMAP_HANDLER_URL`
 point (the **worker** `.run.app`) — the
 web only *enqueues* (uses those vars to set the Cloud Tasks OIDC `audience`),
 the worker *receives + verifies* (compares the token `aud` against the SAME
@@ -221,15 +221,17 @@ deterministic form the live web URL already uses.
 curl -fsS https://chemins-communs.fr/healthz                                        # web  → 200
 curl -fsS https://common-trails-worker-prod-301616827398.europe-west1.run.app/healthz  # worker → 200
 
-# 2. The heat → artefact chain lands on the WORKER, not the web.
-#    Upload a file, then confirm the heavy work ran on the worker:
+# 2. The Cloud Tasks handlers land on the WORKER, not the web.
+#    Upload a file, wait ~5 min, then:
 gcloud run services logs read common-trails-worker-prod --region=europe-west1 --limit=50 \
-  | grep -E 'ingest/heat|artefacts/rebuild'      # expect handler logs HERE
+  | grep -E 'artefacts/rebuild|artefact-rebuild|my-heatmap/rebuild'   # expect handler logs HERE
 gcloud run services logs read common-trails-api-prod    --region=europe-west1 --limit=50 \
-  | grep -E 'ingest/heat|artefacts/rebuild'      # expect NOTHING (heavy work is off-web)
+  | grep -E 'artefacts/rebuild|my-heatmap/rebuild'      # expect NOTHING (handlers are off-web)
 
-# 3. Artefact freshness — the worker's /internal/artefacts/rebuild uploaded PMTiles:
-curl -sI https://storage.googleapis.com/common-trails-heatmap-prod/heatmap-display.pmtiles | grep -i last-modified
+# 3. The worker only FIRED the build: the community map is rebuilt by the
+#    build-pmtiles JOB — check its execution, then the pointer
+#    (docs/runbooks/heatmap-rebuild.md §1 and §4):
+gcloud run jobs executions list --job=common-trails-build-pmtiles-prod --region=europe-west1 --limit=3
 
 # 4. No 401s on the worker's /internal/* (would mean an audience mismatch):
 gcloud run services logs read common-trails-worker-prod --region=europe-west1 --limit=100 | grep -i 'OIDC\|401' || echo "no OIDC/401 — good"

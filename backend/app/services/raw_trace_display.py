@@ -681,7 +681,7 @@ def passes_per_user_cap() -> int:
 def heat_norm_pctl() -> float:
     """Resolve ``HEATMAP_HEAT_NORM_PCTL`` — the percentile (by cell) of the
     per-cell ``eff`` that maps to heat 1.0 (default ``DEFAULT_HEAT_NORM_PCTL``
-    = 99; ``100`` = the max). Outside (0, 100] / unparseable → default."""
+    = 99.9; ``100`` = the max). Outside (0, 100] / unparseable → default."""
     raw = os.environ.get("HEATMAP_HEAT_NORM_PCTL", "").strip()
     if not raw:
         return DEFAULT_HEAT_NORM_PCTL

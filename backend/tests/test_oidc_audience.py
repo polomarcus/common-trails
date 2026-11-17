@@ -15,10 +15,10 @@ the function is imported lazily inside ``verify_oidc_token`` as
 so patching ``google.oauth2.id_token.verify_oauth2_token`` is the correct target.
 
 Driven at the FastAPI client level so the whole dependency chain runs. The
-artefact-rebuild endpoint is used because its body has no request payload and
-the accepted-case assertion is "status != 401", which holds whether the
-rebuild succeeds (200) or raises (500); either way OIDC let the request past
-the gate.
+worker's my-heatmap rebuild endpoint is one of the OIDC-guarded
+``/internal/*`` routes (with ``/internal/artefacts/rebuild``); with ``MY_HEATMAP_FILES_ENABLED=false`` its body returns
+``{"status": "disabled"}`` right after the gate, so the accepted case proves
+OIDC let the request through without building anything.
 """
 from __future__ import annotations
 
@@ -27,7 +27,8 @@ from unittest.mock import patch
 
 import pytest
 
-_AUDIENCE = "https://example.invalid/internal/artefacts/rebuild"
+_PATH = "/internal/my-heatmap/rebuild"
+_AUDIENCE = f"https://example.invalid{_PATH}"
 _INVOKER_SA = "common-trails-tasks@example.iam.gserviceaccount.com"
 # A syntactically valid 3-segment JWT shape; the signature is irrelevant
 # because verify_oauth2_token is mocked. The split(" ",1) + bearer check
@@ -37,10 +38,12 @@ _TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ.c2ln"
 
 @pytest.fixture
 def prod_oidc_client(client, monkeypatch) -> Iterator:
-    """TEST_MODE=false so the real verify path runs, with the artefact-rebuild
-    audience and invoker SA configured."""
+    """TEST_MODE=false so the real verify path runs, with the my-heatmap
+    rebuild audience and invoker SA configured (feature flag off: the handler
+    body is a no-op once past the gate)."""
     monkeypatch.setenv("TEST_MODE", "false")
-    monkeypatch.setenv("INTERNAL_ARTEFACT_HANDLER_URL", _AUDIENCE)
+    monkeypatch.setenv("INTERNAL_MY_HEATMAP_HANDLER_URL", _AUDIENCE)
+    monkeypatch.setenv("MY_HEATMAP_FILES_ENABLED", "false")
     monkeypatch.setenv("CLOUD_TASKS_INVOKER_SA", _INVOKER_SA)
     yield client
 
@@ -57,8 +60,8 @@ def test_wrong_audience_rejected(prod_oidc_client):
 
     with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=_verify):
         resp = prod_oidc_client.post(
-            "/internal/artefacts/rebuild",
-            json={},
+            _PATH,
+            json={"user_id": "u-oidc"},
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
     assert resp.status_code == 401, (
@@ -78,8 +81,8 @@ def test_wrong_signer_email_rejected(prod_oidc_client):
 
     with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=_verify):
         resp = prod_oidc_client.post(
-            "/internal/artefacts/rebuild",
-            json={},
+            _PATH,
+            json={"user_id": "u-oidc"},
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
     assert resp.status_code == 401, (
@@ -91,9 +94,8 @@ def test_wrong_signer_email_rejected(prod_oidc_client):
 
 def test_correct_audience_and_signer_accepted(prod_oidc_client):
     """Correct audience + correct issuer + correct signer email → OIDC passes,
-    request reaches the handler body. We assert NOT 401 (and not 403) — the
-    handler may 200 or 500 depending on the rebuild, but the gate let it
-    through, which is the security guarantee under test."""
+    request reaches the handler body (flag off → 200 ``disabled``), which is
+    the security guarantee under test."""
 
     def _verify(token, request, audience):  # noqa: ARG001
         assert audience == _AUDIENCE
@@ -105,12 +107,12 @@ def test_correct_audience_and_signer_accepted(prod_oidc_client):
 
     with patch("google.oauth2.id_token.verify_oauth2_token", side_effect=_verify):
         resp = prod_oidc_client.post(
-            "/internal/artefacts/rebuild",
-            json={},
+            _PATH,
+            json={"user_id": "u-oidc"},
             headers={"Authorization": f"Bearer {_TOKEN}"},
         )
-    assert resp.status_code != 401, (
-        f"valid OIDC token must pass the gate (not 401), got {resp.status_code}: "
+    assert resp.status_code == 200, (
+        f"valid OIDC token must pass the gate, got {resp.status_code}: "
         f"{resp.text[:200]}"
     )
-    assert resp.status_code != 403
+    assert resp.json() == {"status": "disabled"}

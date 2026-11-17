@@ -69,7 +69,10 @@ data/gpx/
 
 # Internal AI-agent tooling / instructions — kept locally, not part of the
 # public repo (Claude Code config, BMAD workflow scaffolding, agent guides).
-.claude/
+# Exception: the project skills (.claude/skills/) are versioned so every
+# contributor's Claude Code session gets the same, reviewed knowledge.
+.claude/*
+!.claude/skills/
 _bmad/
 CLAUDE.md
 AGENTS.md

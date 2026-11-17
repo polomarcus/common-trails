@@ -3,7 +3,7 @@
 POST /imports/files — multipart upload with sport + contribute_heatmap.
 Activities are stored immediately; the community map (static PMTiles) is
 rebuilt out-of-band — ONE debounced rebuild request per upload burst
-(``cloud_tasks.request_community_rebuild``), nothing in TEST_MODE.
+(the batch-end build-pmtiles job trigger), nothing in TEST_MODE.
 """
 import logging
 import os
@@ -18,7 +18,6 @@ from app.config import VALID_SPORTS
 from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
-from app.services.cloud_tasks import request_community_rebuild
 from app.services.gpx_archive import archive_bundle, archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
 from app.services.run_jobs import trigger_ingest_archives_job
@@ -408,16 +407,18 @@ async def import_files(
                 file.filename or "upload.bin", content,
             )
 
-    # Ask ONCE for the community map rebuild when this request stored at least
-    # one new community-eligible activity (the debounced ``artefact-rebuild``
-    # Cloud Task — the per-activity heat-compute task in between is gone). In
-    # dev / TEST_MODE ``ingest_activity`` already ran inline; we report ``done``.
+    # ONE community rebuild per batch: the batch-end trigger below. No
+    # per-file ``artefact-rebuild`` Cloud Task on top of it — that task now
+    # runs the build-pmtiles JOB too, so both would launch two full 8 GiB
+    # builds for every contribution. In dev / TEST_MODE ``ingest_activity``
+    # already ran inline; we report ``done``. A non-final file of a batch
+    # reports ``deferred`` (its batch's last file asks for the rebuild).
     heatmap_status = "skipped"
     if sync_mode:
         if created_activity_ids:
             heatmap_status = "done"
-    elif created_activity_ids:
-        heatmap_status = request_community_rebuild()
+    elif created_activity_ids and not rebuild_display:
+        heatmap_status = "deferred"
 
     # Event-driven display refresh (best-effort). Without this, a loose GPX/FIT
     # contribution ingests into ``activities`` but never reaches the static
@@ -431,28 +432,32 @@ async def import_files(
     # count would MISS a batch whose last file happens to be a duplicate while
     # earlier files created activities. A wasted rebuild on an all-duplicate
     # batch is rare, idempotent, and cheap. Never raises (best-effort); no-ops
-    # locally / in TEST_MODE. ⚠️ There is NO scheduled rebuild backstop (only
-    # the archive drain runs daily): a missed/failed trigger leaves the display
-    # STALE until the next trigger (a later upload, or an archive drain that
-    # imports something). The build-pmtiles job runs on db-f1-micro with no
-    # tier bump.
+    # locally / in TEST_MODE. ⚠️ A missed/failed trigger leaves the display
+    # STALE until the next trigger (the ``artefact-rebuild`` task above, a
+    # later upload, an archive drain that imports something) or the WEEKLY
+    # backstop scheduler (Saturday 11:00 Europe/Paris). The build-pmtiles job
+    # runs on db-f1-micro with no tier bump.
     # Debounced (cost control): an abusive user looping tiny uploads must not
     # fire N expensive build-pmtiles JOBS. The FIRST trigger per cooldown
     # window fires; the rest are suppressed — a suppressed trigger delays the
-    # rebuild until the next trigger after the cooldown (there is no daily
-    # rebuild to catch it). See run_jobs.build_pmtiles_debounce_ok.
+    # rebuild until the next trigger after the cooldown (or the weekly
+    # backstop). See run_jobs.build_pmtiles_debounce_ok.
     if rebuild_display:
+        trigger = "failed"
         try:
             from app.services.run_jobs import (
                 build_pmtiles_debounce_ok,
                 trigger_build_pmtiles_job,
             )
             if build_pmtiles_debounce_ok():
-                trigger_build_pmtiles_job()
+                trigger = "queued" if trigger_build_pmtiles_job() else "failed"
             else:
+                trigger = "debounced"
                 log.info("build-pmtiles trigger debounced (cooldown active)")
         except Exception as exc:  # pragma: no cover - defense in depth
             log.warning("build-pmtiles trigger failed after /imports/files: %s", exc)
+        if not sync_mode and created_activity_ids:
+            heatmap_status = trigger
 
     return ImportResult(
         imported=imported,

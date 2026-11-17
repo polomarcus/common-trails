@@ -32,10 +32,10 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `HEATMAP_MIN_USERS` | `1` | — | `1` | Plancher d'utilisateurs distincts par cellule |
 | `TRACE_MASK_METERS` | `200` | — | `200` | Extrémités masquées (`trace_privacy.mask_meters`) |
 | `HEATMAP_RAW_BBOX` | vide | — | `-12;34;32;62` | Écarte les traces entièrement hors région (corrompues) |
-| `HEATMAP_K_ANONYMITY` | `2` | `1` | `1` | **Hérité** : ne filtre plus le rendu. Valeur `k_anonymity` annoncée par `/export` et champ `min_uc` de `stats.json` (`make pmtiles`, `/internal/artefacts/rebuild`) |
+| `HEATMAP_K_ANONYMITY` | `2` | `1` | `1` | **Hérité** : ne filtre plus le rendu. Valeur `k_anonymity` annoncée par `/export` et champ `min_uc` de `stats.json` (`make pmtiles`) |
 | `HEATMAP_RASTER_PYRAMID` | `false` | — | `true` | Publie la pyramide raster XYZ (calque) |
 | `HEATMAP_GCS_BUCKET` | vide (pas d'upload) | vide | `common-trails-heatmap-prod` | Bucket de publication PMTiles / pointeur |
-| `HEATMAP_ARTEFACTS_BUCKET` | vide | — | `common-trails-heatmap-prod` | Upload du rebuild worker ; doit égaler `HEATMAP_GCS_BUCKET` |
+| `HEATMAP_ARTEFACTS_BUCKET` | vide | — | `common-trails-heatmap-prod` | Bucket public déclaré : `MY_HEATMAP_BUCKET` ne doit pas l'égaler (`my_heatmap_files._resolve_bucket`) |
 | `HEATMAP_PUBLIC_BASE_URL` | `https://storage.googleapis.com/<bucket>` | — | `https://tiles.chemins-communs.fr` | Base des URLs publiées (pointeur, raster, emails) |
 | `HEATMAP_DEV_PMTILES_URL` | — | `http://localhost:3787/heatmap-display.pmtiles` | — | Redirection d'export en dev |
 | `HEATMAP_EXPORT_ISOLATED` | activé (sauf sous pytest) | — | — | Export raw dans un process enfant (`build_pmtiles._run_raw_export`) |
@@ -57,11 +57,12 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `GCP_PROJECT` / `GCP_REGION` | vide | — | `common-trails` / `europe-west1` | Déclenchement `jobs:run` (`backend/app/services/run_jobs.py`) |
 | `INGEST_ARCHIVES_JOB_NAME` | — | — | `common-trails-ingest-pending-archives-prod` | Job déclenché à `/imports/strava-archive/complete` |
 | `BUILD_PMTILES_JOB_NAME` | — | — | `common-trails-build-pmtiles-prod` | Job de build déclenché après import |
-| `BUILD_PMTILES_DEBOUNCE_S` | `600` | — | — | Anti-rafale du déclencheur `/imports/files` (par instance) |
+| `BUILD_PMTILES_DEBOUNCE_S` | `600` | — | — | Anti-rafale du déclencheur direct (fin de lot `/imports/files`, changement de sport), par instance |
 | `DRAIN_PMTILES_REPING_S` | `1800` | — | — | Intervalle min. entre deux pings de build dans un même drain |
 | `CLOUD_TASKS_LOCATION`, `CLOUD_TASKS_INVOKER_SA` | vide | — | `europe-west1`, SA invoker | Vides → rien n'est mis en file (pas de Cloud Tasks) |
-| `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | URL `.run.app` du **worker** | Audience OIDC du rebuild de la carte |
-| `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks |
+| `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | `<worker>/internal/artefacts/rebuild` | Cible + audience OIDC de la tâche `artefact-rebuild` (le worker lance le job `build-pmtiles`) |
+| `ARTEFACT_REBUILD_SCHEDULE_S` | `300` | — | — | Fenêtre de la tâche `artefact-rebuild-{fenêtre}` : les uploads d'une fenêtre = une tâche, lancée à sa fin |
+| `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks (`artefact-rebuild` et rebuilds « Ma heatmap ») |
 
 Les URLs `.run.app` doivent correspondre octet pour octet à l'audience OIDC
 (voir [`prod-deploy.md`](prod-deploy.md) §8).

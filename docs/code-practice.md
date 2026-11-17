@@ -84,7 +84,6 @@ Built up over PR #243 → #247 → ongoing.
 ### What we have today
 
 - **Sentry** for backend + frontend errors. Coord-scrub hook (`backend/app/sentry_scrub.py`) redacts raw lat/lon from URLs, span names, transactions, breadcrumbs. PR #243.
-- **Heat-quality alerts** (`backend/app/services/heat_quality.py`) — matched-era (they measure `heat_edges` continuity); not meaningful in raw mode.
 - **CD post-deploy healthchecks** in `deploy-gcp.yml` (web `/api/health/live`, worker `/readyz`).
 - **`/admin` freshness panel** fed by `heatmap_metrics` (see [`prod-deploy.md`](prod-deploy.md) §6-7).
 - **Cloud Logging** dashboards for `cloud_run_revision` + `cloud_run_job` error rates.

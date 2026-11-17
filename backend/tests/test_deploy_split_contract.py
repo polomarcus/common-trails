@@ -7,8 +7,8 @@ fragile part is the OIDC-audience wiring — Cloud Tasks signs `audience =
 INTERNAL_<x>_HANDLER_URL` (set by the WEB) and the WORKER verifies the token's
 `aud` against the SAME env var. If a future edit points a heavy handler back at
 the WEB url, or changes the WEB url host, or drops a handler env the code still
-verifies against, the heat/artefact chain silently 401s or lands on the
-wrong (512Mi) service.
+verifies against, the Cloud Tasks chain (artefact-rebuild → build-pmtiles
+job, my-heatmap rebuild) silently 401s or lands on the wrong (512Mi) service.
 
 These tests fail on exactly those regressions. They parse the real deploy
 script + the real handler sources (no inline mirror of behaviour), so they pin
@@ -190,14 +190,15 @@ def test_deploy_sets_every_env_the_handlers_verify(deploy_sh: str):
     'not configured for OIDC verification' path) — or a rename drifting the
     two ends apart. Parses the real handler sources, not a copy."""
     verified_envs: set[str] = set()
-    for src in _API_DIR.glob("internal_*.py"):
+    for src in _API_DIR.glob("*.py"):
         text = src.read_text(encoding="utf-8")
         verified_envs.update(re.findall(r'audience_env="([A-Z0-9_]+)"', text))
     # NOTE: export.py used to host /internal/export/build, but the on-demand /
     # async export pipeline was removed (exports are pre-computed artifacts
     # only), so it no longer verifies any audience env.
-    assert _HEAVY_HANDLER_ENVS[0] in verified_envs, (
-        "sanity: artefact handler should verify INTERNAL_ARTEFACT_HANDLER_URL"
+    assert set(_HEAVY_HANDLER_ENVS) <= verified_envs, (
+        "sanity: the artefact and my-heatmap handlers should verify "
+        f"{_HEAVY_HANDLER_ENVS}, found {sorted(verified_envs)}"
     )
 
     deploy_keys = set(re.findall(r'^([A-Z0-9_]+):\s*"', deploy_sh, re.MULTILINE))
