@@ -16,7 +16,7 @@ import os
 import threading
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func
 from sqlalchemy import text as sa_text
@@ -565,6 +565,37 @@ def _promote_activity_to_community(
         act.file_hash = activity_data["file_hash"]
 
 
+# Plausible activity dates. A device with a wrong clock writes impossible
+# dates — a ride "in 2030" (seen in prod 2026-11), the FIT epoch (1989-12-31)
+# of a watch that never got a GPS fix, a GPS week rollover (~19.6 years
+# early). Stored as-is they pollute every date-based view (newest-first lists,
+# "since N days" exports) and publish a wrong date. Outside the window the
+# date is dropped: the activity is stored UNDATED (kept in "Ma heatmap", off
+# the public map until the rider fixes it) — never guessed.
+MIN_PLAUSIBLE_ACTIVITY_DATE = datetime(2000, 1, 1, tzinfo=UTC)
+FUTURE_DATE_TOLERANCE = timedelta(days=1)  # time zones / clock drift
+
+
+def plausible_activity_date(value, *, now: datetime | None = None) -> datetime | None:
+    """``value`` (a datetime, naive = UTC, or an ISO 8601 string) when it is a
+    plausible activity date, else ``None``. Never raises."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
+    if aware < MIN_PLAUSIBLE_ACTIVITY_DATE or aware > now + FUTURE_DATE_TOLERANCE:
+        logger.warning("implausible activity date %s — stored undated", aware.date().isoformat())
+        return None
+    return value
+
+
 def ingest_activity(
     user_id: str,
     activity_data: dict,
@@ -595,6 +626,9 @@ def ingest_activity(
     provider = activity_data.get("provider", "file")
     provider_activity_id = activity_data.get("provider_activity_id")
     file_hash = activity_data.get("file_hash")
+    # ISO strings (Strava) → datetime, impossible dates → undated. Mutates the
+    # dict so the backfill, the dedup window and the INSERT below all see it.
+    activity_data["activity_date"] = plausible_activity_date(activity_data.get("activity_date"))
 
     db = SessionLocal()
     try:
@@ -638,14 +672,7 @@ def ingest_activity(
         # Activity() INSERT below also gets the parsed datetime (the
         # Postgres column is `timestamp with time zone`; a malformed
         # string would otherwise crash the INSERT).
-        raw_date = activity_data.get("activity_date")
-        if isinstance(raw_date, str):
-            try:
-                activity_data["activity_date"] = datetime.fromisoformat(
-                    raw_date.replace("Z", "+00:00")
-                )
-            except ValueError:
-                activity_data["activity_date"] = None
+        # (Parsed and plausibility-checked at the top of this function.)
         activity_date = activity_data.get("activity_date")
         distance_m = activity_data.get("distance_m")
         if activity_date and distance_m and distance_m > 0:
