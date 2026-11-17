@@ -31,7 +31,7 @@ flowchart LR
     U -->|"zip : URL signée"| B[(Bucket uploads)]
     U -->|"POST /imports/strava-archive/complete"| W
     W -->|activities| DB[(Cloud SQL)]
-    W -->|"Cloud Tasks artefact-rebuild (5 min, nom constant)"| K[Service worker]
+    W -->|"Cloud Tasks artefact-rebuild-{fenêtre} (5 min)"| K[Service worker]
     K -->|"jobs:run"| BP
     S[Cloud Scheduler] -->|"samedi 11:00"| BP
     W -->|"jobs:run"| D[Job ingest-pending-archives]
@@ -75,10 +75,10 @@ flowchart LR
    [`runbooks/display-geometry-cache.md`](runbooks/display-geometry-cache.md).
 
 **Déclencheurs du build** — événementiels, tous par `jobs:run` sur le job
-`build-pmtiles` (`run_jobs.trigger_build_pmtiles_job`) : chaque upload
-(`/gpx/upload`, `/imports/files`) met en file la tâche Cloud Tasks
-`artefact-rebuild` (nom constant, 5 min : une rafale = une tâche), que le
-worker transforme en `jobs:run` via `/internal/artefacts/rebuild` ; fin de lot
+`build-pmtiles` (`run_jobs.trigger_build_pmtiles_job`) : `/gpx/upload` met en
+file la tâche Cloud Tasks `artefact-rebuild-{fenêtre}` (un nom par fenêtre de
+5 min : une rafale = une tâche, un upload plus tard = une nouvelle tâche), que
+le worker transforme en `jobs:run` via `/internal/artefacts/rebuild` ; fin de lot
 `/imports/files` et changements de sport (anti-rafale
 `BUILD_PMTILES_DEBOUNCE_S`) ; drain d'archive ; suppressions d'activité /
 fusion de comptes. Filet de sécurité **hebdomadaire** seulement (samedi 11:00 heure de Paris,

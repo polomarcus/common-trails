@@ -35,7 +35,8 @@ Repo `polomarcus/common-trails` is **PUBLIC** (AGPL-3.0 code, ODbL data) and
   you paste — no user ids, emails, names, GPS coordinates, traces, activity
   counts per named person. Never commit `data/` exports (`data/*.zip`,
   `data/strava-export*`), `activite_bug.gpx`, `.env*` with values, or anything
-  under `.claude/` (gitignored, local only). Security fixes: discreet PR wording.
+  under `.claude/` EXCEPT `.claude/skills/` (versioned on purpose; the rest is
+  gitignored, local only). Security fixes: discreet PR wording.
 - **Zero surprises**: run the full relevant suite, not only the new tests; don't
   say "done/works" before it is verified on the real target (CI green + CD green +
   prod check). Say exactly what was and wasn't verified.

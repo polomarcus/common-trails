@@ -15,8 +15,8 @@ the function is imported lazily inside ``verify_oidc_token`` as
 so patching ``google.oauth2.id_token.verify_oauth2_token`` is the correct target.
 
 Driven at the FastAPI client level so the whole dependency chain runs. The
-worker's my-heatmap rebuild endpoint is the remaining OIDC-guarded
-``/internal/*`` route; with ``MY_HEATMAP_FILES_ENABLED=false`` its body returns
+worker's my-heatmap rebuild endpoint is one of the OIDC-guarded
+``/internal/*`` routes (with ``/internal/artefacts/rebuild``); with ``MY_HEATMAP_FILES_ENABLED=false`` its body returns
 ``{"status": "disabled"}`` right after the gate, so the accepted case proves
 OIDC let the request through without building anything.
 """

@@ -12,11 +12,14 @@ file per request** (GPX, FIT, or a small `.zip` of them) with the sport and the
 consent fields (`contribute_heatmap`, `consent_version`, …).
 
 1. The activity is parsed and stored in `activities` (`source='manual_upload'`).
-2. When the request stored at least one community-eligible activity, the web
-   calls `request_community_rebuild()` (`backend/app/services/cloud_tasks.py`)
-   → `enqueue_artefact_rebuild()` → Cloud Task `artefact-rebuild` with a
-   **constant name**, scheduled `ARTEFACT_REBUILD_SCHEDULE_S` (300 s) out: the
-   uploads of a burst collapse onto that one task. When it fires, the
+2. `/gpx/upload`: when the request stored a community-eligible, dated
+   activity, the web calls `request_community_rebuild()`
+   (`backend/app/services/cloud_tasks.py`) → `enqueue_artefact_rebuild()` →
+   Cloud Task `artefact-rebuild-{window}`: one name per
+   `ARTEFACT_REBUILD_SCHEDULE_S` (300 s) window, scheduled just after it
+   closes, so the uploads of a burst collapse onto one task and a later upload
+   gets its own. (`/imports/files` does not enqueue it: its batch-end request
+   triggers the job directly, once per batch.) When it fires, the
    **worker** `POST /internal/artefacts/rebuild` (OIDC) only calls
    `run_jobs.trigger_build_pmtiles_job()` → one run of the
    `common-trails-build-pmtiles-prod` Cloud Run Job (8Gi); a failed trigger

@@ -48,9 +48,9 @@ is dropped in prod. It is kept as reference only. Overall architecture:
   resolved through the pointer by `frontend/lib/cdn-cache.ts`.
 - **Triggers:** event-driven, every one ending in a `jobs:run` on the
   `build-pmtiles` Cloud Run Job (`run_jobs.trigger_build_pmtiles_job`):
-  - uploads (`/gpx/upload`, each `/imports/files` request) → Cloud Task
-    `artefact-rebuild` (constant name, scheduled 5 min out, so a burst
-    collapses onto one task) → worker `POST /internal/artefacts/rebuild`,
+  - `/gpx/upload` → Cloud Task `artefact-rebuild-{window}` (one name per
+    5-min window, scheduled when it closes, so a burst collapses onto one
+    task) → worker `POST /internal/artefacts/rebuild`,
     which only fires the job (503 → Cloud Tasks retries);
   - `/imports/files` batch end and sport changes → the job directly, debounced
     per instance by `BUILD_PMTILES_DEBOUNCE_S`;

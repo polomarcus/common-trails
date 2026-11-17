@@ -61,7 +61,7 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `DRAIN_PMTILES_REPING_S` | `1800` | — | — | Intervalle min. entre deux pings de build dans un même drain |
 | `CLOUD_TASKS_LOCATION`, `CLOUD_TASKS_INVOKER_SA` | vide | — | `europe-west1`, SA invoker | Vides → rien n'est mis en file (pas de Cloud Tasks) |
 | `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | `<worker>/internal/artefacts/rebuild` | Cible + audience OIDC de la tâche `artefact-rebuild` (le worker lance le job `build-pmtiles`) |
-| `ARTEFACT_REBUILD_SCHEDULE_S` | `300` | — | — | Délai de la tâche `artefact-rebuild` (nom constant : une rafale d'uploads = une tâche) |
+| `ARTEFACT_REBUILD_SCHEDULE_S` | `300` | — | — | Fenêtre de la tâche `artefact-rebuild-{fenêtre}` : les uploads d'une fenêtre = une tâche, lancée à sa fin |
 | `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks (`artefact-rebuild` et rebuilds « Ma heatmap ») |
 
 Les URLs `.run.app` doivent correspondre octet pour octet à l'audience OIDC

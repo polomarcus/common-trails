@@ -1,10 +1,9 @@
 """Internal endpoint called by Cloud Tasks for the post-ingest community rebuild.
 
 - ``POST /internal/artefacts/rebuild``
-    Fired by the constant-named ``artefact-rebuild`` Cloud Task
-    (``cloud_tasks.enqueue_artefact_rebuild``), scheduled 5 min after the
-    first upload of a burst: the constant name collapses the burst into ONE
-    task. The handler only asks for one run of the ``build-pmtiles`` Cloud
+    Fired by the ``artefact-rebuild-{window}`` Cloud Task
+    (``cloud_tasks.enqueue_artefact_rebuild``), scheduled when its 5-min
+    window closes: the uploads of a window collapse into ONE task. The handler only asks for one run of the ``build-pmtiles`` Cloud
     Run Job (``run_jobs.trigger_build_pmtiles_job``, 8 GiB) — it NEVER builds
     the heatmap itself. (It used to run ``build_pmtiles.main`` in-process on
     the 2 GiB worker, which the full build outgrew, and re-uploaded the

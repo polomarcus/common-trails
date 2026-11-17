@@ -1,7 +1,7 @@
 """``POST /internal/artefacts/rebuild`` only fires the build-pmtiles JOB.
 
-The ``artefact-rebuild`` Cloud Task (constant name, 5 min after the first
-upload of a burst) lands on the worker. The handler used to run the FULL
+The ``artefact-rebuild-{window}`` Cloud Task (one per 5-min window of
+uploads) lands on the worker. The handler used to run the FULL
 community build in-process on the 2 GiB worker (``build_pmtiles.main``) and
 re-upload the mutable PMTiles outside the job's compare-and-set publish. It
 now asks for one run of the 8 GiB ``build-pmtiles`` Cloud Run Job and returns:

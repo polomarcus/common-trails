@@ -1,8 +1,11 @@
 """The heat-compute hop is gone: uploads request the community rebuild directly.
 
-* ``/gpx/upload`` and ``/imports/files`` (prod path, TEST_MODE off) call
-  ``cloud_tasks.request_community_rebuild`` — the debounced ``artefact-rebuild``
-  Cloud Task — and never create a task for ``/internal/ingest/heat``.
+* ``/gpx/upload`` (prod path, TEST_MODE off) calls
+  ``cloud_tasks.request_community_rebuild`` — the windowed ``artefact-rebuild``
+  Cloud Task — and never creates a task for ``/internal/ingest/heat``.
+* ``/imports/files`` asks for ONE rebuild per batch, the batch-end job
+  trigger, and never enqueues that task on top (it would launch a second full
+  build: the task's handler runs the same job).
 * ``/internal/ingest/heat`` (kept one release as a 200 no-op) is removed.
 """
 import zlib
@@ -40,16 +43,22 @@ def _make_gpx_bytes(name: str = "Test", n_points: int = 10, *, dated: bool = Tru
 
 @pytest.fixture
 def rebuild_requests(monkeypatch):
-    """Record every rebuild request made by the API modules; no Cloud Tasks."""
+    """Record every rebuild request made by the API modules — the Cloud Task
+    (``"rebuild"``) and the direct job trigger (``"job"``); nothing real."""
     calls: list[str] = []
 
     def _fake() -> str:
         calls.append("rebuild")
         return "queued"
 
+    def _fake_job() -> bool:
+        calls.append("job")
+        return True
+
     monkeypatch.setattr("app.api.gpx_upload.request_community_rebuild", _fake)
-    monkeypatch.setattr("app.api.imports.request_community_rebuild", _fake)
     monkeypatch.setattr("app.services.cloud_tasks.request_community_rebuild", _fake)
+    monkeypatch.setattr("app.services.run_jobs.trigger_build_pmtiles_job", _fake_job)
+    monkeypatch.setattr("app.services.run_jobs.build_pmtiles_debounce_ok", lambda *a, **k: True)
     return calls
 
 
@@ -122,8 +131,24 @@ class TestUploadsRequestRebuildDirectly:
         )
         assert resp.status_code == 202, resp.text
         assert resp.json()["imported"] == 1
-        assert rebuild_requests == ["rebuild"]
+        # ONE rebuild: the batch-end job trigger — never the Cloud Task on top
+        # (its handler runs the same job: two full builds per contribution).
+        assert rebuild_requests == ["job"]
         assert resp.json()["heatmap_status"] == "queued"
+
+    def test_imports_files_non_final_file_defers_to_the_batch_end(
+        self, client, auth_headers, rebuild_requests, prod_upload_path,
+    ):
+        resp = client.post(
+            "/imports/files",
+            headers=auth_headers,
+            files={"file": ("imp2.gpx", _make_gpx_bytes("deferred rebuild imports"), "application/gpx+xml")},
+            data={"sport": "road", "contribute_heatmap": "true", "rebuild_display": "false", **_CONSENT},
+        )
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["imported"] == 1
+        assert rebuild_requests == []
+        assert resp.json()["heatmap_status"] == "deferred"
 
 
 class TestRequestCommunityRebuild:
@@ -150,8 +175,23 @@ class TestRequestCommunityRebuild:
         assert cloud_tasks.request_community_rebuild() == "queued"
         assert seen["queue_env"] == "CLOUD_TASKS_ARTEFACT_QUEUE"
         assert seen["handler_url_env"] == "INTERNAL_ARTEFACT_HANDLER_URL"
-        assert seen["task_name"] == "artefact-rebuild"
-        assert seen["schedule_seconds"] > 0  # debounce window
+        assert seen["task_name"].startswith("artefact-rebuild-")
+        assert 0 < seen["schedule_seconds"] <= 305  # fires when its window closes
+
+    def test_task_name_is_per_window(self, monkeypatch):
+        """Uploads of one window share ONE task; a later upload gets its own.
+        A constant name could not: Cloud Tasks keeps a run task's name
+        reserved (~1 h), so a 2nd upload 7 min after the 1st was swallowed."""
+        from app.services import cloud_tasks
+
+        monkeypatch.delenv("ARTEFACT_REBUILD_SCHEDULE_S", raising=False)
+        t0 = 1_800_000_000.0  # a window boundary (multiple of 300 s)
+        n_a, d_a = cloud_tasks.artefact_rebuild_task(t0 + 10)
+        n_b, d_b = cloud_tasks.artefact_rebuild_task(t0 + 290)
+        n_c, _ = cloud_tasks.artefact_rebuild_task(t0 + 7 * 60)
+        assert n_a == n_b  # same burst → one task
+        assert n_c != n_a  # 7 min later → a new task, never deduped
+        assert (d_a, d_b) == (295, 15)  # both fire 5 s after the window closes
 
     def test_never_raises(self, monkeypatch):
         from app.services import cloud_tasks

@@ -155,10 +155,10 @@ by `/export/heatmap` only).
 
 ## Rebuild triggers (prod)
 
-- `/gpx/upload` and every `/imports/files` request that stored a community-eligible
-  activity → `cloud_tasks.request_community_rebuild()` → Cloud Task `artefact-rebuild`
-  (CONSTANT name, scheduled `ARTEFACT_REBUILD_SCHEDULE_S` = 300 s out: a burst collapses
-  onto one task) → **worker** `POST /internal/artefacts/rebuild` (OIDC,
+- `/gpx/upload` (community-eligible, dated) → `cloud_tasks.request_community_rebuild()`
+  → Cloud Task `artefact-rebuild-{window}` (one name per `ARTEFACT_REBUILD_SCHEDULE_S`
+  = 300 s window, scheduled just after it closes: a burst collapses onto one task, a
+  later upload gets its own) → **worker** `POST /internal/artefacts/rebuild` (OIDC,
   `INTERNAL_ARTEFACT_HANDLER_URL`) → `run_jobs.trigger_build_pmtiles_job()` only
   (200 `{"status":"ok","job":"triggered"}`, 503 on trigger failure → Cloud Tasks
   retries). The worker never builds in-process (it did until 2026-11; the 2Gi worker
@@ -310,13 +310,13 @@ resources may still exist (Cloud Tasks queue `common-trails-heat-compute-prod`, 
 
 ## Known quirks (as of 2026-11-17, not fixed)
 
-- `artefact-rebuild` is ONE constant task name with no time suffix. Per the Cloud
-  Tasks docs a task name stays reserved for a while after the task ran or was
-  deleted (~1 h, more for queue.yaml queues), so an upload shortly after a run is
-  deduped with NO new task (`deduped` is reported as `queued`). The `/imports/files`
-  batch-end trigger and the weekly run cover it; a lone `/gpx/upload` waits.
-  Unverified on the live queue. `my_heatmap_files` avoids it with
-  `my-heatmap-{user}-{window}` names.
+- The direct job triggers (`/imports/files` batch end, sport changes) are
+  debounced IN MEMORY, per instance, leading edge (`BUILD_PMTILES_DEBOUNCE_S`,
+  10 min): a second batch within 10 min of the first on the same instance gets no
+  rebuild of its own and waits for the next trigger or the weekly run. (The
+  `artefact-rebuild` task used a constant name until 2026-11-17; Cloud Tasks keeps
+  a run task's name reserved ~1 h, which silently swallowed later uploads — now
+  windowed, like `my-heatmap-{user}-{window}`.)
 - `aggregate_raw_for_export` has no caller left (exports are static artifacts).
 - `cloud_tasks.enqueue_export_build` has no caller and imports a
   `process_export_build` that no longer exists (dead since the async export went).
