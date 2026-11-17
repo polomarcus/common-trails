@@ -11,6 +11,9 @@ Event-driven kicks for prod Cloud Run Jobs:
   appears on the static ``heatmap-display.pmtiles`` served from GCS. Without
   this a contribution lands in ``activities`` but never reaches the map until
   the next unrelated rebuild.
+* ``request_community_rebuild`` — the same trigger behind the per-instance
+  debounce, with an outcome string for the upload endpoints (``/gpx/upload``,
+  ``/imports/files`` batch end).
 
 Auth mirrors ``app.api.admin._fetch_executions``: the in-container GCE metadata
 server mints an access token for the calling runtime SA. This only works on
@@ -30,11 +33,11 @@ log = logging.getLogger(__name__)
 # fresh contribution appears on the map — but nothing stopped an abusive
 # (registered) user looping tiny 1-point uploads to fire N rebuild JOBS ($$$).
 # Debounce the trigger to at most once per cooldown window: the FIRST trigger in
-# a window fires, the rest are suppressed. ⚠️ There is NO scheduled rebuild
-# backstop (only the archive drain runs daily), so a suppressed trigger leaves
-# the display stale until the NEXT trigger after the cooldown (a later upload,
-# or an archive drain that imports something) — delayed, but only dropped if no
-# trigger ever follows. Process-local (per Cloud Run instance) — good enough to defang the
+# a window fires, the rest are suppressed. ⚠️ There is no trailing ping: a
+# suppressed trigger leaves the display stale until the NEXT trigger after the
+# cooldown (a later upload, or an archive drain that imports something) or the
+# weekly backstop scheduler (Saturday 11:00 Europe/Paris, deploy-prod.sh §4).
+# Process-local (per Cloud Run instance) — good enough to defang the
 # per-user request loop; the goal is cost-bounding, not global exactness.
 # Cooldown is env-overridable via BUILD_PMTILES_DEBOUNCE_S (default 600s = 10min).
 _build_pmtiles_last_trigger: float = 0.0
@@ -195,11 +198,40 @@ def trigger_build_pmtiles_job() -> bool:
 
     Returns True on a 2xx from ``jobs:run``, else False. NEVER raises — every
     I/O failure is logged and swallowed so the archive drain stays best-effort
-    (the ingested activities are already committed). ⚠️ A missed ping has NO
-    scheduled backstop: the display stays stale until the NEXT trigger — a later
-    upload's ping, the next drain that imports something, or a manual rebuild.
+    (the ingested activities are already committed). ⚠️ A missed ping leaves
+    the display stale until the NEXT trigger — a later upload's ping, the next
+    drain that imports something, a manual rebuild, or at worst the weekly
+    backstop scheduler (Saturday 11:00 Europe/Paris).
     The build-pmtiles job is proven to run on db-f1-micro with no tier bump.
     """
     if not _is_enabled("BUILD_PMTILES_JOB_NAME"):
         return False
     return _trigger_job(os.environ["BUILD_PMTILES_JOB_NAME"], "build-pmtiles")
+
+
+def request_community_rebuild() -> str:
+    """Ask for the community PMTiles to be rebuilt after an upload. Never raises.
+
+    Debounced ``trigger_build_pmtiles_job`` (see ``build_pmtiles_debounce_ok``):
+    the build runs in the ``build-pmtiles`` Cloud Run Job, never in a web or
+    worker request. Returns the value the upload endpoints surface as
+    ``heatmap_status``:
+
+    * ``"queued"`` — a job run was requested;
+    * ``"debounced"`` — a run was already requested on this instance within the
+      cooldown; this upload waits for the next trigger (or the weekly backstop);
+    * ``"inline"`` — the job trigger is not configured (dev / tests): nothing
+      to do;
+    * ``"failed"`` — the trigger was configured but the request failed; the
+      activity is stored, the display catches up on the next rebuild.
+    """
+    try:
+        if not build_pmtiles_debounce_ok():
+            log.info("build-pmtiles trigger debounced (cooldown active)")
+            return "debounced"
+        if trigger_build_pmtiles_job():
+            return "queued"
+        return "failed" if _is_enabled("BUILD_PMTILES_JOB_NAME") else "inline"
+    except Exception:  # defense in depth: an upload never fails on this
+        log.warning("build-pmtiles trigger failed", exc_info=True)
+        return "failed"

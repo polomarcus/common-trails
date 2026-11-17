@@ -1,10 +1,11 @@
 """Cloud Tasks client — enqueue background jobs for the API service.
 
-Two kinds of tasks, both POSTed to the worker service with an OIDC token:
+Tasks are POSTed to the worker service with an OIDC token:
 
-* the debounced community-artefact rebuild (``enqueue_artefact_rebuild`` /
-  ``request_community_rebuild``) — one constant task name, so a burst of
-  uploads collapses to a single PMTiles rebuild;
+* the per-user "Ma heatmap" rebuild (``my_heatmap_files.schedule_rebuild`` →
+  ``_enqueue_with_const_name`` on ``CLOUD_TASKS_ARTEFACT_QUEUE``, handler
+  ``INTERNAL_MY_HEATMAP_HANDLER_URL``) — a constant task name per user and
+  window, so a burst of writes collapses to one rebuild;
 * the per-request heatmap export build (``enqueue_export_build``).
 
 Behavior:
@@ -12,18 +13,20 @@ Behavior:
 - Production → a Cloud Task is created on the configured queue.
 
 Env vars:
-- ``CLOUD_TASKS_ARTEFACT_QUEUE`` / ``INTERNAL_ARTEFACT_HANDLER_URL`` and
-  ``CLOUD_TASKS_EXPORT_QUEUE`` / ``INTERNAL_EXPORT_BUILD_HANDLER_URL`` — queue
-  (fully-qualified ``projects/{p}/locations/{r}/queues/{q}`` **or** a bare
-  queue id, in which case ``GCP_PROJECT`` and ``CLOUD_TASKS_LOCATION`` must be
-  set) and the full HTTPS handler URL for each task type.
+- a queue env (fully-qualified ``projects/{p}/locations/{r}/queues/{q}``
+  **or** a bare queue id, in which case ``GCP_PROJECT`` and
+  ``CLOUD_TASKS_LOCATION`` must be set) and the full HTTPS handler URL env,
+  per task type.
 - ``CLOUD_TASKS_INVOKER_SA`` — service-account email Cloud Tasks signs the
   OIDC token as; the receiver verifies signature + audience.
 
-(The per-activity ``heat-compute`` task — ``enqueue_heat_compute`` →
-``/internal/ingest/heat`` — was removed with the matched pipeline: uploads now
-request the rebuild directly. ``CLOUD_TASKS_QUEUE`` / ``INTERNAL_HEAT_HANDLER_URL``
-are no longer read here.)
+The COMMUNITY map is not rebuilt through Cloud Tasks: uploads ask for the
+build-pmtiles Cloud Run Job (``run_jobs.request_community_rebuild``). The
+former ``artefact-rebuild`` task → worker ``/internal/artefacts/rebuild``
+(``INTERNAL_ARTEFACT_HANDLER_URL``) ran the full build inside the 2 GiB worker
+and was removed, like the per-activity ``heat-compute`` task →
+``/internal/ingest/heat`` before it (``CLOUD_TASKS_QUEUE`` /
+``INTERNAL_HEAT_HANDLER_URL``).
 """
 from __future__ import annotations
 
@@ -35,27 +38,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-# ── Artefact rebuild dispatch ────────────────────────────────────────
+# ── Constant-name dispatch (debounced rebuilds) ──────────────────────
 #
-# The post-ingest PMTiles rebuild is a Cloud Task with:
+# A **constant ``task_name``** makes Cloud Tasks dedupe new enqueues onto
+# the same task: a burst of writes inside the window → exactly ONE task
+# fires (after the schedule time of the first one).
 #
-#   1. **Its own queue + handler URL** (the worker service's
-#      ``/internal/artefacts/rebuild``).
-#   2. **Constant ``task_name``** so Cloud Tasks dedupes new enqueues
-#      onto the same task. A burst of 50 ingests in 5 min → exactly
-#      ONE rebuild fires (after the schedule time of the first task).
-#      This is the "no cron" event-driven dedup pattern documented in
-#      ``docs/migration-runbook.md`` § "Heatmap artefact freshness".
+# Failure mode: if Cloud Tasks enqueue raises (queue missing, IAM glitch),
+# we log + return without raising. The caller's write still succeeded; the
+# rebuild is just delayed until the next attempt.
 #
-# Failure mode: if Cloud Tasks enqueue raises (queue not yet
-# terraformed, IAM glitch), we log + return without raising. The
-# ingest itself still succeeded; the artefact rebuild is just delayed
-# until the next ingest re-attempts. Better than failing a user's
-# upload over a downstream rebuild glitch.
-#
-# Local dev (TEST_MODE or no queue env): both enqueue functions short-
-# circuit to a no-op. The threading.Timer pattern in ingest.py runs
-# the rebuild locally so dev gets the same end result.
+# Local dev (TEST_MODE or no queue env): short-circuits to ``"inline"`` and
+# the caller runs its own local fallback (``my_heatmap_files._schedule_local``).
 
 
 def _enqueue_with_const_name(
@@ -80,15 +74,14 @@ def _enqueue_with_const_name(
             ``{queue_path}/tasks/{task_name}``.
         schedule_seconds: seconds in the future. 0 = run as soon as
             possible. Use a positive value for the dedup window.
-        payload: optional JSON body. Most artefact rebuilds need none —
-            the handler reads current DB state.
+        payload: optional JSON body (e.g. ``{"user_id": ...}``).
 
     Returns:
         ``"queued"`` on success, ``"deduped"`` if Cloud Tasks rejected
         the enqueue because the name is in use (this is the success
         case for our pattern), ``"inline"`` if Cloud Tasks isn't
-        configured (dev path; the threading.Timer in ingest.py handles
-        the actual rebuild), ``"failed"`` on any other error.
+        configured (dev path; the caller handles the work locally),
+        ``"failed"`` on any other error.
     """
     if not _is_enabled_for_queue(queue_env, handler_url_env):
         return "inline"
@@ -163,7 +156,7 @@ def _resolve_queue_path_for(queue_env: str) -> str:
     # Prefer GCP_PROJECT (the var the prod deploy actually sets) with a
     # GOOGLE_CLOUD_PROJECT fallback. deploy-prod.sh's env-file sets GCP_PROJECT
     # but NOT GOOGLE_CLOUD_PROJECT, so reading only the latter made every bare
-    # queue path raise → artefact-rebuild "failed".
+    # queue path raise → every enqueue "failed".
     project = (os.environ.get("GCP_PROJECT") or os.environ.get("GOOGLE_CLOUD_PROJECT") or "").strip()
     location = os.environ.get("CLOUD_TASKS_LOCATION", "").strip()
     if not project or not location:
@@ -174,51 +167,13 @@ def _resolve_queue_path_for(queue_env: str) -> str:
     return f"projects/{project}/locations/{location}/queues/{raw}"
 
 
-def enqueue_artefact_rebuild() -> str:
-    """Enqueue a debounced PMTiles + .fgraph rebuild.
-
-    Constant task name ``"artefact-rebuild"`` + 5 min schedule. A
-    session of 50 uploads → one rebuild after the last upload. See
-    ``docs/migration-runbook.md`` § "Heatmap artefact freshness".
-    """
-    return _enqueue_with_const_name(
-        queue_env="CLOUD_TASKS_ARTEFACT_QUEUE",
-        handler_url_env="INTERNAL_ARTEFACT_HANDLER_URL",
-        task_name="artefact-rebuild",
-        schedule_seconds=int(os.environ.get("ARTEFACT_REBUILD_SCHEDULE_S", "300")),
-    )
-
-
-def request_community_rebuild() -> str:
-    """Ask for the community PMTiles to be rebuilt after an upload. Never raises.
-
-    This is what the upload paths (``/gpx/upload``, ``/imports/files``) call
-    once a community-eligible activity is stored. It is the SAME debounced
-    ``artefact-rebuild`` task the retired ``/internal/ingest/heat`` hop used to
-    enqueue — the per-activity heat-compute task in between is gone, the
-    outcome in prod is identical.
-
-    Returns the value surfaced as ``heatmap_status`` to the client:
-    ``"queued"`` (task created, or already pending — a deduped enqueue IS a
-    pending rebuild), ``"inline"`` (Cloud Tasks not configured: dev / tests,
-    nothing to do), ``"failed"`` (enqueue raised or was rejected — the
-    activity is stored, the display catches up on the next rebuild).
-    """
-    try:
-        outcome = enqueue_artefact_rebuild()
-    except Exception:
-        logger.warning("community rebuild request failed", exc_info=True)
-        return "failed"
-    return "queued" if outcome == "deduped" else outcome
-
-
 # ── Heatmap export build (Phase 3 — PRD #391) ────────────────────────
 #
 # Each /export/heatmap/request POST enqueues one Cloud Task referencing
 # a row in the `export_requests` table. The worker
 # (`POST /internal/export/build/{id}`) does the build + GCS upload.
 #
-# Unlike matview/artefact, NOT debounced by name — each request is a
+# Unlike the constant-name tasks, NOT debounced by name — each request is a
 # distinct build with different filter params. The request id is the
 # natural per-task dedup key, so a Cloud Tasks retry collapses cleanly.
 

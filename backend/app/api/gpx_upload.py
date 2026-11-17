@@ -5,9 +5,9 @@ POST /gpx/upload — uploads a single GPX file.
 Production path (Cloud Run):
     1. Parse GPX, ``ingest_activity`` — stores
        the Activity row (~200 ms).
-    2. ``cloud_tasks.request_community_rebuild()`` — asks for the debounced
-       PMTiles rebuild (one constant-named Cloud Task: a burst of uploads
-       collapses to a single rebuild) so the new trace reaches the map.
+    2. ``run_jobs.request_community_rebuild()`` — asks for a PMTiles rebuild
+       (one ``jobs:run`` on the build-pmtiles Cloud Run Job, debounced per
+       instance) so the new trace reaches the map.
 
 TEST_MODE path: the ingest runs inline and nothing is enqueued, so tests keep
 deterministic single-request semantics.
@@ -25,10 +25,10 @@ from app.config import VALID_SPORTS
 from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
-from app.services.cloud_tasks import request_community_rebuild
 from app.services.gpx import _sanitize_track_type
 from app.services.gpx_archive import archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
+from app.services.run_jobs import request_community_rebuild
 from app.services.strava_utils import resolve_sport_cascade_with_default
 
 router = APIRouter(tags=["gpx"])
@@ -59,7 +59,7 @@ class GpxUploadResult(BaseModel):
     elevation_gain_m: float | None
     cells_indexed: int
     edges_indexed: int
-    heatmap_status: str  # "queued" | "inline" | "skipped" | "done" | "failed"
+    heatmap_status: str  # "queued" | "debounced" | "inline" | "skipped" | "done" | "failed"
 
 
 @router.post("/gpx/upload", response_model=GpxUploadResult, status_code=202)
@@ -265,11 +265,12 @@ async def gpx_upload(
         )
 
     # Ask for the community map (static PMTiles) to be rebuilt with the new
-    # trace — the debounced ``artefact-rebuild`` Cloud Task, requested directly
-    # (the per-activity heat-compute task that used to sit in between is gone).
+    # trace — a debounced ``jobs:run`` on the build-pmtiles Cloud Run Job.
     # heatmap_status reflects the outcome:
-    #   queued — a rebuild is pending (task created, or one was already queued)
-    #   inline — Cloud Tasks not configured (dev): nothing to enqueue
+    #   queued — a job run was requested
+    #   debounced — a run was requested on this instance within the cooldown;
+    #               this trace waits for the next trigger (or the weekly backstop)
+    #   inline — job trigger not configured (dev): nothing to do
     #   skipped — not community-eligible (opt-out, undated) or nothing new
     #   failed — the request failed; the activity is stored, the display
     #            catches up on the next rebuild

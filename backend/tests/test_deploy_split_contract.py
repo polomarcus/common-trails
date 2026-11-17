@@ -7,8 +7,8 @@ fragile part is the OIDC-audience wiring — Cloud Tasks signs `audience =
 INTERNAL_<x>_HANDLER_URL` (set by the WEB) and the WORKER verifies the token's
 `aud` against the SAME env var. If a future edit points a heavy handler back at
 the WEB url, or changes the WEB url host, or drops a handler env the code still
-verifies against, the heat/artefact chain silently 401s or lands on the
-wrong (512Mi) service.
+verifies against, the Cloud Tasks chain (today: the per-user my-heatmap
+rebuild) silently 401s or lands on the wrong (512Mi) service.
 
 These tests fail on exactly those regressions. They parse the real deploy
 script + the real handler sources (no inline mirror of behaviour), so they pin
@@ -70,14 +70,15 @@ pytestmark = pytest.mark.skipif(
 
 # The HEAVY Cloud Tasks handlers that MUST run on the 2Gi worker.
 _HEAVY_HANDLER_ENVS = (
-    "INTERNAL_ARTEFACT_HANDLER_URL",
     "INTERNAL_MY_HEATMAP_HANDLER_URL",
 )
 
-# Env of the removed matched pipeline: no code reads these any more, so the
+# Env of removed code paths (the matched pipeline; the in-worker community
+# rebuild /internal/artefacts/rebuild): no code reads these any more, so the
 # authoritative service env-file must not carry them (a var that "does
 # nothing" is how the next reader gets misled).
 _RETIRED_ENVS = (
+    "INTERNAL_ARTEFACT_HANDLER_URL",
     "HEATMAP_DISPLAY_SOURCE",
     "HEATMAP_KEEP_GRID_FALLBACK",
     "HEATMAP_GRID_FALLBACK_MIN_UC",
@@ -139,7 +140,7 @@ def test_worker_url_derived_from_same_project_number(deploy_sh: str):
 
 @pytest.mark.parametrize("env_key", _HEAVY_HANDLER_ENVS)
 def test_heavy_handlers_point_at_worker(deploy_sh: str, env_key: str):
-    """Artefact / my-heatmap handler URLs must target WORKER_RUN_URL —
+    """Heavy handler URLs (my-heatmap rebuild) must target WORKER_RUN_URL —
     Cloud Tasks binds the OIDC audience to this value, so it decides which
     service (and which memory tier) runs the heavy work."""
     value = _env_value(deploy_sh, env_key)
@@ -190,15 +191,17 @@ def test_deploy_sets_every_env_the_handlers_verify(deploy_sh: str):
     'not configured for OIDC verification' path) — or a rename drifting the
     two ends apart. Parses the real handler sources, not a copy."""
     verified_envs: set[str] = set()
-    for src in _API_DIR.glob("internal_*.py"):
+    for src in _API_DIR.glob("*.py"):
         text = src.read_text(encoding="utf-8")
         verified_envs.update(re.findall(r'audience_env="([A-Z0-9_]+)"', text))
     # NOTE: export.py used to host /internal/export/build, but the on-demand /
     # async export pipeline was removed (exports are pre-computed artifacts
-    # only), so it no longer verifies any audience env.
-    assert _HEAVY_HANDLER_ENVS[0] in verified_envs, (
-        "sanity: artefact handler should verify INTERNAL_ARTEFACT_HANDLER_URL"
+    # only), so it no longer verifies any audience env. Same for the removed
+    # /internal/artefacts/rebuild (INTERNAL_ARTEFACT_HANDLER_URL).
+    assert "INTERNAL_MY_HEATMAP_HANDLER_URL" in verified_envs, (
+        "sanity: the my-heatmap handler should verify INTERNAL_MY_HEATMAP_HANDLER_URL"
     )
+    assert "INTERNAL_ARTEFACT_HANDLER_URL" not in verified_envs
 
     deploy_keys = set(re.findall(r'^([A-Z0-9_]+):\s*"', deploy_sh, re.MULTILINE))
     required = verified_envs

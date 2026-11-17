@@ -1,7 +1,7 @@
 """Internal endpoints plumbing — OIDC verification for Cloud Tasks callers.
 
-``verify_oidc_token`` is shared by every ``/internal/*`` handler
-(artefact rebuild, my-heatmap rebuild…). This module defines no route.
+``verify_oidc_token`` is shared by every ``/internal/*`` handler (today the
+worker's ``/internal/my-heatmap/rebuild``). This module defines no route.
 
 Auth model:
 - Cloud Tasks signs each request with an OIDC token whose audience equals
@@ -35,9 +35,9 @@ def verify_oidc_token(request: Request, audience_env: str) -> None:
         aud = $audience_env  (the configured handler URL)
 
     Each ``/internal/<thing>`` endpoint passes its own
-    ``audience_env`` (e.g. ``INTERNAL_ARTEFACT_HANDLER_URL``) so token
-    leakage between handlers is impossible — a token signed for the
-    my-heatmap URL won't pass for the artefact-rebuild URL.
+    ``audience_env`` (e.g. ``INTERNAL_MY_HEATMAP_HANDLER_URL``) so token
+    leakage between handlers is impossible — a token signed for one
+    handler URL won't pass for another.
 
     The ``id_token.verify_oauth2_token`` helper checks the signature
     against Google's public keys, the expiry, the issuer, and the

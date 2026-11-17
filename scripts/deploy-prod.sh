@@ -74,10 +74,11 @@ ENV="prod"
 #     so the domain mapping + its .run.app URL are UNCHANGED.
 #
 #   • WORKER (common-trails-worker-prod) — scale-to-zero, 2Gi. Owns the HEAVY
-#     Cloud Tasks handlers: POST /internal/artefacts/rebuild (PMTiles build),
-#     /internal/my-heatmap/rebuild. Cloud Tasks
-#     POSTs to the WORKER's URL (INTERNAL_*_HANDLER_URL below), so the 2Gi
-#     memory + heavy CPU live off the user-facing service.
+#     Cloud Tasks handler POST /internal/my-heatmap/rebuild (per-user PMTiles).
+#     Cloud Tasks POSTs to the WORKER's URL (INTERNAL_*_HANDLER_URL below), so
+#     the 2Gi memory + heavy CPU live off the user-facing service. The
+#     COMMUNITY map is never built here: it is the build-pmtiles Cloud Run JOB
+#     (8Gi), triggered via BUILD_PMTILES_JOB_NAME + the weekly scheduler (§4).
 #
 # Both services carry the identical env-file; the split is realised purely by
 # where the INTERNAL_*_HANDLER_URL vars point (worker) + the per-service memory
@@ -195,13 +196,14 @@ trap 'rm -f "$ENV_FILE"' EXIT
 # +MAX_ARCHIVE_BYTES to admit real GB-scale Strava archives;
 # −HEATMAP_DISPLAY_SOURCE −HEATMAP_KEEP_GRID_FALLBACK −HEATMAP_GRID_FALLBACK_MIN_UC
 # −OVERPASS_ENABLED −CLOUD_TASKS_QUEUE −INTERNAL_HEAT_HANDLER_URL when the
-# matched pipeline's code was deleted: nothing reads them any more.) Do not
+# matched pipeline's code was deleted: nothing reads them any more;
+# −INTERNAL_ARTEFACT_HANDLER_URL when the worker route /internal/artefacts/rebuild
+# was removed — the community rebuild is the build-pmtiles job only.) Do not
 # add/remove without re-verifying against live.
 cat >"$ENV_FILE" <<YAML
 TEST_MODE: "false"
 # Legacy K floor. No longer filters the render (HEATMAP_MIN_USERS does): it is
-# the value /export advertises as k_anonymity and the one stamped as min_uc in
-# stats.json by /internal/artefacts/rebuild. Live is 1.
+# the value /export advertises as k_anonymity. Live is 1.
 HEATMAP_K_ANONYMITY: "1"
 # ── RAW-TRACE display ────────────────────────────────────────────────────────
 # The community heatmap renders precise RAW GPS traces (manual_upload only),
@@ -220,10 +222,10 @@ TRACE_MASK_METERS: "200"
 HEATMAP_RAW_BBOX: "-12;34;32;62"
 # Publish a raster XYZ tile pyramid (raster/{z}/{x}/{y}.png + raster/tiles.json)
 # to the public heatmap bucket on every build so gpx.studio / VisuGPX can add the
-# heatmap as a custom overlay ("calque") via one URL. Read by build_pmtiles.main
-# — which runs BOTH as the build-pmtiles job AND in-process on the worker via
-# /internal/artefacts/rebuild, so it must be on the SERVICES (this block) AND the
-# job (job_env_for). z6-14, ~10k tiles, ~70s.
+# heatmap as a custom overlay ("calque") via one URL. Read by build_pmtiles.main,
+# which runs as the build-pmtiles job: the job's own env (job_env_for) is what
+# counts. The services copy below is inert since the worker's in-process
+# /internal/artefacts/rebuild was removed (kept: harmless). z6-14, ~10k tiles, ~70s.
 HEATMAP_RASTER_PYRAMID: "true"
 DATA_DIR: "/app/data"
 # User-facing origin — links in emails / post-login redirects default to
@@ -238,24 +240,24 @@ GCP_REGION: "${REGION}"
 #    to the .run.app origin — see the RUN_URL / WORKER_RUN_URL note above.
 #    ── MICROSERVICE SPLIT ── the HEAVY handlers point at WORKER_RUN_URL:
 #    Cloud Tasks signs 'audience = <this url>' and POSTs to it → the WORKER
-#    (2Gi) does the PMTiles build, and
+#    (2Gi) does the per-user PMTiles build, and
 #    the WORKER verifies the same audience against this same env var. The web
 #    (512Mi) only ENQUEUES (reads these vars to set the audience), never runs
 #    the heavy work.
 CLOUD_TASKS_LOCATION: "${REGION}"
 CLOUD_TASKS_INVOKER_SA: "${TASKS_INVOKER_SA}"
 CLOUD_TASKS_ARTEFACT_QUEUE: "common-trails-artefact-rebuild-${ENV}"
-INTERNAL_ARTEFACT_HANDLER_URL: "${WORKER_RUN_URL}/internal/artefacts/rebuild"
-# Per-user private "Ma heatmap" rebuilds reuse the artefact-rebuild queue (no
-# new queue to create) with their own handler on the WORKER (tippecanoe).
+# Per-user private "Ma heatmap" rebuilds use the artefact-rebuild queue (its
+# historical name — the community rebuild no longer goes through Cloud Tasks)
+# with their own handler on the WORKER (tippecanoe).
 INTERNAL_MY_HEATMAP_HANDLER_URL: "${WORKER_RUN_URL}/internal/my-heatmap/rebuild"
 MY_HEATMAP_BUCKET: "${MY_HEATMAP_BUCKET_NAME}"
 MY_HEATMAP_FILES_ENABLED: "${MY_HEATMAP_FILES_ENABLED}"
 MY_HEATMAP_FILES_USERS: "${MY_HEATMAP_FILES_USERS}"
-# Heatmap PMTiles publish target + canonical /export/heatmap redirect. BOTH
-# point at the SAME bucket on live — the event-driven /internal/artefacts/rebuild
-# uploads here and /export/heatmap serves here; splitting them would upload fresh
-# tiles to a bucket nothing serves (silently stale heatmap).
+# Public heatmap bucket (the build-pmtiles JOB publishes there with its own
+# copy, job_env_for) + canonical /export/heatmap redirect. BOTH point at the
+# SAME bucket on live — /export/heatmap serves here, and my_heatmap_files
+# refuses a MY_HEATMAP_BUCKET equal to either (a public bucket).
 HEATMAP_GCS_BUCKET: "${HEATMAP_GCS_BUCKET}"
 HEATMAP_ARTEFACTS_BUCKET: "${HEATMAP_GCS_BUCKET}"
 # Public base URL under which the community heatmap artefacts are SERVED (single
