@@ -46,7 +46,7 @@ accepting less anonymity.
 /imports/strava-archive/init → signed PUT to UPLOADS_BUCKET → /complete
    → job common-trails-ingest-pending-archives-prod (jobs/ingest_pending_archives.py)
      → per member: parse → sport cascade → ingest_activity ──────────────────→ activities
-build (job common-trails-build-pmtiles-prod, or the worker in-process):
+build (job common-trails-build-pmtiles-prod only — never in the web/worker services):
    activities (eligible) → raw_trace_display.export_raw_geojson (2 streaming passes)
    → tippecanoe (layers trails + heat_points) → snapshot + pointer CAS → tiles.chemins-communs.fr
    + geojsonl(.gz, also per sport) + raster XYZ pyramid (calque) + stats.json + heatmap_metrics row
@@ -155,14 +155,14 @@ by `/export/heatmap` only).
 
 ## Rebuild triggers (prod)
 
-- `/imports/files` and `/gpx/upload` → `cloud_tasks.request_community_rebuild()` →
-  Cloud Task `artefact-rebuild` (const name, 300 s) → **worker**
-  `POST /internal/artefacts/rebuild` → `build_pmtiles.main` in-process.
-- `/imports/files` batch end (`rebuild_display=True`), sport changes
-  (`activity_sport._request_community_rebuild`), deletions, account merge,
-  `infer_offroad --apply` → `run_jobs.trigger_build_pmtiles_job()` (jobs:run on the
-  build job), guarded by a per-instance debounce `BUILD_PMTILES_DEBOUNCE_S` (600 s)
-  **with no trailing ping**: a suppressed trigger waits for the next one.
+- `/imports/files` batch end (`rebuild_display=True`, the default) and `/gpx/upload`
+  → `run_jobs.request_community_rebuild()`; sport changes
+  (`activity_sport._request_community_rebuild`) and `infer_offroad --apply` → the
+  same debounced trigger; deletions, account merge → `run_jobs.trigger_build_pmtiles_job()`
+  directly. All are a jobs:run on the build job; the debounced ones are guarded per
+  instance by `BUILD_PMTILES_DEBOUNCE_S` (600 s) **with no trailing ping**: a
+  suppressed trigger waits for the next one. Non-final batch files ask for nothing
+  (`heatmap_status: "deferred"`).
 - Archive drain: `_ArchiveRebuildPinger` pings per archive BEFORE its "done" email,
   re-pings at most every `DRAIN_PMTILES_REPING_S` (1800 s), flushes at batch end.
 - Safety net: scheduler `common-trails-rebuild-pmtiles-daily-prod` — despite the
@@ -297,24 +297,18 @@ Always `--account=paleclercq@gmail.com --project=common-trails`; never
 `rebuild_heat_agg`, `verify_heat_agg`, `routing_profiles`, DEM / `download_dem`,
 `import_osm_roads`, `enrich_edges`; routes `/heatmap/tiles/*.mvt`, `/heatmap/stats`,
 `/heatmap/trails`, `/heatmap/export`, `/heatmap/display-url`, `/me/unexplored`,
-`/internal/ingest/heat`; on-demand MBTiles/KML/async export; WASM router + `.fgraph`;
+`/internal/ingest/heat`; `/internal/artefacts/rebuild` + `INTERNAL_ARTEFACT_HANDLER_URL`
++ `cloud_tasks.enqueue_artefact_rebuild` (the in-worker full build; the queue
+`common-trails-artefact-rebuild-prod` lives on for « Ma heatmap » tasks);
+on-demand MBTiles/KML/async export; WASM router + `.fgraph`;
 terraform (archived — never `apply`); Strava OAuth/webhook sync. Orphaned prod
 resources may still exist (Cloud Tasks queue `common-trails-heat-compute-prod`, old jobs).
 
 ## Known quirks (as of 2026-11-17, not fixed)
 
-- Docs still mention `HEATMAP_DISPLAY_SOURCE` and "no periodic rebuild"
-  (`docs/heatmap-pipeline.md`, `docs/local-testing.md`, `docs/runbooks/heatmap-rebuild.md`,
-  `docs/prod-ingestion-flow.md`); `docs/architecture.md` lists `/internal/ingest/heat`
-  on the worker. Code + this skill win.
-- `/internal/artefacts/rebuild` runs the FULL build in-process on the 2Gi worker,
-  while the job needed 8Gi after a 4Gi OOM (2026-09). Likely OOMs at today's corpus
-  (unverified — check worker logs); the batch-end job trigger is what reliably
-  refreshes the map. It also re-uploads the mutable `heatmap-display.pmtiles`
-  itself (max-age 300) after `build_pmtiles.main` already did the CAS-guarded
-  publish — an unguarded overwrite.
 - `aggregate_raw_for_export` has no caller left (exports are static artifacts).
-- `heat_norm_pctl()` docstring says default 99; the constant is 99.9.
+- `cloud_tasks.enqueue_export_build` has no caller and imports a
+  `process_export_build` that no longer exists (dead since the async export went).
 - The build emits z15 but the frontend source spec says `maxzoom: 14` (overzoom).
 
 ## Principles

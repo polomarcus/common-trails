@@ -5,8 +5,8 @@ une suppression RGPD, ou après un changement de code du build. Durée : un
 build complet prend de l'ordre de 30 à 40 min (job 8Gi).
 
 Contexte : le build est déclenché par des événements (fin de lot
-`/imports/files`, drain d'archive, tâche Cloud Tasks `artefact-rebuild`,
-suppressions) — voir [`../architecture.md`](../architecture.md). Le seul
+`/imports/files`, `/gpx/upload`, changement de sport, drain d'archive,
+suppressions, fusion de comptes) — voir [`../architecture.md`](../architecture.md). Le seul
 filet périodique est **hebdomadaire** (samedi 11:00 heure de Paris). Un déclenchement
 manqué ou absorbé par l'anti-rafale peut donc laisser la carte en retard
 jusqu'à une semaine : relancer à la main (ci-dessous).
@@ -37,8 +37,8 @@ gcloud run jobs executions list --job=common-trails-build-pmtiles-prod --region=
 ```
 
 Le job porte déjà l'env raw (`job_env_for` dans `scripts/deploy-prod.sh`) :
-`HEATMAP_DISPLAY_SOURCE=raw`, `HEATMAP_MIN_USERS=1`, `TRACE_MASK_METERS=200`,
-`HEATMAP_RASTER_PYRAMID=true`, `HEATMAP_PUBLIC_BASE_URL`. Ne pas passer
+`HEATMAP_MIN_USERS=1`, `TRACE_MASK_METERS=200`, `HEATMAP_RAW_BBOX`,
+`HEATMAP_RASTER_PYRAMID=true`, `HEATMAP_PUBLIC_BASE_URL`, `HEATMAP_GCS_BUCKET`. Ne pas passer
 d'overrides d'env à la main : le prochain déploiement réasserte ces valeurs.
 
 ## 3. Builds concurrents : sans danger

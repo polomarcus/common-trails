@@ -9,11 +9,11 @@ there is **currently no button for it in the UI** (the old `/stats#mes-traces`
 list was removed), so an operator may have to run it on the user's behalf.
 
 **Raw-trace era note.** The community map is now built from `activities`
-directly (`HEATMAP_DISPLAY_SOURCE=raw`); deleting the user's `activities` rows
+directly (raw-trace display, the only mode left); deleting the user's `activities` rows
 (step 4) and rebuilding the PMTiles (step 7) is what removes their traces from
-the map. The legacy `heat_*` tables of steps 2, 3, 6 and 9 may no longer exist
-in prod — **skip any statement whose table is absent** (check with
-`\dt heat_*`); `activity_deletion.py` does the same (`_relation_exists`).
+the map. The legacy `heat_*` tables of steps 2, 3, 6 and 9 are dropped by
+migration `0072_drop_matched_pipeline_tables` — **skip any statement whose
+table is absent** (check with `\dt heat_*`).
 
 Time budget: ~15 min. Everything below is copy-paste-able; replace the two
 placeholders:

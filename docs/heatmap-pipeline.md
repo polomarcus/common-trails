@@ -2,10 +2,9 @@
 
 ## Overview
 
-**Current (prod, since 2026-07-29): raw-trace display** — selected by
-`HEATMAP_DISPLAY_SOURCE=raw`, which is also the code default
-(`backend/app/services/raw_trace_display.py`; prod sets it explicitly in
-`scripts/deploy-prod.sh`, the compose files default to it). The heatmap is drawn from the precise GPS traces of
+**Current (prod, since 2026-07-29): raw-trace display** — the only mode left
+in the code (`backend/app/services/raw_trace_display.py`; the former
+`HEATMAP_DISPLAY_SOURCE` switch went with the matched pipeline). The heatmap is drawn from the precise GPS traces of
 consented `manual_upload` activities, read straight from `activities`:
 
 ```
@@ -23,15 +22,15 @@ is dropped in prod. It is kept as reference only. Overall architecture:
 
 ## Current: raw pipeline
 
-- **Build entry point:** `backend/app/jobs/build_pmtiles.py` → `main()`; in raw
-  mode it calls `_run_raw_export()` (a spawned child process, except under
+- **Build entry point:** `backend/app/jobs/build_pmtiles.py` → `main()`; it
+  calls `_run_raw_export()` (a spawned child process, except under
   pytest or with `HEATMAP_EXPORT_ISOLATED=false`) which streams activities through
   `backend/app/services/raw_trace_display.py`.
 - **Privacy:** extrémités masquées (`TRACE_MASK_METERS`, 200 m —
   `backend/app/services/trace_privacy.py`) + distinct-user floor
   `HEATMAP_MIN_USERS` (`raw_trace_display.min_users()`, 1 in prod). Provenance:
   only `source = 'manual_upload'` (`backend/app/services/provenance.py`). The
-  `--min-uc` CLI flag only applies to the legacy matched path.
+  `--min-uc` CLI flag no longer filters anything (stamped into `stats.json`).
 - **Region clip:** `HEATMAP_RAW_BBOX` drops wholly out-of-region (corrupt) traces.
 - **Output layers:** `trails` (LineStrings with `user_count`, `heat_score`,
   `sport`, direction fields) and `heat_points` (weighted points, built for a
@@ -47,9 +46,15 @@ is dropped in prod. It is kept as reference only. Overall architecture:
   (2026-11-15: its halos merged into a solid mat up to z13); the build still
   emits `heat_points` — dropping it is a separate decision. The PMTiles URL is
   resolved through the pointer by `frontend/lib/cdn-cache.ts`.
-- **Triggers:** event-driven only (archive drain, `/imports/files` batch end,
-  Cloud Tasks artefact rebuild, deletions) — there is no periodic rebuild
-  scheduler. See [`architecture.md`](architecture.md).
+- **Triggers:** event-driven — archive drain, `/imports/files` batch end,
+  `/gpx/upload`, sport changes, deletions, account merges — each a `jobs:run`
+  on the `build-pmtiles` Cloud Run Job (`run_jobs.trigger_build_pmtiles_job`;
+  uploads and sport changes are debounced per instance by
+  `BUILD_PMTILES_DEBOUNCE_S`). Weekly backstop: Cloud Scheduler
+  `common-trails-rebuild-pmtiles-daily-prod` (historical name) runs the job
+  every Saturday at 11:00 Europe/Paris (`0 11 * * 6`, asserted by
+  `scripts/deploy-prod.sh` §4). The build never runs inside the web or worker
+  services. See [`architecture.md`](architecture.md).
 
 ## Legacy: matched pipeline (reference only)
 
@@ -263,7 +268,7 @@ heat_edges (PostGIS) → GeoJSON export → tippecanoe → heatmap-display.pmtil
                                                             MapLibre (pmtiles:// protocol)
 ```
 
-1. **Build**: `python -m app.jobs.build_pmtiles` (raw mode: the floor is `HEATMAP_MIN_USERS`; `--min-uc` only applies to the legacy matched path)
+1. **Build**: `python -m app.jobs.build_pmtiles` (the floor is `HEATMAP_MIN_USERS`; `--min-uc` is only stamped into `stats.json`)
 2. **Upload**: single file to GCS bucket or `/frontend/public/` for dev
 3. **Serve**: MapLibre fetches tiles via HTTP range requests — 5-15ms per tile from CDN
 4. **Sport filter**: client-side `["==", "sport", "offroad"]` — all sports in one file
@@ -439,7 +444,7 @@ lifecycle rule applies.)
 
 **Publication order and overlapping builds** (`_upload_to_export_bucket` /
 `_publish_pointer_cas` in `backend/app/jobs/build_pmtiles.py`). Builds can
-overlap (archive drain, `/imports/files`, Cloud Tasks), so:
+overlap (archive drain, upload triggers, weekly scheduler, manual runs), so:
 
 1. Upload the immutable snapshot `heatmap-display-<version>.pmtiles`.
 2. **Pointer compare-and-set:** publish only if our `snapshot_started_at`
@@ -607,7 +612,7 @@ historical design.
 
 Deploys are CD-on-merge (`deploy-gcp.yml` → `scripts/deploy-prod.sh`, see
 [`ci.md`](ci.md) and [`prod-deploy.md`](prod-deploy.md)). Heatmap rebuilds are
-event-driven; to force one, see
+event-driven, plus a weekly backstop (Saturday 11:00 Europe/Paris); to force one, see
 [`runbooks/heatmap-rebuild.md`](runbooks/heatmap-rebuild.md).
 
 ### Heatmap tile serving architecture

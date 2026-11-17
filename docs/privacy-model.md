@@ -56,7 +56,7 @@ consent (loose GPX/FIT, or their own Strava *archive export*).
 - Legacy traces with `source = NULL`.
 
 This gate is enforced **in code, at read time**: the raw build path
-(`backend/app/services/raw_trace_display.py`) and the matched path both filter on
+(`backend/app/services/raw_trace_display.py`, the only build path left) filters on
 the provenance SSOT (`backend/app/services/provenance.py`,
 `COMMUNITY_SOURCE` / `is_community_source`). Flipping the display to raw
 therefore *cannot* leak personal Strava-API data. (Corollary: until users upload
@@ -176,7 +176,7 @@ Caveat (§5): deletion cannot recall ODbL copies third parties already downloade
 
 ## 9. Recommended posture for the private-beta launch
 
-1. `HEATMAP_DISPLAY_SOURCE = raw`, `HEATMAP_MIN_USERS = 1`,
+1. Raw-trace display (the only mode left in the code), `HEATMAP_MIN_USERS = 1`,
    `TRACE_MASK_METERS = 200` (endpoint masking ON).
 2. **Public map, members-only export** (§6) — the heatmap map is publicly
    viewable by anonymous visitors (home hero + `/map`); only the bulk ODbL

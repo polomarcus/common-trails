@@ -12,7 +12,7 @@ Une seule image Docker (`backend/`, export statique Next.js intégré dans
 | Composant | Taille | Rôle |
 |---|---|---|
 | `common-trails-api-prod` (**web**) | 512Mi, min=1, max=1 | Frontend statique + API légère : auth (lien magique), `/imports/*`, `/me/*`, `/export/*` |
-| `common-trails-worker-prod` (**worker**) | 2Gi, min=0 | Handlers Cloud Tasks lourds : `/internal/ingest/heat`, `/internal/artefacts/rebuild` |
+| `common-trails-worker-prod` (**worker**) | 2Gi, min=0 | Handler Cloud Tasks lourd : `/internal/my-heatmap/rebuild` (fichier PMTiles privé « Ma heatmap ») ; ne construit jamais la carte commune |
 | Job `build-pmtiles` | 8Gi | Construit et publie la heatmap commune (`backend/app/jobs/build_pmtiles.py`) |
 | Job `ingest-pending-archives` | 8Gi | Draine les archives uploadées (`backend/app/jobs/ingest_pending_archives.py`) |
 | Job `resync-reminder` | 512Mi | Email de rappel aux contributeurs inactifs : vérifié chaque mois, au plus un par an et par contributeur |
@@ -31,13 +31,13 @@ flowchart LR
     U -->|"zip : URL signée"| B[(Bucket uploads)]
     U -->|"POST /imports/strava-archive/complete"| W
     W -->|activities| DB[(Cloud SQL)]
-    W -->|Cloud Tasks| K[Service worker]
-    K -->|"/internal/artefacts/rebuild"| BP
+    W -->|"Cloud Tasks : Ma heatmap"| K[Service worker]
+    S[Cloud Scheduler] -->|"samedi 11:00"| BP
     W -->|"jobs:run"| D[Job ingest-pending-archives]
     B --> D
     D -->|activities| DB
     D -->|"ping par archive"| BP[Job build-pmtiles]
-    W -->|"jobs:run, fin de lot"| BP
+    W -->|"jobs:run : fin de lot, /gpx/upload, sport"| BP
     BP -->|"lit manual_upload consenties"| DB
     BP -->|"snapshot + pointeur CAS"| T[(tiles.chemins-communs.fr)]
     T -->|"heatmap-display.json puis PMTiles"| M["/ et /map : Heatmap commune"]
@@ -73,10 +73,11 @@ flowchart LR
    télécharge des centaines de Mo : voir
    [`runbooks/display-geometry-cache.md`](runbooks/display-geometry-cache.md).
 
-**Déclencheurs du build** — événementiels : fin de lot
-`/imports/files` (anti-rafale `BUILD_PMTILES_DEBOUNCE_S`), drain d'archive,
-tâche Cloud Tasks `artefact-rebuild` (worker), suppressions d'activité / fusion
-de comptes. Filet de sécurité **hebdomadaire** seulement (samedi 11:00 heure de Paris,
+**Déclencheurs du build** — événementiels, tous par `jobs:run` sur le job
+`build-pmtiles` (`run_jobs.trigger_build_pmtiles_job`) : fin de lot
+`/imports/files` et `/gpx/upload` (anti-rafale `BUILD_PMTILES_DEBOUNCE_S`),
+changements de sport, drain d'archive, suppressions d'activité / fusion de
+comptes. Filet de sécurité **hebdomadaire** seulement (samedi 11:00 heure de Paris,
 scheduler `common-trails-rebuild-pmtiles-daily-prod`, horaire asserté par
 `scripts/deploy-prod.sh` ; un build quotidien coûtait trop cher) : un
 déclenchement manqué peut laisser la carte en retard jusqu'à une semaine

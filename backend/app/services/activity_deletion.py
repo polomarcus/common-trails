@@ -5,10 +5,10 @@
 2. Fire the ``build-pmtiles`` rebuild (best-effort) so the deleted trace
    actually LEAVES the static ``heatmap-display.pmtiles`` on GCS. The build
    reads consented ``activities`` live, so a deleted activity drops out on the
-   next rebuild — but there is NO periodic rebuild scheduler, so without this
-   trigger the deletion would stay VISIBLE on the public map indefinitely
-   (until an unrelated contribution happened to fire a rebuild). That is a GDPR
-   exposure, so the removal path must trigger just like the addition paths do.
+   next rebuild — but the only periodic rebuild is the WEEKLY backstop
+   (Saturday 11:00 Europe/Paris), so without this trigger the deletion could
+   stay VISIBLE on the public map for up to a week. That is a GDPR exposure,
+   so the removal path must trigger just like the addition paths do.
 
 The former matched-pipeline tables (``heat_edges`` / ``heat_edge_contributors``
 / ``heat_cells``) are no longer read or written by any code; they are dropped

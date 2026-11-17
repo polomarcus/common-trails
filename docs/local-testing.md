@@ -32,7 +32,7 @@ Open **http://localhost:3787** (demo account seeded automatically).
 
 The rendered heatmap is a **static PMTiles binary**: it is stale until you rebuild it and reload the browser.
 
-Prod renders the **raw-trace** pipeline (`HEATMAP_DISPLAY_SOURCE=raw`). That is also the code default and what `docker-compose.yml` sets, so the dev backend builds the same thing as prod (the floor is `HEATMAP_MIN_USERS`, not `--min-uc`):
+Prod renders the **raw-trace** pipeline, the only one left in the code, so the dev backend builds the same thing as prod (the floor is `HEATMAP_MIN_USERS`, not `--min-uc`):
 
 ```bash
 docker compose exec -T -e HEATMAP_MIN_USERS=1 \
