@@ -46,15 +46,20 @@ is dropped in prod. It is kept as reference only. Overall architecture:
   (2026-11-15: its halos merged into a solid mat up to z13); the build still
   emits `heat_points` — dropping it is a separate decision. The PMTiles URL is
   resolved through the pointer by `frontend/lib/cdn-cache.ts`.
-- **Triggers:** event-driven — archive drain, `/imports/files` batch end,
-  `/gpx/upload`, sport changes, deletions, account merges — each a `jobs:run`
-  on the `build-pmtiles` Cloud Run Job (`run_jobs.trigger_build_pmtiles_job`;
-  uploads and sport changes are debounced per instance by
-  `BUILD_PMTILES_DEBOUNCE_S`). Weekly backstop: Cloud Scheduler
-  `common-trails-rebuild-pmtiles-daily-prod` (historical name) runs the job
-  every Saturday at 11:00 Europe/Paris (`0 11 * * 6`, asserted by
-  `scripts/deploy-prod.sh` §4). The build never runs inside the web or worker
-  services. See [`architecture.md`](architecture.md).
+- **Triggers:** event-driven, every one ending in a `jobs:run` on the
+  `build-pmtiles` Cloud Run Job (`run_jobs.trigger_build_pmtiles_job`):
+  - uploads (`/gpx/upload`, each `/imports/files` request) → Cloud Task
+    `artefact-rebuild` (constant name, scheduled 5 min out, so a burst
+    collapses onto one task) → worker `POST /internal/artefacts/rebuild`,
+    which only fires the job (503 → Cloud Tasks retries);
+  - `/imports/files` batch end and sport changes → the job directly, debounced
+    per instance by `BUILD_PMTILES_DEBOUNCE_S`;
+  - archive drain, deletions, account merges → the job directly.
+
+  Weekly backstop: Cloud Scheduler `common-trails-rebuild-pmtiles-daily-prod`
+  (historical name) runs the job every Saturday at 11:00 Europe/Paris
+  (`0 11 * * 6`, asserted by `scripts/deploy-prod.sh` §4). The build never
+  runs inside the web or worker services. See [`architecture.md`](architecture.md).
 
 ## Legacy: matched pipeline (reference only)
 
@@ -444,7 +449,8 @@ lifecycle rule applies.)
 
 **Publication order and overlapping builds** (`_upload_to_export_bucket` /
 `_publish_pointer_cas` in `backend/app/jobs/build_pmtiles.py`). Builds can
-overlap (archive drain, upload triggers, weekly scheduler, manual runs), so:
+overlap (archive drain, upload triggers, Cloud Tasks retries, weekly
+scheduler, manual runs), so:
 
 1. Upload the immutable snapshot `heatmap-display-<version>.pmtiles`.
 2. **Pointer compare-and-set:** publish only if our `snapshot_started_at`

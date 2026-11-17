@@ -2,9 +2,8 @@
 
 POST /imports/files — multipart upload with sport + contribute_heatmap.
 Activities are stored immediately; the community map (static PMTiles) is
-rebuilt out-of-band — ONE debounced build-pmtiles job request per upload batch
-(``run_jobs.request_community_rebuild``, on ``rebuild_display``), nothing in
-TEST_MODE.
+rebuilt out-of-band — ONE debounced rebuild request per upload burst
+(``cloud_tasks.request_community_rebuild``), nothing in TEST_MODE.
 """
 import logging
 import os
@@ -19,9 +18,10 @@ from app.config import VALID_SPORTS
 from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
+from app.services.cloud_tasks import request_community_rebuild
 from app.services.gpx_archive import archive_bundle, archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
-from app.services.run_jobs import request_community_rebuild, trigger_ingest_archives_job
+from app.services.run_jobs import trigger_ingest_archives_job
 from app.services.strava_utils import resolve_sport_cascade, resolve_sport_cascade_with_default
 
 router = APIRouter(tags=["imports"])
@@ -58,7 +58,7 @@ class ImportResult(BaseModel):
     failed: int
     errors: list[str]
     activity_ids: list[str]
-    heatmap_status: str  # "queued" | "debounced" | "deferred" | "inline" | "skipped" | "done" | "failed"
+    heatmap_status: str  # "queued" | "inline" | "skipped" | "done"
     # ODbL contribution-consent audit row backing THIS upload (gap #7).
     # None when the caller sent no consent fields (backward compat).
     consent_id: str | None = None
@@ -293,7 +293,7 @@ async def import_files(
     skipped = 0
     failed = 0
     activity_ids: list[str] = []
-    created_activity_ids: list[str] = []  # new community-eligible activities
+    created_activity_ids: list[str] = []  # community-eligible → rebuild request
 
     for parsed in parsed_list:
         try:
@@ -408,6 +408,17 @@ async def import_files(
                 file.filename or "upload.bin", content,
             )
 
+    # Ask ONCE for the community map rebuild when this request stored at least
+    # one new community-eligible activity (the debounced ``artefact-rebuild``
+    # Cloud Task — the per-activity heat-compute task in between is gone). In
+    # dev / TEST_MODE ``ingest_activity`` already ran inline; we report ``done``.
+    heatmap_status = "skipped"
+    if sync_mode:
+        if created_activity_ids:
+            heatmap_status = "done"
+    elif created_activity_ids:
+        heatmap_status = request_community_rebuild()
+
     # Event-driven display refresh (best-effort). Without this, a loose GPX/FIT
     # contribution ingests into ``activities`` but never reaches the static
     # ``heatmap-display.pmtiles`` on GCS until an unrelated rebuild — the
@@ -419,25 +430,29 @@ async def import_files(
     # count): each request only sees its own file, so gating on a per-request
     # count would MISS a batch whose last file happens to be a duplicate while
     # earlier files created activities. A wasted rebuild on an all-duplicate
-    # batch is rare, idempotent, and cheap. ``run_jobs.request_community_rebuild``
-    # never raises and no-ops locally / in TEST_MODE. It is debounced (cost
-    # control: an abusive user looping tiny uploads must not fire N expensive
-    # build-pmtiles JOBS): the FIRST trigger per cooldown window fires, the rest
-    # are suppressed. A suppressed or failed trigger leaves the display stale
-    # until the next trigger (a later upload, an archive drain that imports
-    # something) or the weekly backstop scheduler (Saturday 11:00 Europe/Paris).
-    # The build-pmtiles job runs on db-f1-micro with no tier bump.
-    #
-    # heatmap_status (informational — the frontend does not read it):
-    #   done — TEST_MODE: the ingest ran inline
-    #   queued / debounced / inline / failed — outcome of this batch-end request
-    #   deferred — new community activity on a non-final file: the batch's last
-    #              request (rebuild_display=true) asks for the rebuild
-    #   skipped — nothing new for the community map
-    rebuild_outcome = request_community_rebuild() if rebuild_display else None
-    heatmap_status = "skipped"
-    if created_activity_ids:
-        heatmap_status = "done" if sync_mode else (rebuild_outcome or "deferred")
+    # batch is rare, idempotent, and cheap. Never raises (best-effort); no-ops
+    # locally / in TEST_MODE. ⚠️ A missed/failed trigger leaves the display
+    # STALE until the next trigger (the ``artefact-rebuild`` task above, a
+    # later upload, an archive drain that imports something) or the WEEKLY
+    # backstop scheduler (Saturday 11:00 Europe/Paris). The build-pmtiles job
+    # runs on db-f1-micro with no tier bump.
+    # Debounced (cost control): an abusive user looping tiny uploads must not
+    # fire N expensive build-pmtiles JOBS. The FIRST trigger per cooldown
+    # window fires; the rest are suppressed — a suppressed trigger delays the
+    # rebuild until the next trigger after the cooldown (or the weekly
+    # backstop). See run_jobs.build_pmtiles_debounce_ok.
+    if rebuild_display:
+        try:
+            from app.services.run_jobs import (
+                build_pmtiles_debounce_ok,
+                trigger_build_pmtiles_job,
+            )
+            if build_pmtiles_debounce_ok():
+                trigger_build_pmtiles_job()
+            else:
+                log.info("build-pmtiles trigger debounced (cooldown active)")
+        except Exception as exc:  # pragma: no cover - defense in depth
+            log.warning("build-pmtiles trigger failed after /imports/files: %s", exc)
 
     return ImportResult(
         imported=imported,

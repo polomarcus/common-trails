@@ -46,7 +46,7 @@ accepting less anonymity.
 /imports/strava-archive/init → signed PUT to UPLOADS_BUCKET → /complete
    → job common-trails-ingest-pending-archives-prod (jobs/ingest_pending_archives.py)
      → per member: parse → sport cascade → ingest_activity ──────────────────→ activities
-build (job common-trails-build-pmtiles-prod only — never in the web/worker services):
+build (job common-trails-build-pmtiles-prod only — the worker route just fires it):
    activities (eligible) → raw_trace_display.export_raw_geojson (2 streaming passes)
    → tippecanoe (layers trails + heat_points) → snapshot + pointer CAS → tiles.chemins-communs.fr
    + geojsonl(.gz, also per sport) + raster XYZ pyramid (calque) + stats.json + heatmap_metrics row
@@ -155,14 +155,19 @@ by `/export/heatmap` only).
 
 ## Rebuild triggers (prod)
 
-- `/imports/files` batch end (`rebuild_display=True`, the default) and `/gpx/upload`
-  → `run_jobs.request_community_rebuild()`; sport changes
-  (`activity_sport._request_community_rebuild`) and `infer_offroad --apply` → the
-  same debounced trigger; deletions, account merge → `run_jobs.trigger_build_pmtiles_job()`
-  directly. All are a jobs:run on the build job; the debounced ones are guarded per
-  instance by `BUILD_PMTILES_DEBOUNCE_S` (600 s) **with no trailing ping**: a
-  suppressed trigger waits for the next one. Non-final batch files ask for nothing
-  (`heatmap_status: "deferred"`).
+- `/gpx/upload` and every `/imports/files` request that stored a community-eligible
+  activity → `cloud_tasks.request_community_rebuild()` → Cloud Task `artefact-rebuild`
+  (CONSTANT name, scheduled `ARTEFACT_REBUILD_SCHEDULE_S` = 300 s out: a burst collapses
+  onto one task) → **worker** `POST /internal/artefacts/rebuild` (OIDC,
+  `INTERNAL_ARTEFACT_HANDLER_URL`) → `run_jobs.trigger_build_pmtiles_job()` only
+  (200 `{"status":"ok","job":"triggered"}`, 503 on trigger failure → Cloud Tasks
+  retries). The worker never builds in-process (it did until 2026-11; the 2Gi worker
+  can't hold a full build, the job needed 8Gi after a 4Gi OOM).
+- `/imports/files` batch end (`rebuild_display=True`), sport changes
+  (`activity_sport._request_community_rebuild`), `infer_offroad --apply` →
+  `run_jobs.trigger_build_pmtiles_job()` directly, guarded by a per-instance debounce
+  `BUILD_PMTILES_DEBOUNCE_S` (600 s) **with no trailing ping**: a suppressed trigger
+  waits for the next one. Deletions, account merge → the trigger, no debounce.
 - Archive drain: `_ArchiveRebuildPinger` pings per archive BEFORE its "done" email,
   re-pings at most every `DRAIN_PMTILES_REPING_S` (1800 s), flushes at batch end.
 - Safety net: scheduler `common-trails-rebuild-pmtiles-daily-prod` — despite the
@@ -297,15 +302,21 @@ Always `--account=paleclercq@gmail.com --project=common-trails`; never
 `rebuild_heat_agg`, `verify_heat_agg`, `routing_profiles`, DEM / `download_dem`,
 `import_osm_roads`, `enrich_edges`; routes `/heatmap/tiles/*.mvt`, `/heatmap/stats`,
 `/heatmap/trails`, `/heatmap/export`, `/heatmap/display-url`, `/me/unexplored`,
-`/internal/ingest/heat`; `/internal/artefacts/rebuild` + `INTERNAL_ARTEFACT_HANDLER_URL`
-+ `cloud_tasks.enqueue_artefact_rebuild` (the in-worker full build; the queue
-`common-trails-artefact-rebuild-prod` lives on for « Ma heatmap » tasks);
+`/internal/ingest/heat`; the in-worker full build of `/internal/artefacts/rebuild`
+(`_rebuild_and_upload_pmtiles` — the route now only fires the job);
 on-demand MBTiles/KML/async export; WASM router + `.fgraph`;
 terraform (archived — never `apply`); Strava OAuth/webhook sync. Orphaned prod
 resources may still exist (Cloud Tasks queue `common-trails-heat-compute-prod`, old jobs).
 
 ## Known quirks (as of 2026-11-17, not fixed)
 
+- `artefact-rebuild` is ONE constant task name with no time suffix. Per the Cloud
+  Tasks docs a task name stays reserved for a while after the task ran or was
+  deleted (~1 h, more for queue.yaml queues), so an upload shortly after a run is
+  deduped with NO new task (`deduped` is reported as `queued`). The `/imports/files`
+  batch-end trigger and the weekly run cover it; a lone `/gpx/upload` waits.
+  Unverified on the live queue. `my_heatmap_files` avoids it with
+  `my-heatmap-{user}-{window}` names.
 - `aggregate_raw_for_export` has no caller left (exports are static artifacts).
 - `cloud_tasks.enqueue_export_build` has no caller and imports a
   `process_export_build` that no longer exists (dead since the async export went).

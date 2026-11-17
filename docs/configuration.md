@@ -57,10 +57,12 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `GCP_PROJECT` / `GCP_REGION` | vide | — | `common-trails` / `europe-west1` | Déclenchement `jobs:run` (`backend/app/services/run_jobs.py`) |
 | `INGEST_ARCHIVES_JOB_NAME` | — | — | `common-trails-ingest-pending-archives-prod` | Job déclenché à `/imports/strava-archive/complete` |
 | `BUILD_PMTILES_JOB_NAME` | — | — | `common-trails-build-pmtiles-prod` | Job de build déclenché après import |
-| `BUILD_PMTILES_DEBOUNCE_S` | `600` | — | — | Anti-rafale du déclencheur `/imports/files`, `/gpx/upload`, changement de sport (par instance) |
+| `BUILD_PMTILES_DEBOUNCE_S` | `600` | — | — | Anti-rafale du déclencheur direct (fin de lot `/imports/files`, changement de sport), par instance |
 | `DRAIN_PMTILES_REPING_S` | `1800` | — | — | Intervalle min. entre deux pings de build dans un même drain |
 | `CLOUD_TASKS_LOCATION`, `CLOUD_TASKS_INVOKER_SA` | vide | — | `europe-west1`, SA invoker | Vides → rien n'est mis en file (pas de Cloud Tasks) |
-| `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks des rebuilds « Ma heatmap » (nom historique) |
+| `INTERNAL_ARTEFACT_HANDLER_URL` | vide | — | `<worker>/internal/artefacts/rebuild` | Cible + audience OIDC de la tâche `artefact-rebuild` (le worker lance le job `build-pmtiles`) |
+| `ARTEFACT_REBUILD_SCHEDULE_S` | `300` | — | — | Délai de la tâche `artefact-rebuild` (nom constant : une rafale d'uploads = une tâche) |
+| `CLOUD_TASKS_ARTEFACT_QUEUE` | vide | — | `common-trails-artefact-rebuild-prod` | File Cloud Tasks (`artefact-rebuild` et rebuilds « Ma heatmap ») |
 
 Les URLs `.run.app` doivent correspondre octet pour octet à l'audience OIDC
 (voir [`prod-deploy.md`](prod-deploy.md) §8).

@@ -12,16 +12,20 @@ file per request** (GPX, FIT, or a small `.zip` of them) with the sport and the
 consent fields (`contribute_heatmap`, `consent_version`, …).
 
 1. The activity is parsed and stored in `activities` (`source='manual_upload'`).
-2. On the **last file of a batch** (`rebuild_display=True`, the default), the
-   web calls `run_jobs.request_community_rebuild()`, which fires the
-   `common-trails-build-pmtiles-prod` Cloud Run Job
-   (`trigger_build_pmtiles_job`), debounced per instance by
-   `BUILD_PMTILES_DEBOUNCE_S` (600 s). Earlier files of the batch ask for
-   nothing (`heatmap_status: "deferred"`). `POST /gpx/upload` (map drop) asks
-   the same way for each new community-eligible trace. The build never runs in
-   the web or worker services: the Cloud Task → worker
-   `POST /internal/artefacts/rebuild` and the per-activity
-   `POST /internal/ingest/heat` hop are gone.
+2. When the request stored at least one community-eligible activity, the web
+   calls `request_community_rebuild()` (`backend/app/services/cloud_tasks.py`)
+   → `enqueue_artefact_rebuild()` → Cloud Task `artefact-rebuild` with a
+   **constant name**, scheduled `ARTEFACT_REBUILD_SCHEDULE_S` (300 s) out: the
+   uploads of a burst collapse onto that one task. When it fires, the
+   **worker** `POST /internal/artefacts/rebuild` (OIDC) only calls
+   `run_jobs.trigger_build_pmtiles_job()` → one run of the
+   `common-trails-build-pmtiles-prod` Cloud Run Job (8Gi); a failed trigger
+   answers 503 so Cloud Tasks retries. The worker never builds in-process.
+   `POST /gpx/upload` does the same. (The former per-activity hop through
+   `POST /internal/ingest/heat` is gone.)
+3. On the **last file of a batch** (`rebuild_display=True`), the web also fires
+   the build job directly (`run_jobs.trigger_build_pmtiles_job`), debounced per
+   instance by `BUILD_PMTILES_DEBOUNCE_S` (600 s).
 
 ## 2. Archives — signed upload + drain job
 

@@ -702,6 +702,7 @@ from app.api.gpx_upload import router as gpx_upload_router
 from app.api.health import router as health_router
 from app.api.heatmap import router as heatmap_router
 from app.api.imports import router as imports_router
+from app.api.internal_artefacts import router as internal_artefacts_router
 from app.api.me_activities import router as me_activities_router
 from app.api.me_heatmap import internal_router as internal_my_heatmap_router
 from app.api.me_heatmap import router as me_heatmap_router
@@ -809,6 +810,7 @@ app.include_router(collections_router)
 app.include_router(collections_public_router)
 app.include_router(trips_router)
 app.include_router(admin_router)
+app.include_router(internal_artefacts_router)
 app.include_router(internal_my_heatmap_router)
 app.include_router(export_router)
 

@@ -1,8 +1,8 @@
 """OIDC verification on /internal/* endpoints — rejection-path tests.
 
-The /internal/* family (today the worker's my-heatmap rebuild) is reachable
-from the public internet on Cloud Run. An attacker who finds the URL can
-trigger expensive rebuilds (DoS surface) unless OIDC verification holds.
+The /internal/* family (my-heatmap rebuild, artefact-rebuild) is reachable from
+the public internet on Cloud Run. An attacker who finds the URL can trigger
+expensive artefact rebuilds (DoS surface) unless OIDC verification holds.
 
 Tested:
   - Missing Authorization header → 401
@@ -33,6 +33,7 @@ def prod_mode_client(client, monkeypatch) -> Iterator:
     # Set placeholders so the "not configured" branch doesn't fire
     # unless we explicitly want it to.
     monkeypatch.setenv("INTERNAL_MY_HEATMAP_HANDLER_URL", "https://example.invalid/internal/my-heatmap/rebuild")
+    monkeypatch.setenv("INTERNAL_ARTEFACT_HANDLER_URL", "https://example.invalid/internal/artefacts/rebuild")
     monkeypatch.setenv("CLOUD_TASKS_INVOKER_SA", "common-trails-tasks@example.iam.gserviceaccount.com")
     yield client
 
@@ -42,6 +43,7 @@ def prod_mode_client(client, monkeypatch) -> Iterator:
 # past Pydantic validation so we exercise the dependency, not a 422.
 _INTERNAL_ENDPOINTS = [
     ("POST", "/internal/my-heatmap/rebuild", {"user_id": "y"}),
+    ("POST", "/internal/artefacts/rebuild", {}),
 ]
 
 
@@ -121,12 +123,12 @@ def test_internal_endpoint_returns_500_when_audience_unconfigured(client, monkey
     prevents a half-deployed instance from accepting tokens with arbitrary
     audiences."""
     monkeypatch.setenv("TEST_MODE", "false")
-    monkeypatch.delenv("INTERNAL_MY_HEATMAP_HANDLER_URL", raising=False)
+    monkeypatch.delenv("INTERNAL_ARTEFACT_HANDLER_URL", raising=False)
     monkeypatch.setenv("CLOUD_TASKS_INVOKER_SA", "x@y.iam.gserviceaccount.com")
 
     resp = client.post(
-        "/internal/my-heatmap/rebuild",
-        json={"user_id": "y"},
+        "/internal/artefacts/rebuild",
+        json={},
         headers={"Authorization": "Bearer any-token"},
     )
     assert resp.status_code == 500, (

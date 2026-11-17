@@ -11,9 +11,8 @@ Event-driven kicks for prod Cloud Run Jobs:
   appears on the static ``heatmap-display.pmtiles`` served from GCS. Without
   this a contribution lands in ``activities`` but never reaches the map until
   the next unrelated rebuild.
-* ``request_community_rebuild`` — the same trigger behind the per-instance
-  debounce, with an outcome string for the upload endpoints (``/gpx/upload``,
-  ``/imports/files`` batch end).
+  The same call is made by the worker's ``POST /internal/artefacts/rebuild``
+  when the debounced ``artefact-rebuild`` Cloud Task fires after an upload.
 
 Auth mirrors ``app.api.admin._fetch_executions``: the in-container GCE metadata
 server mints an access token for the calling runtime SA. This only works on
@@ -207,31 +206,3 @@ def trigger_build_pmtiles_job() -> bool:
     if not _is_enabled("BUILD_PMTILES_JOB_NAME"):
         return False
     return _trigger_job(os.environ["BUILD_PMTILES_JOB_NAME"], "build-pmtiles")
-
-
-def request_community_rebuild() -> str:
-    """Ask for the community PMTiles to be rebuilt after an upload. Never raises.
-
-    Debounced ``trigger_build_pmtiles_job`` (see ``build_pmtiles_debounce_ok``):
-    the build runs in the ``build-pmtiles`` Cloud Run Job, never in a web or
-    worker request. Returns the value the upload endpoints surface as
-    ``heatmap_status``:
-
-    * ``"queued"`` — a job run was requested;
-    * ``"debounced"`` — a run was already requested on this instance within the
-      cooldown; this upload waits for the next trigger (or the weekly backstop);
-    * ``"inline"`` — the job trigger is not configured (dev / tests): nothing
-      to do;
-    * ``"failed"`` — the trigger was configured but the request failed; the
-      activity is stored, the display catches up on the next rebuild.
-    """
-    try:
-        if not build_pmtiles_debounce_ok():
-            log.info("build-pmtiles trigger debounced (cooldown active)")
-            return "debounced"
-        if trigger_build_pmtiles_job():
-            return "queued"
-        return "failed" if _is_enabled("BUILD_PMTILES_JOB_NAME") else "inline"
-    except Exception:  # defense in depth: an upload never fails on this
-        log.warning("build-pmtiles trigger failed", exc_info=True)
-        return "failed"

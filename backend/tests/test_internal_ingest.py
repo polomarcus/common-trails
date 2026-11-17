@@ -1,12 +1,9 @@
-"""Uploads request the community rebuild from the build-pmtiles JOB directly.
+"""The heat-compute hop is gone: uploads request the community rebuild directly.
 
 * ``/gpx/upload`` and ``/imports/files`` (prod path, TEST_MODE off) call
-  ``run_jobs.request_community_rebuild`` — a debounced ``jobs:run`` on the
-  build-pmtiles Cloud Run Job — and never create a Cloud Task for the community
-  map.
+  ``cloud_tasks.request_community_rebuild`` — the debounced ``artefact-rebuild``
+  Cloud Task — and never create a task for ``/internal/ingest/heat``.
 * ``/internal/ingest/heat`` (kept one release as a 200 no-op) is removed.
-* ``/internal/artefacts/rebuild`` (the full build run inside the 2 GiB worker,
-  fed by the ``artefact-rebuild`` Cloud Task) is removed too.
 """
 import zlib
 from datetime import UTC, datetime, timedelta
@@ -52,18 +49,8 @@ def rebuild_requests(monkeypatch):
 
     monkeypatch.setattr("app.api.gpx_upload.request_community_rebuild", _fake)
     monkeypatch.setattr("app.api.imports.request_community_rebuild", _fake)
-    monkeypatch.setattr("app.services.run_jobs.request_community_rebuild", _fake)
+    monkeypatch.setattr("app.services.cloud_tasks.request_community_rebuild", _fake)
     return calls
-
-
-@pytest.fixture
-def clean_debounce():
-    """The build-pmtiles debounce is process-global: start and end clean."""
-    from app.services.run_jobs import reset_build_pmtiles_debounce
-
-    reset_build_pmtiles_debounce()
-    yield
-    reset_build_pmtiles_debounce()
 
 
 @pytest.fixture
@@ -75,14 +62,10 @@ def prod_upload_path(monkeypatch):
 
 
 class TestUploadsRequestRebuildDirectly:
-    def test_cloud_tasks_has_no_community_rebuild_enqueue(self):
-        """Neither the heat-compute task nor the artefact-rebuild task (the
-        in-worker full build) can be enqueued any more."""
+    def test_cloud_tasks_has_no_heat_compute_enqueue(self):
         from app.services import cloud_tasks
 
         assert not hasattr(cloud_tasks, "enqueue_heat_compute")
-        assert not hasattr(cloud_tasks, "enqueue_artefact_rebuild")
-        assert not hasattr(cloud_tasks, "request_community_rebuild")
 
     def test_gpx_upload_requests_rebuild(
         self, client, auth_headers, rebuild_requests, prod_upload_path,
@@ -142,68 +125,45 @@ class TestUploadsRequestRebuildDirectly:
         assert rebuild_requests == ["rebuild"]
         assert resp.json()["heatmap_status"] == "queued"
 
-    def test_imports_files_non_final_file_defers_to_batch_end(
-        self, client, auth_headers, rebuild_requests, prod_upload_path,
-    ):
-        """A non-final file of a batch (rebuild_display=false) asks for nothing:
-        the batch's last request does, so a 20-file drop is ONE job run."""
-        resp = client.post(
-            "/imports/files",
-            headers=auth_headers,
-            files={"file": ("mid.gpx", _make_gpx_bytes("batch middle file"), "application/gpx+xml")},
-            data={"sport": "road", "contribute_heatmap": "true", "rebuild_display": "false", **_CONSENT},
-        )
-        assert resp.status_code == 202, resp.text
-        assert resp.json()["imported"] == 1
-        assert rebuild_requests == []
-        assert resp.json()["heatmap_status"] == "deferred"
-
 
 class TestRequestCommunityRebuild:
-    """``run_jobs.request_community_rebuild``: the debounced build-pmtiles job
-    trigger behind the upload endpoints."""
+    def test_noop_inline_when_cloud_tasks_unconfigured(self):
+        from app.services.cloud_tasks import request_community_rebuild
 
-    def test_inline_when_job_trigger_unconfigured(self, clean_debounce):
-        from app.services.run_jobs import request_community_rebuild
-
-        # TEST_MODE: the job trigger is gated off, nothing is requested.
+        # TEST_MODE: nothing is enqueued.
         assert request_community_rebuild() == "inline"
 
-    def test_triggers_the_build_job_then_debounces(self, monkeypatch, clean_debounce):
-        """Prod wiring: one jobs:run on the build-pmtiles JOB; a second request
-        inside the cooldown is suppressed (no second job run)."""
-        from app.services import run_jobs
+    def test_enqueues_the_debounced_artefact_task_not_a_heat_task(self, monkeypatch):
+        """Prod wiring: ONE constant-named task on the artefact queue, pointed
+        at /internal/artefacts/rebuild — never at /internal/ingest/heat."""
+        from app.services import cloud_tasks
 
-        calls: list[str] = []
+        seen: dict = {}
 
-        def _fake_trigger() -> bool:
-            calls.append("jobs:run")
-            return True
+        def _fake_enqueue(**kwargs):
+            seen.update(kwargs)
+            return "deduped"
 
-        monkeypatch.setattr(run_jobs, "trigger_build_pmtiles_job", _fake_trigger)
+        monkeypatch.setattr(cloud_tasks, "_enqueue_with_const_name", _fake_enqueue)
 
-        assert run_jobs.request_community_rebuild() == "queued"
-        assert run_jobs.request_community_rebuild() == "debounced"
-        assert calls == ["jobs:run"]
+        # A deduped enqueue means a rebuild is already pending → "queued".
+        assert cloud_tasks.request_community_rebuild() == "queued"
+        assert seen["queue_env"] == "CLOUD_TASKS_ARTEFACT_QUEUE"
+        assert seen["handler_url_env"] == "INTERNAL_ARTEFACT_HANDLER_URL"
+        assert seen["task_name"] == "artefact-rebuild"
+        assert seen["schedule_seconds"] > 0  # debounce window
 
-    def test_failed_when_configured_trigger_fails(self, monkeypatch, clean_debounce):
-        from app.services import run_jobs
+    def test_never_raises(self, monkeypatch):
+        from app.services import cloud_tasks
 
-        monkeypatch.setattr(run_jobs, "trigger_build_pmtiles_job", lambda: False)
-        monkeypatch.setattr(run_jobs, "_is_enabled", lambda _env: True)
-        assert run_jobs.request_community_rebuild() == "failed"
+        def _boom():
+            raise RuntimeError("queue not terraformed")
 
-    def test_never_raises(self, monkeypatch, clean_debounce):
-        from app.services import run_jobs
-
-        def _boom() -> bool:
-            raise RuntimeError("metadata server unreachable")
-
-        monkeypatch.setattr(run_jobs, "trigger_build_pmtiles_job", _boom)
-        assert run_jobs.request_community_rebuild() == "failed"
+        monkeypatch.setattr(cloud_tasks, "enqueue_artefact_rebuild", _boom)
+        assert cloud_tasks.request_community_rebuild() == "failed"
 
 
-class TestRetiredInternalRoutes:
+class TestRetiredInternalIngestHeat:
     def test_route_is_gone(self, client, rebuild_requests):
         """The no-op kept for one release has been removed with the queue's
         last producer: the path no longer exists and requests nothing."""
@@ -216,15 +176,3 @@ class TestRetiredInternalRoutes:
         )
         assert resp.status_code in (404, 405), resp.text
         assert rebuild_requests == []
-
-    def test_artefacts_rebuild_route_is_gone(self, client, rebuild_requests):
-        """The worker no longer runs the full community build in-process: the
-        community map is rebuilt only by the build-pmtiles Cloud Run Job."""
-        resp = client.post("/internal/artefacts/rebuild", json={})
-        assert resp.status_code in (404, 405), resp.text
-        assert rebuild_requests == []
-        from app.main import app
-
-        assert "/internal/artefacts/rebuild" not in {
-            getattr(r, "path", None) for r in app.routes
-        }
