@@ -510,7 +510,9 @@ def _ingest_member_bytes(
         "distance_m": parsed.get("distance_m"),
         "elevation_gain_m": parsed.get("elevation_gain_m"),
         "file_hash": parsed.get("file_hash"),
-        "activity_date": parsed.get("activity_date") or fallback_date,
+        # A file date from a wrong device clock (2030, FIT epoch…) is dropped
+        # so the activities.csv date can take over.
+        "activity_date": ingest_service.plausible_activity_date(parsed.get("activity_date")) or fallback_date,
     }
     result = ingest_service.ingest_activity(
         user_id=user_id,
