@@ -1,10 +1,10 @@
 """Impossible activity dates are stored undated, never published as-is.
 
-Seen in prod (2026-11): a ride dated 2030 — a device clock gone wrong. Other
-faces of the same bug: the FIT epoch (1989-12-31) of a watch that never got a
-GPS fix, a GPS week rollover (~19.6 years early). The guard lives in
-``ingest.ingest_activity`` (every import path) and in the archive drain, where
-the activities.csv date can take over from a broken file date.
+Seen in prod (2026-11): a ride dated 2030 — a device clock gone wrong. The
+FIT parser does not check dates and the GPX parser lets next year through.
+The guard lives in ``ingest.ingest_activity`` (every import path) and in the
+archive drain, where the activities.csv date takes over from a broken file
+date. Dates in the DB tests are relative to now, so they never expire.
 """
 
 import uuid
@@ -100,7 +100,7 @@ def _ingest(uid, when, **extra):
 
 
 def test_ingest_stores_a_future_date_undated(uid):
-    res = _ingest(uid, datetime(2030, 5, 1, 8, 0, tzinfo=UTC))
+    res = _ingest(uid, datetime.now(UTC) + timedelta(days=400))
     assert res["status"] == "created"
     assert _stored_date(res["activity_id"]) is None
 
@@ -121,14 +121,47 @@ def test_ingest_parses_strava_iso_strings(uid):
     assert _stored_date(res["activity_id"]) == datetime(2025, 6, 2, 8, 0, tzinfo=UTC)
 
 
-def test_archive_member_with_a_broken_clock_takes_the_csv_date(uid):
-    """A file dated 2030 inside a Strava export: the activities.csv date (the
-    rider's real date) takes over instead of the impossible one."""
+def _soon() -> datetime:
+    """A date the GPX parser accepts (≤ next calendar year) but the guard
+    rejects (> now + 1 day)."""
+    return datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+
+
+def test_archive_gpx_with_a_broken_clock_takes_the_csv_date(uid):
+    """A GPX dated a few days ahead inside a Strava export: the activities.csv
+    date (the rider's real date) takes over instead of the impossible one."""
     csv_date = datetime(2024, 9, 1, 7, 30, tzinfo=UTC)
     out, aid, note = drain._ingest_member_bytes(
         user_id=uid,
         filename="activities/broken-clock.gpx",
-        raw=_gpx(datetime(2030, 5, 1, 8, 0, tzinfo=UTC)),
+        raw=_gpx(_soon()),
+        resolved_sport="road",
+        contribute_heatmap=False,
+        source="manual_upload",
+        fallback_date=csv_date,
+    )
+    assert out == "imported" and note is None
+    assert _stored_date(aid) == csv_date
+
+
+def test_archive_fit_with_a_broken_clock_takes_the_csv_date(uid, monkeypatch):
+    """The prod case: a FIT (naive datetime, no date check in the FIT parser)
+    dated years ahead of the rider's real CSV date."""
+    csv_date = datetime(2024, 9, 2, 7, 30, tzinfo=UTC)
+    real_parse = drain._parse_member
+    broken = datetime.now() + timedelta(days=4 * 365)  # naive, like fitparse
+
+    def parse_like_a_broken_fit(raw, filename):
+        parsed = real_parse(raw, "member.gpx")
+        parsed["activity_date"] = broken
+        parsed["start_time"] = broken
+        return parsed
+
+    monkeypatch.setattr(drain, "_parse_member", parse_like_a_broken_fit)
+    out, aid, note = drain._ingest_member_bytes(
+        user_id=uid,
+        filename="activities/broken-clock.fit",
+        raw=_gpx(datetime(2024, 1, 1, tzinfo=UTC), lon=3.9),
         resolved_sport="road",
         contribute_heatmap=False,
         source="manual_upload",
@@ -142,7 +175,7 @@ def test_archive_member_with_a_broken_clock_and_no_csv_is_undated(uid):
     out, aid, note = drain._ingest_member_bytes(
         user_id=uid,
         filename="activities/broken-clock-2.gpx",
-        raw=_gpx(datetime(2030, 5, 1, 8, 0, tzinfo=UTC), lon=3.75),
+        raw=_gpx(_soon(), lon=3.75),
         resolved_sport="road",
         contribute_heatmap=False,
         source="manual_upload",

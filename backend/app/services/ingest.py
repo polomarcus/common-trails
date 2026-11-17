@@ -566,12 +566,13 @@ def _promote_activity_to_community(
 
 
 # Plausible activity dates. A device with a wrong clock writes impossible
-# dates — a ride "in 2030" (seen in prod 2026-11), the FIT epoch (1989-12-31)
-# of a watch that never got a GPS fix, a GPS week rollover (~19.6 years
-# early). Stored as-is they pollute every date-based view (newest-first lists,
-# "since N days" exports) and publish a wrong date. Outside the window the
-# date is dropped: the activity is stored UNDATED (kept in "Ma heatmap", off
-# the public map until the rider fixes it) — never guessed.
+# dates — a ride "in 2030" (seen in prod 2026-11): the FIT parser does not
+# check dates, and the GPX parser lets the next calendar year through. Stored
+# as-is they pollute every date-based view (newest-first lists, "since N
+# days" exports) and publish a wrong date. Outside the window the date is
+# dropped: the activity is stored UNDATED (kept in "Ma heatmap", off the
+# public map) — never guessed. The lower bound also catches pre-2000 dates
+# (an old GPS week rollover); a rollover landing after 2000 is NOT detectable.
 MIN_PLAUSIBLE_ACTIVITY_DATE = datetime(2000, 1, 1, tzinfo=UTC)
 FUTURE_DATE_TOLERANCE = timedelta(days=1)  # time zones / clock drift
 

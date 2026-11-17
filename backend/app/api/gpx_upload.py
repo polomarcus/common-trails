@@ -278,7 +278,9 @@ async def gpx_upload(
     if (
         community_ok
         and result["status"] in ("created", "promoted")
-        and parsed.get("activity_date") is not None
+        # The date ``ingest_activity`` kept: an impossible one was dropped
+        # (stored undated → not on the public map, nothing to rebuild).
+        and activity_data.get("activity_date") is not None
     ):
         heatmap_status = request_community_rebuild()
         # We surface "processing" while the rebuild is pending so the UI can
