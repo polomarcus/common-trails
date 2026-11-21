@@ -31,6 +31,7 @@ export default defineConfig({
       'lib/__tests__/admin-metrics.test.ts',
       'lib/__tests__/notification-display.test.ts',
       'lib/__tests__/email-auth.test.ts',
+      'lib/__tests__/confirm-email-page.test.tsx',
       'lib/__tests__/community-pmtiles-url.test.ts',
       'lib/__tests__/env-url.test.ts',
       'lib/__tests__/cdn-pointer.test.ts',

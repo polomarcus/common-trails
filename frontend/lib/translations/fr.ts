@@ -64,7 +64,6 @@ const fr: Translations = {
   'common.delete': 'Supprimer',
   'common.save': 'Enregistrer',
   'common.back': '← Retour',
-  'common.or': 'ou',
   'common.create': 'Créer',
   'common.retry': 'Réessayer',
   'common.loading': 'Chargement…',
@@ -187,15 +186,6 @@ const fr: Translations = {
   'home.philosophy.method': 'Méthodologie',
   'home.footer.license': 'ODbL 1.0 · Extrémités masquées · AGPLv3',
 
-  // ── Home — Auth ──────────────────────────────────────────────────────────────
-  'home.auth.login': 'Connexion',
-  'home.auth.register': 'Inscription',
-  'home.auth.username': "Nom d'utilisateur",
-  'home.auth.email': 'Email',
-  'home.auth.password': 'Mot de passe',
-  'home.auth.loginBtn': 'Se connecter',
-  'home.auth.registerBtn': 'Créer mon compte',
-
   // ── Passwordless email login (magic link) ────────────────────────────────────
   'emailAuth.title': 'Créer un compte ou se connecter',
   'emailAuth.subtitle': "Entre ton email — on t'envoie un lien de connexion.",
@@ -220,11 +210,11 @@ const fr: Translations = {
   'accountEmail.submit': 'Ajouter mon email',
   'accountEmail.sending': 'Envoi…',
   'accountEmail.sentTitle': 'Vérifie ta boîte mail ✉️',
-  'accountEmail.sentBody': "Un lien de confirmation vient d'être envoyé à cette adresse. Clique dessus pour finaliser — l'adresse n'est rattachée qu'une fois confirmée.",
+  'accountEmail.sentBody': "Un lien de confirmation vient d'être envoyé à cette adresse. Clique dessus pour finaliser — l'adresse n'est rattachée qu'une fois confirmée, et tu te reconnectes ensuite avec elle.",
   'accountEmail.conflict': 'Cet email est déjà utilisé par un autre compte. Connecte-toi plutôt avec le login email.',
   'accountEmail.error': "Échec de l'envoi. Réessaie dans un instant.",
   'accountEmail.confirming': 'Confirmation en cours…',
-  'accountEmail.confirmSuccess': 'Email confirmé ! Redirection…',
+  'accountEmail.confirmSuccess': 'Email confirmé ! Connecte-toi avec ta nouvelle adresse pour continuer.',
   'accountEmail.confirmError': 'Ce lien de confirmation est invalide ou a expiré.',
   'accountEmail.confirmMissingToken': 'Lien de confirmation incomplet.',
   'accountEmail.backToStrava': 'Retour à Strava',

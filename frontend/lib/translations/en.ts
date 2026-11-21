@@ -64,7 +64,6 @@ const en: Translations = {
   'common.delete': 'Delete',
   'common.save': 'Save',
   'common.back': '← Back',
-  'common.or': 'or',
   'common.create': 'Create',
   'common.retry': 'Retry',
   'common.loading': 'Loading…',
@@ -187,15 +186,6 @@ const en: Translations = {
   'home.philosophy.method': 'Methodology',
   'home.footer.license': 'ODbL 1.0 · Endpoints masked · AGPLv3',
 
-  // ── Home — Auth ──────────────────────────────────────────────────────────────
-  'home.auth.login': 'Log in',
-  'home.auth.register': 'Register',
-  'home.auth.username': 'Username',
-  'home.auth.email': 'Email',
-  'home.auth.password': 'Password',
-  'home.auth.loginBtn': 'Log in',
-  'home.auth.registerBtn': 'Create my account',
-
   // ── Passwordless email login (magic link) ────────────────────────────────────
   'emailAuth.title': 'Create an account or log in',
   'emailAuth.subtitle': "Enter your email — we'll send you a login link.",
@@ -220,11 +210,11 @@ const en: Translations = {
   'accountEmail.submit': 'Add my email',
   'accountEmail.sending': 'Sending…',
   'accountEmail.sentTitle': 'Check your inbox ✉️',
-  'accountEmail.sentBody': "A confirmation link was just sent to that address. Click it to finalize — the address is only attached once confirmed.",
+  'accountEmail.sentBody': "A confirmation link was just sent to that address. Click it to finalize — the address is only attached once confirmed, then you log in again with it.",
   'accountEmail.conflict': 'That email is already used by another account. Log in with the email login instead.',
   'accountEmail.error': 'Sending failed. Please try again in a moment.',
   'accountEmail.confirming': 'Confirming…',
-  'accountEmail.confirmSuccess': 'Email confirmed! Redirecting…',
+  'accountEmail.confirmSuccess': 'Email confirmed! Log in with your new address to continue.',
   'accountEmail.confirmError': 'This confirmation link is invalid or has expired.',
   'accountEmail.confirmMissingToken': 'Incomplete confirmation link.',
   'accountEmail.backToStrava': 'Back to Strava',
