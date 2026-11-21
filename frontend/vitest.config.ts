@@ -48,6 +48,7 @@ export default defineConfig({
       'lib/__tests__/map-activities-notice.test.tsx',
       'lib/__tests__/beta-banner.test.tsx',
       'lib/__tests__/map-no-auto-geolocate.test.tsx',
+      'lib/__tests__/maplibre-loader.test.ts',
       'lib/__tests__/heatmap-unavailable.test.tsx',
       'lib/__tests__/export-modal-focus.test.tsx',
       'lib/__tests__/notification-toasts-auth.test.tsx',

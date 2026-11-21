@@ -33,8 +33,9 @@ const ml = vi.hoisted(() => {
   return { state, GeolocateControl, FakeMap };
 });
 
+// maplibre-gl 6 is ESM-only with NAMED exports (no default export).
 vi.mock('maplibre-gl', () => ({
-  default: { Map: ml.FakeMap, GeolocateControl: ml.GeolocateControl },
+  Map: ml.FakeMap, GeolocateControl: ml.GeolocateControl, setWorkerUrl: () => {},
 }));
 vi.mock('maplibre-gl/dist/maplibre-gl.css', () => ({}));
 vi.mock('@/lib/pmtiles-protocol', () => ({ registerPMTiles: () => {} }));

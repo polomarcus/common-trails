@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { loadMaplibre } from '@/lib/maplibre';
 import { SPORT_COLORS } from '@/lib/constants';
 import { haversineKm } from '@/lib/geo';
 import { registerDirectionArrow, directionArrowLayout } from '@/lib/map-arrows';
@@ -66,7 +67,7 @@ export default function TraceMap({ coords, sport = 'road', height = 320, parentC
     let cancelled = false;
 
     const init = async () => {
-      const ml = await import('maplibre-gl');
+      const ml = await loadMaplibre();
       await import('maplibre-gl/dist/maplibre-gl.css');
       if (cancelled || !containerRef.current) return;
 
@@ -77,8 +78,7 @@ export default function TraceMap({ coords, sport = 'road', height = 320, parentC
       const sw: [number, number] = [Math.min(...lons), Math.min(...lats)];
       const ne: [number, number] = [Math.max(...lons), Math.max(...lats)];
 
-      // @ts-ignore maplibre dynamic import
-      const map = new ml.default.Map({
+      const map = new ml.Map({
         container: containerRef.current,
         style: 'https://tiles.openfreemap.org/styles/bright',
         bounds: [sw, ne],
@@ -185,8 +185,7 @@ export default function TraceMap({ coords, sport = 'road', height = 320, parentC
             el.style.cssText = 'min-width:22px;height:22px;border-radius:11px;background:#fff;border:2px solid #555;box-shadow:0 2px 6px rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;color:#333;font-size:10px;font-weight:700;font-family:system-ui,sans-serif;padding:0 3px;';
             el.textContent = pos.label;
           }
-          // @ts-ignore
-          new ml.default.Marker({ element: el, anchor: 'center' }).setLngLat([pos.lon, pos.lat]).addTo(map);
+          new ml.Marker({ element: el, anchor: 'center' }).setLngLat([pos.lon, pos.lat]).addTo(map);
         }
 
         // Panoramax photo markers
@@ -207,8 +206,7 @@ export default function TraceMap({ coords, sport = 'road', height = 320, parentC
               onPhotoClickRef.current?.(photo);
             });
             wrapper.appendChild(btn);
-            // @ts-ignore
-            new ml.default.Marker({ element: wrapper, anchor: 'center' }).setLngLat([photo.lon, photo.lat]).addTo(map);
+            new ml.Marker({ element: wrapper, anchor: 'center' }).setLngLat([photo.lon, photo.lat]).addTo(map);
           }
         }
       });

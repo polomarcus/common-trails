@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
+import { loadMaplibre } from '@/lib/maplibre';
 import { SPORT_COLORS, POI_TYPES } from '@/lib/constants';
 
 const STAGE_COLORS = [
@@ -81,7 +82,7 @@ export default function TripMap({ stages, pois, height = 400, selectedStageIdx, 
     let cancelled = false;
 
     const init = async () => {
-      const ml = await import('maplibre-gl');
+      const ml = await loadMaplibre();
       await import('maplibre-gl/dist/maplibre-gl.css');
       if (cancelled || !containerRef.current) return;
 
@@ -90,8 +91,7 @@ export default function TripMap({ stages, pois, height = 400, selectedStageIdx, 
       const sw: [number, number] = [Math.min(...lons), Math.min(...lats)];
       const ne: [number, number] = [Math.max(...lons), Math.max(...lats)];
 
-      // @ts-ignore maplibre dynamic import
-      const map = new ml.default.Map({
+      const map = new ml.Map({
         container: containerRef.current,
         style: 'https://tiles.openfreemap.org/styles/bright',
         bounds: [sw, ne],
@@ -157,15 +157,13 @@ export default function TripMap({ stages, pois, height = 400, selectedStageIdx, 
           startEl.style.cssText = `width:16px;height:16px;border-radius:50%;background:${sg.color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);cursor:pointer;`;
           startEl.title = `Jour ${i + 1} — Départ`;
           startEl.addEventListener('click', () => onStageClickRef.current?.(i));
-          // @ts-ignore
-          new ml.default.Marker({ element: startEl }).setLngLat([start[0], start[1]]).addTo(map);
+          new ml.Marker({ element: startEl }).setLngLat([start[0], start[1]]).addTo(map);
 
           if (i === stageGeometries.length - 1) {
             const endEl = document.createElement('div');
             endEl.style.cssText = `width:16px;height:16px;border-radius:50%;background:#333;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);`;
             endEl.title = 'Arrivée';
-            // @ts-ignore
-            new ml.default.Marker({ element: endEl }).setLngLat([end[0], end[1]]).addTo(map);
+            new ml.Marker({ element: endEl }).setLngLat([end[0], end[1]]).addTo(map);
           }
         });
 
@@ -176,8 +174,7 @@ export default function TripMap({ stages, pois, height = 400, selectedStageIdx, 
           el.style.cssText = 'font-size:18px;cursor:pointer;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5));';
           el.textContent = icon;
           el.title = p.name || p.type;
-          // @ts-ignore
-          new ml.default.Marker({ element: el }).setLngLat([p.lon, p.lat]).addTo(map);
+          new ml.Marker({ element: el }).setLngLat([p.lon, p.lat]).addTo(map);
         }
 
         // ── POI placement: hover ghost + click to add ──────────────────
@@ -185,8 +182,7 @@ export default function TripMap({ stages, pois, height = 400, selectedStageIdx, 
           // Create ghost marker element (hidden until hover)
           const ghostEl = document.createElement('div');
           ghostEl.style.cssText = 'width:24px;height:24px;border-radius:50%;background:rgba(45,106,79,0.6);border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);pointer-events:none;transition:opacity 0.1s;opacity:0;';
-          // @ts-ignore
-          const ghost = new ml.default.Marker({ element: ghostEl }).setLngLat([0, 0]).addTo(map);
+          const ghost = new ml.Marker({ element: ghostEl }).setLngLat([0, 0]).addTo(map);
           ghostMarkerRef.current = { marker: ghost, remove: () => ghost.remove() };
 
           // Snap point to nearest segment on all routes
