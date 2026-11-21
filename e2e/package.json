@@ -9,10 +9,10 @@
   },
   "devDependencies": {
     "@playwright/test": "1.65.1",
-    "typescript": "5.5.2"
+    "typescript": "7.0.2"
   },
   "dependencies": {
     "@mapbox/vector-tile": "^2.0.4",
-    "pbf": "^4.0.1"
+    "pbf": "^5.1.2"
   }
 }

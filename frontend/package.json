@@ -12,9 +12,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@sentry/react": "^8.0.0",
-    "@types/jszip": "^3.4.0",
-    "jszip": "^3.10.1",
+    "@sentry/react": "^11.8.0",
+    "@types/jszip": "^3.4.1",
+    "jszip": "^3.10.2",
     "maplibre-gl": "4.3.2",
     "next": "16.4.6",
     "pmtiles": "^4.5.0",
