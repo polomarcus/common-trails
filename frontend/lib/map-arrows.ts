@@ -15,7 +15,7 @@
  * nothing else.
  *
  * ⚠️ Two calls below can genuinely throw in the wild (verified against the
- * pinned maplibre-gl 4.3.2):
+ * pinned maplibre-gl — first 4.3.2, re-checked on 6.15.0):
  *   - `map.addImage()` → `RangeError: mismatched image size` — it wraps the
  *     bytes in `new RGBAImage({width, height}, …)`, which throws synchronously
  *     when `width * height * 4 !== data.length`. THE prod bug of 2026-10-12,
@@ -40,7 +40,7 @@ function drawAndRegisterArrow(map: unknown): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const m = map as any;
   // Already registered (a second setup pass on the same map). `Style.addImage`
-  // does NOT throw on a duplicate id in maplibre 4.3.2 — it fires an ErrorEvent
+  // does NOT throw on a duplicate id (maplibre 4.3.2 and 6.15.0) — it fires an ErrorEvent
   // and silently keeps the old image — so without this guard a second pass would
   // redraw the canvas for nothing and emit a spurious map `error` event.
   if (typeof m?.hasImage === 'function' && m.hasImage('direction-arrow')) return true;

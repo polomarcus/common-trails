@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { StyleSpecification } from 'maplibre-gl';
+import { loadMaplibre } from '@/lib/maplibre';
 
 // Start heavy dynamic imports at module-eval time (not in useEffect).
 // This eliminates ~200-400ms of React mount delay from the waterfall:
@@ -10,7 +11,7 @@ import type { StyleSpecification } from 'maplibre-gl';
 //                            → React mount (parallel)
 const _maplibrePromise = typeof window !== 'undefined'
   ? Promise.all([
-      import('maplibre-gl'),
+      loadMaplibre(),
       import('maplibre-gl/dist/maplibre-gl.css'),
       import('@/lib/pmtiles-protocol').then((m) => m.registerPMTiles()),
     ])
@@ -95,8 +96,7 @@ export default function Map({
 
         if (cancelled || !containerRef.current) return;
 
-        // @ts-ignore maplibre dynamic import default
-        mapInstance = new maplibregl.default.Map({
+        mapInstance = new maplibregl.Map({
           container: containerRef.current,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           style: resolvedStyle as any,
@@ -104,8 +104,6 @@ export default function Map({
           zoom,
           attributionControl: {},
           fadeDuration: 0, // instant tile render — no 300ms fade lag on pan/zoom
-          // (prefetchZoomDelta lives in maplibre-gl >= 5; we're on 4.3.2,
-          // where the option is silently ignored. Re-add once we upgrade.)
         });
 
         if (!useOffline) {
@@ -114,8 +112,7 @@ export default function Map({
           // location-permission prompt over the landing page for every visitor
           // (frontend audit 2026-11-07). The rider asks for it by pressing the
           // button, on / and on /map alike.
-          // @ts-ignore maplibre dynamic import default
-          const geolocate = new maplibregl.default.GeolocateControl({
+          const geolocate = new maplibregl.GeolocateControl({
             positionOptions: { enableHighAccuracy: false },
             trackUserLocation: false,
           });

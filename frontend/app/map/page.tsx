@@ -36,6 +36,7 @@ import {
 import { getHeatmapAppearance } from '@/lib/heatmap-appearance';
 import { homeViewCenter, HOME_VIEW_ZOOM } from '@/lib/home-view';
 import { type ActivityItem, getTrackCenter, getTrackBbox, computeTraceMarkerPositions, lineParts } from '@/lib/map-utils';
+import { loadMaplibre } from '@/lib/maplibre';
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
@@ -202,7 +203,7 @@ export default function MapPage() {
     const positions = computeTraceMarkerPositions(coords);
     if (positions.length === 0) return;
 
-    const maplibregl = await import('maplibre-gl');
+    const maplibregl = await loadMaplibre();
 
     for (const pos of positions) {
       const el = document.createElement('div');
@@ -219,8 +220,7 @@ export default function MapPage() {
         el.textContent = pos.label;
       }
 
-      // @ts-ignore maplibre dynamic import
-      const marker = new maplibregl.default.Marker({ element: el, anchor: 'center' })
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([pos.lon, pos.lat])
         .addTo(map);
       traceMarkersRef.current.push(marker);

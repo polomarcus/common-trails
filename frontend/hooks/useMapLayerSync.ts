@@ -107,7 +107,7 @@ export function useMapLayerSync(params: {
     // getLayer-guarded like the community + waymarked effects: a setup block can
     // now fail in isolation (lib/init-map-layers.ts::safeBlock), so a layer this
     // effect toggles may legitimately be absent. MapLibre only FIRES an error
-    // event for a non-existing layer (Style.setLayoutProperty, 4.3.2) rather than
+    // event for a non-existing layer (Style.setLayoutProperty, 4.3.2 and 6.15.0) rather than
     // throwing, so the unguarded version was noise rather than a crash — but
     // noise that would drown the real `[heatmap] tile load error` diagnostics.
     const dfciLayers = ['dfci-trails-casing', 'dfci-trails-line', 'dfci-trails-label'];

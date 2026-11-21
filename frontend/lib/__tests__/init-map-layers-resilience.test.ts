@@ -7,7 +7,7 @@
  * was straight-line code whose FIRST statement, `registerDirectionArrow()`,
  * touches the canvas (`getImageData`) and calls `map.addImage()`. Either can
  * throw in the wild: `addImage` raises `RangeError: mismatched image size` when
- * the declared size disagrees with the bitmap (verified in maplibre-gl 4.3.2,
+ * the declared size disagrees with the bitmap (verified in maplibre-gl 4.3.2 and 6.15.0,
  * which wraps the bytes in `new RGBAImage({width, height}, …)`), and
  * `getImageData` raises SecurityError where canvas reads are blocked. The throw
  * aborted every block after it,

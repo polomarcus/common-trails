@@ -15,6 +15,7 @@
  * from that Source instead of a plain public fetch.
  */
 import type { Source } from 'pmtiles';
+import { loadMaplibre } from '@/lib/maplibre';
 
 let registered = false;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -24,10 +25,10 @@ export async function registerPMTiles(): Promise<void> {
   if (registered) return;
   const [{ Protocol }, maplibregl] = await Promise.all([
     import('pmtiles'),
-    import('maplibre-gl'),
+    loadMaplibre(),
   ]);
   const protocol = new Protocol();
-  maplibregl.default.addProtocol('pmtiles', protocol.tile);
+  maplibregl.addProtocol('pmtiles', protocol.tile);
   protocolInstance = protocol;
   registered = true;
 }
