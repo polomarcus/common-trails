@@ -99,7 +99,7 @@ def _ingest_one(user_id: str, path: Path, sport: str, contribute: bool) -> tuple
 
     try:
         content = path.read_bytes()
-        parsed = gpx_service.parse_gpx(content)
+        parsed = gpx_service.parse_gpx(content, bounded=False)  # offline CLI
     except gpx_service.TraceTooDenseError as e:
         # Rejected on the raw bytes before parsing (points / tags caps).
         return ("error", f"too many coords / elements: {e}")

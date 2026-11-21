@@ -172,7 +172,7 @@ def _fit_gz(name: str) -> bytes:
     return gzip.compress(b"FIT\x00" + name.encode())
 
 
-def _fit_parsed_stub(raw: bytes) -> dict:
+def _fit_parsed_stub(raw: bytes, **_kw) -> dict:
     """Stand-in for ``fit_parser.parse_fit`` — returns a valid parsed dict with
     a real LineString and a content-derived file_hash (so idempotence holds)."""
     coords = [[3.60 + i * 0.001, 44.10 + i * 0.001, 100 + i] for i in range(8)]
@@ -535,9 +535,10 @@ class TestCompleteOwnershipAndFlip:
         )
         assert comp.status_code == 409, comp.text
 
-    def test_second_complete_is_409_and_triggers_once(self, client, auth_headers):
-        """Only awaiting_upload → uploaded is accepted: a repeated /complete
-        answers 409, leaves the row as it is and fires no second job."""
+    def test_second_complete_is_idempotent_and_triggers_once(self, client, auth_headers):
+        """A repeated /complete (the 202 got lost, the browser retries) answers
+        202 with ``enqueue="already"``, leaves the row as it is and fires no
+        second job."""
         from unittest.mock import MagicMock, patch
 
         body = _init(client, auth_headers).json()
@@ -551,12 +552,14 @@ class TestCompleteOwnershipAndFlip:
             second = client.post("/imports/strava-archive/complete", headers=auth_headers, json=payload)
 
         assert first.status_code == 202, first.text
-        assert second.status_code == 409, second.text
+        assert second.status_code == 202, second.text
+        assert second.json()["enqueue"] == "already"
+        assert second.json()["status"] == "uploaded"
         trigger.assert_called_once_with()
 
-    def test_complete_on_a_drained_archive_is_409_without_trigger(self, client, auth_headers):
-        """A row already past 'uploaded' (draining, done, failed) is never
-        flipped back to 'uploaded' and never re-triggers the job."""
+    def test_complete_on_a_drained_archive_never_retriggers(self, client, auth_headers):
+        """A row already past 'uploaded' is never flipped back and never
+        re-triggers the job: in flight / done → 202 "already", failed → 409."""
         from unittest.mock import MagicMock, patch
 
         from app.db.models import PendingArchive
@@ -578,7 +581,13 @@ class TestCompleteOwnershipAndFlip:
                     "/imports/strava-archive/complete", headers=auth_headers,
                     json={"archive_id": body["archive_id"], "key": body["bucket_key"]},
                 )
-            assert comp.status_code == 409, (status, comp.text)
+            if status == "failed":
+                assert comp.status_code == 409, (status, comp.text)
+            else:
+                assert comp.status_code == 202, (status, comp.text)
+                assert comp.json() == {
+                    "archive_id": body["archive_id"], "status": status, "enqueue": "already",
+                }
             trigger.assert_not_called()
             db = SessionLocal()
             try:

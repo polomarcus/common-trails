@@ -241,12 +241,16 @@ def _open_fit(content: bytes):
         return tolerant
 
 
-def parse_fit(content: bytes) -> dict:
+def parse_fit(content: bytes, *, bounded: bool = True) -> dict:
     """Parse FIT bytes, return internal activity dict (same format as parse_gpx).
 
-    Bounded before decoding (:func:`check_fit_bounds`, raises
-    ``TraceTooDenseError``) and run under the process-wide parse slot
-    (``gpx.parse_slot``, raises ``ParserBusyError``)."""
+    ``bounded`` (default, the web service): checked before decoding
+    (:func:`check_fit_bounds`, raises ``TraceTooDenseError``) and run under the
+    process-wide parse slot (``gpx.parse_slot``, raises ``ParserBusyError``).
+    The archive jobs (8 GiB) and offline CLIs pass ``bounded=False``: a 24 h
+    ride with power and HR data exceeds the web budget but is a real ride."""
+    if not bounded:
+        return _parse_fit_unbounded(content)
     check_fit_bounds(content)
     with parse_slot():
         return _parse_fit_unbounded(content)

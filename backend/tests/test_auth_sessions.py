@@ -290,3 +290,27 @@ def test_migration_0073_chain_and_column():
     col = {c["name"]: c for c in sa_inspect(engine).get_columns("users")}["token_version"]
     assert col["nullable"] is False
     assert str(col["default"]).strip("'") == "0"
+
+
+# ── Local sign-in: the magic link is printed in TEST_MODE only ───────────
+
+
+class TestMagicLinkPrintedInTestModeOnly:
+    def test_printed_in_test_mode(self, client, capture_send, caplog):
+        caplog.set_level("INFO", logger="app.api.auth")
+        r = client.post("/auth/email/request", json={"email": _unique_email()},
+                        headers={"X-Forwarded-For": _unique_ip()})
+        assert r.status_code == 200, r.text
+        assert "TEST_MODE magic link" in caplog.text
+        assert "/auth/verify?token=" in caplog.text
+
+    def test_never_printed_outside_test_mode(self, client, capture_send, caplog, monkeypatch):
+        from app import config as app_config
+
+        monkeypatch.setattr(app_config, "TEST_MODE", False)
+        caplog.set_level("INFO", logger="app.api.auth")
+        r = client.post("/auth/email/request", json={"email": _unique_email()},
+                        headers={"X-Forwarded-For": _unique_ip()})
+        assert r.status_code == 200, r.text
+        assert "magic link" not in caplog.text
+        assert "token=" not in caplog.text

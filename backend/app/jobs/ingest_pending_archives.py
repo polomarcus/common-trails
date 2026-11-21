@@ -329,10 +329,12 @@ def _parse_member(raw: bytes, filename: str) -> dict:
     uses (a 10 MB gzip of repeated bytes can expand to ~10 GB otherwise).
     """
     raw, low = decompress_member(raw, filename)
+    # Runs in the 8 GiB archive job, one member at a time: no web parse
+    # budget here (a 24 h / multi-day ride must import).
     if low.endswith(".fit"):
         from app.services.fit_parser import parse_fit
-        return parse_fit(raw)
-    return gpx_service.parse_gpx(raw)
+        return parse_fit(raw, bounded=False)
+    return gpx_service.parse_gpx(raw, bounded=False)
 
 
 def _effective_sport(

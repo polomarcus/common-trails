@@ -625,17 +625,22 @@ def _coord_is_valid(lat: float, lon: float, ele: float | None) -> bool:
     return not (ele is not None and not (-500.0 <= ele <= 9000.0))
 
 
-def parse_gpx(content: bytes) -> dict:
+def parse_gpx(content: bytes, *, bounded: bool = True) -> dict:
     """Parse GPX bytes, return internal activity dict.
 
     Drops out-of-range coordinates (lat/lon/elevation outside plausible
     ranges) silently and exposes the count via `invalid_point_count` on
     the return dict.
 
-    Bounded BEFORE gpxpy builds its in-memory tree (:func:`check_gpx_bounds`,
-    raises :class:`TraceTooDenseError`), and run under the process-wide parse
-    slot (:func:`parse_slot`, raises :class:`ParserBusyError`).
+    ``bounded`` (default, the web service: 512 MiB, one instance): checked
+    BEFORE gpxpy builds its in-memory tree (:func:`check_gpx_bounds`, raises
+    :class:`TraceTooDenseError`) and run under the process-wide parse slot
+    (:func:`parse_slot`, raises :class:`ParserBusyError`). The archive jobs
+    (8 GiB, one file at a time) and offline CLIs pass ``bounded=False``: a
+    multi-day ride must not be refused there.
     """
+    if not bounded:
+        return _parse_gpx_unbounded(content)
     check_gpx_bounds(content)
     with parse_slot():
         return _parse_gpx_unbounded(content)
@@ -887,12 +892,13 @@ def too_many_coords_message(count: int) -> str:
 def check_gpx_bounds(content: bytes) -> None:
     """Cheap byte-level caps applied before parsing (no XML decoding).
 
-    * points (``<trkpt`` + ``<rtept`` + ``<wpt``) > MAX_GPX_COORDS → same
-      reason as the post-parse coordinate cap;
+    * track points (``<trkpt``, the only points the parser keeps) >
+      MAX_GPX_COORDS → same reason as the post-parse coordinate cap (route
+      and way points are bounded by the element cap below);
     * tags (``<``) > MAX_GPX_XML_TAGS → bounds the parser's memory even when
       the elements are not points.
     """
-    points = content.count(b"<trkpt") + content.count(b"<rtept") + content.count(b"<wpt")
+    points = content.count(b"<trkpt")
     if points > MAX_GPX_COORDS:
         raise TraceTooDenseError(too_many_coords_message(points))
     tags = content.count(b"<")

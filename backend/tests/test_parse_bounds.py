@@ -107,10 +107,13 @@ class TestGpxPreParseCaps:
         assert str(exc.value) == gpx_service.too_many_coords_message(120)
         assert "too many coordinates" in str(exc.value)
 
-    def test_route_and_way_points_count_too(self, no_xml_parse, small_coord_cap):
-        body = b'<gpx version="1.1">' + b'<rtept lat="1" lon="1"/>' * 30 + b'<wpt lat="1" lon="1"/>' * 30 + b"</gpx>"
-        with pytest.raises(gpx_service.TraceTooDenseError):
-            gpx_service.parse_gpx(body)
+    def test_route_and_way_points_do_not_count_as_track_points(self, small_coord_cap):
+        """Only track points are kept: a trace under the cap that also carries
+        its planned route is not refused (the element cap still bounds them)."""
+        body = _dense_gpx(40).replace(
+            b"</gpx>", b"<rte>" + b'<rtept lat="44.1" lon="3.1"/>' * 40 + b"</rte></gpx>"
+        )
+        assert gpx_service.parse_gpx(body)["coord_count"] == 40
 
     def test_element_budget_rejects_non_point_flood(self, no_xml_parse, monkeypatch):
         """A file with few points but a flood of other elements is bounded too
@@ -170,11 +173,16 @@ class TestGpxCapsOnEveryPath:
         assert resp.status_code == 202, resp.text
         assert any("too many coordinates" in e for e in resp.json()["errors"]), resp.json()
 
-    def test_archive_drain_member(self, no_xml_parse, small_coord_cap):
+    def test_archive_job_is_not_bound_by_the_web_budget(self, small_coord_cap, monkeypatch):
+        """The 8 GiB archive job parses what the web service would refuse
+        (multi-day rides), and never waits for the web parse slot."""
         from app.jobs.ingest_pending_archives import _parse_member
 
-        with pytest.raises(gpx_service.TraceTooDenseError):
-            _parse_member(_dense_gpx(120), "activities/1.gpx")
+        def _no_slot():
+            raise AssertionError("the archive job must not take the web parse slot")
+
+        monkeypatch.setattr(gpx_service, "parse_slot", _no_slot)
+        assert _parse_member(_dense_gpx(120), "activities/1.gpx")["coord_count"] == 120
 
 
 # ── FIT: record budget before fitparse ──────────────────────────────────────
@@ -201,6 +209,15 @@ class TestFitPreParseCap:
     def test_under_budget_fit_parses(self, monkeypatch):
         monkeypatch.setattr(fit_parser, "MAX_FIT_FIELD_VALUES", 1000)
         parsed = fit_parser.parse_fit(_fit_records(25))
+        assert parsed["coord_count"] == 25
+
+    def test_archive_job_parses_an_over_budget_fit(self, monkeypatch):
+        """A 24 h ride with sensors exceeds the web budget; the 8 GiB archive
+        job still imports it."""
+        from app.jobs.ingest_pending_archives import _parse_member
+
+        monkeypatch.setattr(fit_parser, "MAX_FIT_FIELD_VALUES", 100)
+        parsed = _parse_member(_fit_records(25), "activities/1.fit")  # 125 units > 100
         assert parsed["coord_count"] == 25
 
     def test_imports_files_fit_over_budget(self, client, auth_headers, monkeypatch):

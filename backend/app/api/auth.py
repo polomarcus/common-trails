@@ -628,6 +628,10 @@ async def request_magic_link(
         verify_url += f"&redirect={quote(safe_redirect, safe='')}"
     subject, html = render_magic_link_email(verify_url, locale=locale)
     send_email(email, subject, html)
+    if app_config.TEST_MODE:
+        # Local dev / CI only (prod pins TEST_MODE=false): no email is sent,
+        # so print the link — the only way to sign in through the UI locally.
+        logger.info("TEST_MODE magic link (local sign-in): %s", verify_url)
 
     return generic
 

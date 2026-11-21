@@ -46,7 +46,7 @@ def _fit_gz(name: str) -> bytes:
     return gzip.compress(b"FIT\x00" + name.encode())
 
 
-def _fit_parsed_stub(raw: bytes) -> dict:
+def _fit_parsed_stub(raw: bytes, **_kw) -> dict:
     coords = [[3.60 + i * 0.001, 44.10 + i * 0.001, 100 + i] for i in range(8)]
     return {
         "name": "Garmin Activity",

@@ -780,7 +780,7 @@ _is_prod = os.environ.get("ENV", "development") != "development"
 # (FRONTEND_URL is https in prod) and the request itself arriving over HTTPS
 # (Cloud Run's front end sets X-Forwarded-Proto). Plain-http dev gets neither.
 _frontend_is_https = _app_config.FRONTEND_URL.lower().startswith("https://")
-_HSTS_VALUE = "max-age=31536000; includeSubDomains"
+_HSTS_VALUE = "max-age=31536000"  # no includeSubDomains: every subdomain is not vetted for HTTPS-only
 # Static-export pages (and /share/* HTML): no framing, no plugins, no <base>
 # hijack. Deliberately no script-src/connect-src/worker-src — the Next.js
 # export uses inline scripts, MapLibre spawns blob: workers and tiles come

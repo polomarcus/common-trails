@@ -186,11 +186,24 @@ export default function ContributionDropzone() {
         const resp = await fetch(`${API_URL}/imports/files`, {
           method: 'POST', credentials: 'include', body: formData,
         });
-        let data: { imported?: number; skipped?: number; consent_id?: string; detail?: unknown } | null = null;
+        let data: {
+          imported?: number; skipped?: number; failed?: number; errors?: unknown;
+          consent_id?: string; detail?: unknown;
+        } | null = null;
         try { data = await resp.json(); } catch { /* error bodies may not be JSON */ }
         if (resp.ok) {
           imported += data?.imported ?? 0; skipped += data?.skipped ?? 0;
           if (data?.consent_id) consentId = data.consent_id;
+          // A 202 can still carry per-file refusals (a trace too dense for the
+          // upload, an unreadable member of a zip): count and show them.
+          const refused = data?.failed ?? 0;
+          if (refused > 0) {
+            failed += refused;
+            const reasons = Array.isArray(data?.errors)
+              ? (data!.errors as unknown[]).filter((e): e is string => typeof e === 'string')
+              : [];
+            failures.push(`${files[i].name} — ${reasons.length ? reasons.join(' ; ') : t('strava.archive.failed')}`);
+          }
         } else {
           failed++;
           failures.push(`${files[i].name} — ${describeApiError(data?.detail, resp.status)}`);

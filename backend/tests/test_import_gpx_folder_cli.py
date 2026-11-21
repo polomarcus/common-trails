@@ -180,7 +180,7 @@ def test_cli_rejects_gpx_over_max_size_before_parse(fresh_user, tmp_path):
     gpx_path = _write_gpx(tmp_path, "small_but_capped", "mountain_biking", n_points=3)
     parsed_called = {"count": 0}
 
-    def _spy_parse_gpx(content):  # noqa: ARG001
+    def _spy_parse_gpx(content, **_kw):  # noqa: ARG001
         parsed_called["count"] += 1
         raise AssertionError("parse_gpx was called despite oversize file — byte cap is too late")
 

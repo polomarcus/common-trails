@@ -134,6 +134,19 @@ describe('ContributionDropzone', () => {
     expect(err).toContain('serveur');
   });
 
+  it('a 202 that refuses the file (too dense to import here) shows the reason, not a silent 0', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true, status: 202,
+      json: async () => ({ imported: 0, skipped: 0, failed: 1, errors: ['FIT has too many records'], activity_ids: [] }),
+    });
+    await act(async () => { (q(container, 'sport-chip-road') as HTMLButtonElement).click(); });
+    await drop(q(container, 'files-block')!, [fakeFile('long.gpx')]);
+    await click(container, 'upload-recap-confirm');
+    const err = q(container, 'hero-upload-error')!.textContent!;
+    expect(err).toContain('long.gpx');
+    expect(err).toContain('FIT has too many records');
+  });
+
   it('an accepted archive stamps the "processing" marker read by /map', async () => {
     localStorage.clear();
     class OkXHR {

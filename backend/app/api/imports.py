@@ -110,8 +110,14 @@ class ArchiveCompleteRequest(BaseModel):
 
 class ArchiveCompleteResult(BaseModel):
     archive_id: str
-    status: str  # "uploaded"
-    enqueue: str  # "triggered" (job kicked now) | "scheduled" (daily backstop)
+    status: str  # "uploaded" (or the current status of an in-flight archive)
+    # "triggered" (job kicked now) | "scheduled" (daily backstop) |
+    # "already" (a retry: the archive was completed before, no new job)
+    enqueue: str
+
+
+# Statuses a repeated /complete answers 202 for (the first call went through).
+_ARCHIVE_IN_FLIGHT = frozenset({"uploaded", "processing", "done"})
 
 
 @router.post("/imports/files", response_model=ImportResult, status_code=202)
@@ -804,8 +810,11 @@ async def complete_strava_archive(
     user, flip the row ``awaiting_upload`` → ``uploaded``, and kick the
     importer to drain it.
 
-    Only that one transition is accepted: a row in any other status (already
-    completed, draining, done, failed) answers 409 and fires no job.
+    Only that one transition fires the job. Idempotent for a retry (the 202
+    got lost on the network, the browser calls again): a row already
+    ``uploaded`` / ``processing`` / ``done`` answers 202 with its current
+    status and ``enqueue="already"`` — no second job. A ``failed`` row (or a
+    missing upload) answers 409.
 
     The importer is a scale-to-zero 2 Gi Cloud Run JOB, NOT a Cloud Tasks → web
     handler: the unzip of a ~400 MB payload must run on the 2 Gi job, never on
@@ -829,6 +838,8 @@ async def complete_strava_archive(
             raise HTTPException(status_code=404, detail="Unknown archive.")
         if row.bucket_key != body.key:
             raise HTTPException(status_code=400, detail="Key does not match this archive.")
+        if row.status in _ARCHIVE_IN_FLIGHT:
+            return ArchiveCompleteResult(archive_id=body.archive_id, status=row.status, enqueue="already")
         if row.status != "awaiting_upload":
             raise HTTPException(status_code=409, detail=f"Archive is not awaiting an upload (status: {row.status}).")
         if not archive_intake.archive_exists(row.storage_backend, row.bucket_key):
@@ -849,7 +860,7 @@ async def complete_strava_archive(
             archive_intake.delete_archive(row.storage_backend, row.bucket_key)
             raise HTTPException(status_code=413, detail=reason)
         # Conditional flip: of two concurrent calls only one moves the row
-        # (and triggers the job below); the other gets 409.
+        # (and triggers the job below); the other answers like a retry.
         flipped = (
             db.query(PendingArchive)
             .filter(PendingArchive.id == row.id, PendingArchive.status == "awaiting_upload")
@@ -857,6 +868,10 @@ async def complete_strava_archive(
         )
         db.commit()
         if flipped != 1:
+            db.expire_all()
+            current = db.get(PendingArchive, body.archive_id)
+            if current is not None and current.status in _ARCHIVE_IN_FLIGHT:
+                return ArchiveCompleteResult(archive_id=body.archive_id, status=current.status, enqueue="already")
             raise HTTPException(status_code=409, detail="Archive is not awaiting an upload.")
     finally:
         db.close()

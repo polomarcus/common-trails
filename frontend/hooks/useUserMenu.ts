@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/api-client';
-import { getToken } from '@/lib/auth';
+import { clearAuthState, getToken } from '@/lib/auth';
 
 export interface UserMenuState {
   showUserMenu: boolean;
@@ -29,6 +29,14 @@ export function useUserMenu(): UserMenuState {
         // /auth/me is the real endpoint (a bare /me never existed → the email
         // and admin flag silently stayed empty).
         const resp = await fetch(`${API_URL}/auth/me`, { credentials: 'include' });
+        if (resp.status === 401) {
+          // The session ended server-side (signed out on another device, email
+          // changed): forget it here too instead of showing a signed-in UI
+          // whose every call fails. Reload so every component re-reads it.
+          clearAuthState();
+          window.location.reload();
+          return;
+        }
         if (!resp.ok) return;
         const data = await resp.json();
         setUserEmail(data.email ?? null);
