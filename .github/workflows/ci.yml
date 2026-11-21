@@ -6,13 +6,19 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege for the GITHUB_TOKEN: these jobs only read the repo (the
+# deploy authenticates to GCP with its own credentials). A compromised
+# action or dependency then cannot push code or tamper with releases.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/ruff-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6 # v3.6.1
         with:
           args: check
           src: backend
@@ -24,8 +30,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -63,14 +69,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Cache Docker image
         id: docker-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /tmp/docker-image.tar
-          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'backend/pyproject.toml') }}
+          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'backend/pyproject.toml', 'backend/uv.lock') }}
 
       - name: Load cached Docker image
         if: steps.docker-cache.outputs.cache-hit == 'true'
@@ -160,15 +166,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # ── Backend (needed for E2E API calls) ─────────────────────────────
       - name: Cache Docker image
         id: docker-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /tmp/docker-image.tar
-          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'backend/pyproject.toml') }}
+          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'backend/pyproject.toml', 'backend/uv.lock') }}
 
       - name: Load cached Docker image
         if: steps.docker-cache.outputs.cache-hit == 'true'
@@ -197,7 +203,7 @@ jobs:
 
       # ── Frontend build (parallel with Docker startup) ──────────────────
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -262,7 +268,7 @@ jobs:
 
       # ── Playwright ─────────────────────────────────────────────────────
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
@@ -325,7 +331,7 @@ jobs:
 
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report-shard-${{ matrix.shard }}
           path: e2e/playwright-report/

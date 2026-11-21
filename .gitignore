@@ -66,6 +66,9 @@ venv/
 # data and must never be published. Provide your own locally for golden runs.
 data/strava-export/
 data/gpx/
+# Loose GPX files dropped at the repo root for debugging are real people's
+# traces: never versioned (the repo is public).
+/*.gpx
 
 # Internal AI-agent tooling / instructions — kept locally, not part of the
 # public repo (Claude Code config, BMAD workflow scaffolding, agent guides).
