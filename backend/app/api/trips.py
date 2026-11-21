@@ -27,6 +27,7 @@ from xml.sax.saxutils import escape as xml_escape
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthenticatedUser, get_current_user, get_current_user_optional
@@ -263,11 +264,38 @@ def _require_trip_owner(trip: Trip, user_id: str) -> None:
         raise HTTPException(status_code=403, detail="Not the trip owner")
 
 
-def _get_route_data(db: Session, route_id: str | None) -> dict | None:
-    """Get route data for stage enrichment."""
+def _route_visible_to(route: Route | None, user_id: str) -> bool:
+    """Same rule as GET /routes/{id}: a live (not deleted) route that is
+    public / unlisted, or owned by ``user_id``."""
+    if route is None or route.deleted_at is not None:
+        return False
+    return route.visibility in ("public", "unlisted") or route.owner_id == user_id
+
+
+def _require_stage_route(db: Session, route_id: str, user_id: str) -> None:
+    """A stage may only reference a route its trip owner can see (404 otherwise,
+    like GET /routes/{id}: the existence of a private route is not revealed)."""
+    try:
+        uuid.UUID(route_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Route not found") from None
+    route = db.query(Route).filter(Route.id == route_id).first()
+    if not _route_visible_to(route, user_id):
+        raise HTTPException(status_code=404, detail="Route not found")
+
+
+def _visible_route(db: Session, route_id: str | None, trip_owner_id: str) -> Route | None:
+    """The stage's route, or None when the trip owner can no longer see it
+    (made private by its author, deleted): its data is never returned then."""
     if not route_id:
         return None
     route = db.query(Route).filter(Route.id == route_id).first()
+    return route if _route_visible_to(route, trip_owner_id) else None
+
+
+def _get_route_data(db: Session, route_id: str | None, trip_owner_id: str) -> dict | None:
+    """Get route data for stage enrichment."""
+    route = _visible_route(db, route_id, trip_owner_id)
     if not route:
         return None
     geojson = route.geometry_geojson
@@ -292,16 +320,22 @@ def _recompute_trip_stats(db: Session, trip: Trip) -> None:
     rows = (
         db.query(Route.distance_m, Route.elevation_gain_m)
         .join(TripStage, TripStage.route_id == Route.id)
-        .filter(TripStage.trip_id == trip.id, TripStage.is_rest_day == False)  # noqa: E712
+        .filter(
+            TripStage.trip_id == trip.id,
+            TripStage.is_rest_day == False,  # noqa: E712
+            # Only routes the trip owner can see (same rule as _route_visible_to).
+            Route.deleted_at.is_(None),
+            or_(Route.visibility.in_(("public", "unlisted")), Route.owner_id == trip.owner_id),
+        )
         .all()
     )
     trip.total_distance_m = sum(r.distance_m or 0 for r in rows)
     trip.total_dplus_m = sum(r.elevation_gain_m or 0 for r in rows)
 
 
-def _build_stage_out(db: Session, stage: TripStage) -> StageOut:
+def _build_stage_out(db: Session, stage: TripStage, trip_owner_id: str) -> StageOut:
     """Build a StageOut with enriched route data."""
-    rd = _get_route_data(db, stage.route_id)
+    rd = _get_route_data(db, stage.route_id, trip_owner_id)
     return StageOut.from_orm_instance(stage, route_data=rd)
 
 
@@ -324,6 +358,8 @@ def _trip_out(db: Session, trip: Trip, include_children: bool = False) -> TripOu
         if route_ids:
             routes = db.query(Route).filter(Route.id.in_(route_ids)).all()
             for r in routes:
+                if not _route_visible_to(r, trip.owner_id):
+                    continue  # no longer visible to the trip owner → no data
                 geojson = r.geometry_geojson
                 if not geojson and r.current_version_id:
                     ver = db.query(RouteVersion).filter(
@@ -353,11 +389,10 @@ def _trip_out(db: Session, trip: Trip, include_children: bool = False) -> TripOu
     )
 
 
-def _stage_geojson(db: Session, stage: TripStage) -> str | None:
-    """Get the GeoJSON geometry string for a stage's linked route."""
-    if not stage.route_id:
-        return None
-    route = db.query(Route).filter(Route.id == stage.route_id).first()
+def _stage_geojson(db: Session, stage: TripStage, trip_owner_id: str) -> str | None:
+    """Get the GeoJSON geometry string for a stage's linked route (None when
+    the trip owner can no longer see that route)."""
+    route = _visible_route(db, stage.route_id, trip_owner_id)
     if not route:
         return None
     geojson = route.geometry_geojson
@@ -599,9 +634,7 @@ async def add_stage(
     if body.lodging_type and body.lodging_type not in VALID_LODGING:
         raise HTTPException(status_code=422, detail=f"Invalid lodging_type: {body.lodging_type}")
     if body.route_id:
-        route = db.query(Route).filter(Route.id == body.route_id).first()
-        if not route:
-            raise HTTPException(status_code=404, detail="Route not found")
+        _require_stage_route(db, body.route_id, current_user.user_id)
 
     stage = TripStage(
         id=str(uuid.uuid4()),
@@ -618,7 +651,7 @@ async def add_stage(
     _recompute_trip_stats(db, trip)
     db.commit()
     db.refresh(stage)
-    return _build_stage_out(db, stage)
+    return _build_stage_out(db, stage, trip.owner_id)
 
 
 @router.put("/trips/{trip_id}/stages/reorder")
@@ -643,7 +676,7 @@ async def reorder_stages(
     stages = db.query(TripStage).filter(
         TripStage.trip_id == trip_id
     ).order_by(TripStage.day_index).all()
-    return [_build_stage_out(db, s) for s in stages]
+    return [_build_stage_out(db, s, trip.owner_id) for s in stages]
 
 
 @router.put("/trips/{trip_id}/stages/{stage_id}")
@@ -664,6 +697,8 @@ async def update_stage(
 
     if body.lodging_type is not None and body.lodging_type not in VALID_LODGING:
         raise HTTPException(status_code=422, detail=f"Invalid lodging_type: {body.lodging_type}")
+    if body.route_id is not None and body.route_id != stage.route_id:
+        _require_stage_route(db, body.route_id, current_user.user_id)
 
     for field in ("route_id", "day_index", "title", "description", "estimated_time_min", "lodging_type", "is_rest_day"):
         val = getattr(body, field, None)
@@ -672,7 +707,7 @@ async def update_stage(
     _recompute_trip_stats(db, trip)
     db.commit()
     db.refresh(stage)
-    return _build_stage_out(db, stage)
+    return _build_stage_out(db, stage, trip.owner_id)
 
 
 @router.delete("/trips/{trip_id}/stages/{stage_id}", status_code=204)
@@ -792,7 +827,7 @@ async def stage_gpx(
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
 
-    geojson_str = _stage_geojson(db, stage)
+    geojson_str = _stage_geojson(db, stage, trip.owner_id)
     if not geojson_str:
         raise HTTPException(status_code=404, detail="Stage has no geometry")
 
@@ -826,7 +861,7 @@ async def trip_gpx(
     for s in stages:
         if s.is_rest_day:
             continue
-        geojson_str = _stage_geojson(db, s)
+        geojson_str = _stage_geojson(db, s, trip.owner_id)
         if not geojson_str:
             continue
         try:
@@ -883,7 +918,7 @@ async def trip_gpx_zip(
         for s in stages:
             if s.is_rest_day:
                 continue
-            geojson_str = _stage_geojson(db, s)
+            geojson_str = _stage_geojson(db, s, trip.owner_id)
             if not geojson_str:
                 continue
             stage_title = s.title or "etape"

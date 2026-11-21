@@ -356,19 +356,23 @@ async def list_routes(
     visibility: str = "public",
     search: str | None = None,
 ) -> list[RouteOut]:
-    # H6: private visibility requires auth and filters to own routes only
-    if visibility == "private":
+    # H6: only public routes are listed for everyone. "private" and "unlisted"
+    # require auth and list the caller's OWN routes only (an unlisted route is
+    # reachable by its link, never enumerable).
+    if visibility not in ("public", "unlisted", "private"):
+        raise HTTPException(status_code=422, detail=f"Invalid visibility: {visibility}")
+    if visibility in ("private", "unlisted"):
         if not current_user:
-            raise HTTPException(status_code=401, detail="Authentication required to list private routes")
+            raise HTTPException(status_code=401, detail=f"Authentication required to list {visibility} routes")
         q = db.query(Route).filter(
             Route.owner_id == current_user.user_id,
-            Route.visibility == "private",
+            Route.visibility == visibility,
             Route.status != "draft",
             Route.deleted_at.is_(None),
         )
     else:
         q = db.query(Route).filter(
-            Route.visibility == visibility,
+            Route.visibility == "public",
             Route.status != "draft",
             Route.deleted_at.is_(None),
         )

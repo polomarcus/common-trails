@@ -254,3 +254,83 @@ class TestShareActivityVisibility:
         img = Image.open(BytesIO(resp.content))
         assert img.format == "PNG"
         assert img.size == (1200, 630)
+
+
+def _route_id(client, auth_headers, name: str, visibility: str = "public") -> str:
+    resp = client.post(
+        "/routes", json={"name": name, "sport": "road", "visibility": visibility}, headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+class TestShareHardening:
+    def test_quotes_in_route_name_cannot_leave_the_meta_attribute(self, client, auth_headers):
+        """`content="…"` attributes: a `"` in the name is escaped, so the name
+        stays inside the attribute value."""
+        route_id = _route_id(client, auth_headers, 'Col "du" <Galibier> & co x" data-x="y')
+        html = client.get(f"/share/{route_id}").text
+        assert 'data-x="y' not in html
+        assert "<Galibier>" not in html
+        assert "Col &quot;du&quot; &lt;Galibier&gt; &amp; co x&quot; data-x=&quot;y" in html
+        assert f"route={route_id}" in html
+
+    def test_quotes_in_activity_name_are_escaped(self, client, auth_headers):
+        activity_id = _create_owned_activity(client, auth_headers, name='Ride "x" data-x="y')
+        html = client.get(f"/share/activity/{activity_id}", headers=auth_headers).text
+        assert 'data-x="y' not in html
+        assert "&quot;x&quot;" in html
+
+    def test_cache_control_public_only_for_public_routes(self, client, auth_headers):
+        public_id = _route_id(client, auth_headers, "P")
+        unlisted_id = _route_id(client, auth_headers, "U", visibility="unlisted")
+        assert client.get(f"/share/{public_id}/og-image").headers["Cache-Control"].startswith("public")
+        assert client.get(f"/share/{unlisted_id}/og-image").headers["Cache-Control"].startswith("private")
+
+    def test_activity_card_is_never_publicly_cacheable(self, client, auth_headers):
+        activity_id = _create_owned_activity(client, auth_headers)
+        resp = client.get(f"/share/activity/{activity_id}/og-image", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.headers["Cache-Control"].startswith("private")
+
+    def test_deleted_route_is_not_shared(self, client, auth_headers):
+        route_id = _route_id(client, auth_headers, "Gone")
+        assert client.delete(f"/routes/{route_id}", headers=auth_headers).status_code == 204
+        assert client.get(f"/share/{route_id}").status_code == 404
+        assert client.get(f"/share/{route_id}/og-image").status_code == 404
+
+    def test_og_image_is_rate_limited(self, client, auth_headers, monkeypatch):
+        from app.rate_limit import limiter
+
+        monkeypatch.setenv("OG_IMAGE_RATE_LIMIT", "2/minute")
+        route_id = _route_id(client, auth_headers, "RL")
+        limiter.enabled = True
+        limiter.reset()
+        try:
+            codes = [client.get(f"/share/{route_id}/og-image").status_code for _ in range(3)]
+        finally:
+            limiter.enabled = False
+            limiter.reset()
+        assert codes == [200, 200, 429], codes
+
+    def test_og_image_renders_off_the_event_loop(self, client, auth_headers, monkeypatch):
+        """Pillow work runs in a worker thread (no running event loop there)."""
+        import asyncio
+
+        from app.api import share
+
+        seen = {}
+        real = share._og_card_png
+
+        def _spy(**kw):
+            try:
+                asyncio.get_running_loop()
+                seen["on_loop"] = True
+            except RuntimeError:
+                seen["on_loop"] = False
+            return real(**kw)
+
+        monkeypatch.setattr(share, "_og_card_png", _spy)
+        route_id = _route_id(client, auth_headers, "T")
+        assert client.get(f"/share/{route_id}/og-image").status_code == 200
+        assert seen == {"on_loop": False}

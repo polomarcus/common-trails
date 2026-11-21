@@ -12,9 +12,12 @@ The og-image used to be SVG. WhatsApp / Twitter / iMessage / Slack /
 LinkedIn silently drop SVG previews, so the share button effectively
 produced a card-less link. Switched to PNG via Pillow on 2026-05-16.
 """
+import html
 import io
+import json
 import logging
 import math
+import os
 from pathlib import Path
 from typing import Annotated
 from xml.sax.saxutils import escape
@@ -23,15 +26,28 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.auth import AuthenticatedUser, get_current_user
 from app.config import FRONTEND_URL
 from app.db.models import Activity, Route
 from app.db.session import get_db
+from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["share"])
+
+
+def _attr(value: str) -> str:
+    """Escape for an HTML attribute value or text node (quotes included)."""
+    return html.escape(value, quote=True)
+
+
+# Per-IP cap on PNG card renders (CPU-bound Pillow work, public endpoint).
+# Social crawlers fetch a card once per shared link; env-overridable.
+def _og_image_rate_limit() -> str:
+    return os.environ.get("OG_IMAGE_RATE_LIMIT", "30/minute")
 
 SPORT_EMOJI = {"road": "\U0001f6b4", "gravel": "\U0001f6b5", "mtb": "\U0001f6b5", "offroad": "\U0001f6b6", "running": "\U0001f3c3"}
 SPORT_COLORS = {"road": "#2563eb", "gravel": "#d97706", "mtb": "#7c3aed", "offroad": "#0891b2", "running": "#dc2626"}
@@ -58,12 +74,12 @@ async def share_route_html(
 ) -> HTMLResponse:
     """Return HTML with Open Graph meta tags for social sharing previews."""
     route = db.query(Route).filter(Route.id == route_id).first()
-    if not route:
+    if not route or route.deleted_at is not None:
         raise HTTPException(404, "Route not found")
     if route.visibility == "private":
         raise HTTPException(404, "Route not found")
 
-    name = escape(route.name)
+    name = _attr(route.name)
     sport = route.sport or "road"
     emoji = SPORT_EMOJI.get(sport, "\U0001f5fa")
     dist = _fmt_dist(route.distance_m)
@@ -75,12 +91,15 @@ async def share_route_html(
         parts.append(dist)
     if elev:
         parts.append(elev)
-    description = escape(" · ".join(parts))
+    description = _attr(" · ".join(parts))
 
     og_title = f"{emoji} {name}"
     base_url = str(request.base_url).rstrip("/")
-    og_image = f"{base_url}/share/{route_id}/og-image"
-    frontend_url = f"{FRONTEND_URL.rstrip('/')}/map?route={route_id}"
+    # The stored id, not the raw path segment, goes into the page.
+    og_image = _attr(f"{base_url}/share/{route.id}/og-image")
+    frontend_url_raw = f"{FRONTEND_URL.rstrip('/')}/map?route={route.id}"
+    frontend_url = _attr(frontend_url_raw)
+    frontend_url_js = json.dumps(frontend_url_raw).replace("<", "\\u003c")
 
     html = f"""<!DOCTYPE html>
 <html lang="fr">
@@ -113,7 +132,7 @@ async def share_route_html(
     <p style="font-size:16px;color:#555">Redirection vers la carte…</p>
     <a href="{frontend_url}" style="color:#1a4731;font-weight:700">Ouvrir l'itinéraire</a>
   </div>
-  <script>window.location.replace("{frontend_url}");</script>
+  <script>window.location.replace({frontend_url_js});</script>
 </body>
 </html>"""
     return HTMLResponse(content=html)
@@ -136,7 +155,7 @@ async def share_activity_html(
     if not activity or activity.user_id != current_user.user_id:
         raise HTTPException(404, "Activity not found")
 
-    name = escape(activity.name or "Activité")
+    name = _attr(activity.name or "Activité")
     sport = activity.sport or "road"
     emoji = SPORT_EMOJI.get(sport, "\U0001f5fa")
     dist = _fmt_dist(activity.distance_m)
@@ -147,12 +166,14 @@ async def share_activity_html(
         parts.append(dist)
     if elev:
         parts.append(elev)
-    description = escape(" · ".join(parts))
+    description = _attr(" · ".join(parts))
 
     og_title = f"{emoji} {name}"
     base_url = str(request.base_url).rstrip("/")
-    og_image = f"{base_url}/share/activity/{activity_id}/og-image"
-    frontend_url = f"{FRONTEND_URL.rstrip('/')}/activities?id={activity_id}"
+    og_image = _attr(f"{base_url}/share/activity/{activity.id}/og-image")
+    frontend_url_raw = f"{FRONTEND_URL.rstrip('/')}/activities?id={activity.id}"
+    frontend_url = _attr(frontend_url_raw)
+    frontend_url_js = json.dumps(frontend_url_raw).replace("<", "\\u003c")
 
     html = f"""<!DOCTYPE html>
 <html lang="fr">
@@ -185,7 +206,7 @@ async def share_activity_html(
     <p style="font-size:16px;color:#555">Redirection vers la trace…</p>
     <a href="{frontend_url}" style="color:#1a4731;font-weight:700">Ouvrir la trace</a>
   </div>
-  <script>window.location.replace("{frontend_url}");</script>
+  <script>window.location.replace({frontend_url_js});</script>
 </body>
 </html>"""
     return HTMLResponse(content=html)
@@ -353,7 +374,9 @@ def _og_card_svg(title: str, sport: str, dist: str, elev: str) -> str:
 
 
 @router.get("/share/{route_id}/og-image")
+@limiter.limit(_og_image_rate_limit)
 async def share_route_og_image(
+    request: Request,
     route_id: str,
     db: Annotated[Session, Depends(get_db)],
 ) -> Response:
@@ -362,24 +385,31 @@ async def share_route_og_image(
     WhatsApp / Twitter / iMessage / Slack drop SVG og-images silently;
     PNG is the format the open-graph ecosystem agrees on. See module
     docstring for the history.
+
+    Rendered in a worker thread (Pillow is CPU-bound). Shared caches may keep
+    a PUBLIC route's card; an unlisted one is cached by the browser only.
     """
     route = db.query(Route).filter(Route.id == route_id).first()
-    if not route:
+    if not route or route.deleted_at is not None:
         raise HTTPException(404, "Route not found")
     if route.visibility == "private":
         raise HTTPException(404, "Route not found")
 
-    png_bytes = _og_card_png(
+    png_bytes = await run_in_threadpool(
+        _og_card_png,
         title=route.name,
         sport=route.sport or "road",
         dist=_fmt_dist(route.distance_m),
         elev=_fmt_elev(route.elevation_gain_m),
     )
-    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    cache = "public, max-age=3600" if route.visibility == "public" else "private, max-age=3600"
+    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": cache})
 
 
 @router.get("/share/activity/{activity_id}/og-image")
+@limiter.limit(_og_image_rate_limit)
 async def share_activity_og_image(
+    request: Request,
     activity_id: str,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
@@ -393,10 +423,12 @@ async def share_activity_og_image(
     if not activity or activity.user_id != current_user.user_id:
         raise HTTPException(404, "Activity not found")
 
-    png_bytes = _og_card_png(
+    png_bytes = await run_in_threadpool(
+        _og_card_png,
         title=activity.name or "Activit\u00e9",
         sport=activity.sport or "road",
         dist=_fmt_dist(activity.distance_m),
         elev=_fmt_elev(activity.elevation_gain_m),
     )
-    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    # Owner-only content: never stored by shared caches.
+    return Response(content=png_bytes, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
