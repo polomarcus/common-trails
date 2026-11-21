@@ -64,6 +64,11 @@ class User(Base):
     username = Column(String(100), nullable=False)
     hashed_password = Column(Text, nullable=True)
     is_admin = Column(Boolean, default=False, nullable=False, server_default="false")
+    # Session generation (migration 0073). Every session JWT carries it as
+    # ``tv``; ``get_current_user`` rejects a token whose ``tv`` differs, so
+    # bumping it ends every session of the account at once (logout, confirmed
+    # email change, password dropped by a magic-link login).
+    token_version = Column(Integer, default=0, nullable=False, server_default="0")
     created_at = Column(DateTime(timezone=True), default=_now)
     # Last time the yearly "re-export + re-upload your data" reminder was sent
     # (app.jobs.resync_reminder, migration 0064). NULL = never reminded.
