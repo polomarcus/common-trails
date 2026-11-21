@@ -175,3 +175,36 @@ def test_defuse_stdlib_is_actually_applied_to_gpxpys_parser():
         f"xml.etree.ElementTree.parse is not defused "
         f"({ET.parse.__module__!r}). Same fix as above."
     )
+
+
+# A single, NON-exponential internal entity. Stock expat (Python 3.13's
+# amplification limits included) expands it without complaint, and so would
+# lxml; only the defused stdlib parser refuses ANY entity declaration. This is
+# what makes the test fail if gpxpy ever parses through anything else (e.g. a
+# transitive dependency installs lxml, which gpxpy prefers when importable).
+INTERNAL_ENTITY = b"""<?xml version="1.0"?>
+<!DOCTYPE gpx [
+  <!ENTITY name "expanded-entity">
+]>
+<gpx version="1.1" creator="test"><trk><name>&name;</name><trkseg>
+<trkpt lat="43.61" lon="3.87"/><trkpt lat="43.62" lon="3.88"/>
+</trkseg></trk></gpx>"""
+
+
+def test_any_entity_declaration_is_rejected():
+    """Non-vacuous guard: a harmless-looking entity declaration is refused,
+    which only the defusedxml-patched stdlib parser does."""
+    with pytest.raises(Exception) as exc_info:
+        parse_gpx(INTERNAL_ENTITY)
+    exc = exc_info.value
+    msg = (str(exc) + type(exc).__name__ + repr(getattr(exc, "original_exception", None))).lower()
+    assert "entit" in msg or "forbidden" in msg, (
+        f"Expected a defusedxml rejection; got {type(exc).__name__}: {exc}"
+    )
+
+
+def test_gpxpy_reports_the_stdlib_backend():
+    """gpxpy's own switch (lxml when importable) must say STDLIB."""
+    import gpxpy.parser
+
+    assert gpxpy.parser.library() == "STDLIB"

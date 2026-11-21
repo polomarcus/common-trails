@@ -1,14 +1,14 @@
 """Consented Strava-archive community-contribution intake (feat/strava-archive-consent-import).
 
-Drives the REAL endpoint + the REAL paced worker (no inline mirrors):
+Drives the REAL endpoints (init → PUT → complete) + the REAL paced workers
+(no inline mirrors):
 
-  * consent is REQUIRED — no consent → 422, nothing stored/enqueued.
-  * with consent → a ContributionConsent audit row is recorded AND each
-    archive member is ENQUEUED (not ingested on the request thread),
-    tagged source="manual_upload" with the activities.csv sport.
-  * out-of-scope CSV rows (Yoga/…) are skipped, never enqueued (skip beats pollute).
-  * the paced worker drains the queue and ingests each member, stamping
-    provenance source="manual_upload" on the resulting Activity.
+  * consent is REQUIRED — no consent → 422, nothing recorded.
+  * with consent → a ContributionConsent audit row is recorded; the archive
+    is drained out of band, each member tagged source="manual_upload" with
+    the activities.csv sport.
+  * out-of-scope CSV rows (Yoga/…) are skipped, never ingested (skip beats pollute).
+  * the legacy per-member queue (``pending_archive_files``) still drains.
 """
 import gzip
 import hashlib
@@ -100,84 +100,37 @@ def _count(model, **flt) -> int:
         db.close()
 
 
-class TestConsentGate:
-    def test_no_consent_rejected_and_nothing_stored(self, client, auth_headers):
-        uid = _user_id(client, auth_headers)
-        from app.db.models import ContributionConsent, PendingArchiveFile
+def _enqueue_member_queue(uid: str) -> None:
+    """Fill the per-member queue (``pending_archive_files``) that
+    ``drain_pending`` drains, straight through the service (the one-shot
+    multipart endpoint that used to feed it is gone)."""
+    from app.db.session import SessionLocal
+    from app.services import archive_intake
+
+    db = SessionLocal()
+    try:
+        consent_id = archive_intake.record_consent(
+            db, user_id=uid, consent_version="v1", consent_text="consent (ODbL)", locale=None,
+        )
+        archive_intake.enqueue_archive(
+            db, user_id=uid, content=_archive_zip(), filename="export.zip",
+            contribute_heatmap=True, consent_id=consent_id,
+        )
+    finally:
+        db.close()
+
+
+class TestOneShotArchiveEndpointRemoved:
+    def test_multipart_archive_post_is_gone(self, client, auth_headers):
+        """The one-shot multipart archive upload buffered the whole .zip on the
+        web instance; uploads go through init → PUT → complete only."""
         resp = client.post(
             "/imports/strava-archive",
             headers=auth_headers,
             files={"file": ("export.zip", _archive_zip(), "application/zip")},
-            data={
-                "sport": "road",
-                "consent": "false",
-                "consent_version": "v1",
-                "consent_text": "I consent",
-            },
+            data={"consent": "true", "consent_version": "v1", "consent_text": "I consent"},
         )
-        assert resp.status_code == 422, resp.text
-        assert _count(ContributionConsent, user_id=uid) == 0
-        assert _count(PendingArchiveFile, user_id=uid) == 0
-
-    def test_missing_consent_version_rejected(self, client, auth_headers):
-        resp = client.post(
-            "/imports/strava-archive",
-            headers=auth_headers,
-            files={"file": ("export.zip", _archive_zip(), "application/zip")},
-            data={
-                "sport": "road",
-                "consent": "true",
-                "consent_version": "   ",
-                "consent_text": "I consent",
-            },
-        )
-        assert resp.status_code == 422, resp.text
-
-
-class TestConsentedEnqueue:
-    def test_records_consent_and_enqueues_tagged_members(self, client, auth_headers):
-        uid = _user_id(client, auth_headers)
-        from app.db.models import ContributionConsent, PendingArchiveFile
-        from app.db.session import SessionLocal
-
-        resp = client.post(
-            "/imports/strava-archive",
-            headers=auth_headers,
-            files={"file": ("export.zip", _archive_zip(), "application/zip")},
-            data={
-                "sport": "road",
-                "consent": "true",
-                "consent_version": "strava-archive-2026-07-v1",
-                "consent_text": "Je consens à contribuer mes traces (ODbL).",
-                "locale": "fr",
-            },
-        )
-        assert resp.status_code == 202, resp.text
-        body = resp.json()
-        assert body["status"] == "accepted"
-        # 2 in-scope members enqueued, the Yoga row skipped (not enqueued).
-        assert body["enqueued"] == 2
-        assert body["skipped"] >= 1
-
-        # Consent audit row recorded verbatim.
-        db = SessionLocal()
-        try:
-            consent = db.query(ContributionConsent).filter(
-                ContributionConsent.id == body["consent_id"]).one()
-            assert consent.user_id == uid
-            assert consent.source == "manual_upload"
-            assert consent.consent_version == "strava-archive-2026-07-v1"
-            assert "ODbL" in consent.consent_text
-            assert consent.locale == "fr"
-
-            pend = db.query(PendingArchiveFile).filter(
-                PendingArchiveFile.consent_id == body["consent_id"]).all()
-            assert {p.status for p in pend} == {"pending"}
-            assert {p.source for p in pend} == {"manual_upload"}
-            sports = sorted(p.sport for p in pend)
-            assert sports == ["mtb", "road"]  # from activities.csv, not the form
-        finally:
-            db.close()
+        assert resp.status_code in (404, 405), resp.text
 
 
 class TestPacedWorkerIngestsWithProvenance:
@@ -187,18 +140,7 @@ class TestPacedWorkerIngestsWithProvenance:
         from app.db.session import SessionLocal
         from app.jobs.ingest_pending_archives import drain_pending
 
-        resp = client.post(
-            "/imports/strava-archive",
-            headers=auth_headers,
-            files={"file": ("export.zip", _archive_zip(), "application/zip")},
-            data={
-                "sport": "road",
-                "consent": "true",
-                "consent_version": "v1",
-                "consent_text": "consent (ODbL)",
-            },
-        )
-        assert resp.status_code == 202, resp.text
+        _enqueue_member_queue(uid)
 
         # Drive the REAL worker; pace 0 + skip heat compute keeps it fast/OSM-free.
         summary = drain_pending(limit=50, pace_seconds=0.0, skip_heat_computation=True)
@@ -230,7 +172,7 @@ def _fit_gz(name: str) -> bytes:
     return gzip.compress(b"FIT\x00" + name.encode())
 
 
-def _fit_parsed_stub(raw: bytes) -> dict:
+def _fit_parsed_stub(raw: bytes, **_kw) -> dict:
     """Stand-in for ``fit_parser.parse_fit`` — returns a valid parsed dict with
     a real LineString and a content-derived file_hash (so idempotence holds)."""
     coords = [[3.60 + i * 0.001, 44.10 + i * 0.001, 100 + i] for i in range(8)]
@@ -593,6 +535,86 @@ class TestCompleteOwnershipAndFlip:
         )
         assert comp.status_code == 409, comp.text
 
+    def test_second_complete_is_idempotent_and_triggers_once(self, client, auth_headers):
+        """A repeated /complete (the 202 got lost, the browser retries) answers
+        202 with ``enqueue="already"``, leaves the row as it is and fires no
+        second job."""
+        from unittest.mock import MagicMock, patch
+
+        body = _init(client, auth_headers).json()
+        client.put(body["upload_url"], headers=auth_headers, content=_archive_zip_with_fit())
+        payload = {"archive_id": body["archive_id"], "key": body["bucket_key"]}
+
+        trigger = MagicMock(return_value=True)
+        with patch.object(__import__("app.api.imports", fromlist=["imports"]),
+                          "trigger_ingest_archives_job", trigger):
+            first = client.post("/imports/strava-archive/complete", headers=auth_headers, json=payload)
+            second = client.post("/imports/strava-archive/complete", headers=auth_headers, json=payload)
+
+        assert first.status_code == 202, first.text
+        assert second.status_code == 202, second.text
+        assert second.json()["enqueue"] == "already"
+        assert second.json()["status"] == "uploaded"
+        trigger.assert_called_once_with()
+
+    def test_complete_on_a_drained_archive_never_retriggers(self, client, auth_headers):
+        """A row already past 'uploaded' is never flipped back and never
+        re-triggers the job: in flight / done → 202 "already", failed → 409."""
+        from unittest.mock import MagicMock, patch
+
+        from app.db.models import PendingArchive
+        from app.db.session import SessionLocal
+
+        body = _init(client, auth_headers).json()
+        client.put(body["upload_url"], headers=auth_headers, content=_archive_zip_with_fit())
+        for status in ("processing", "done", "failed"):
+            db = SessionLocal()
+            try:
+                db.get(PendingArchive, body["archive_id"]).status = status
+                db.commit()
+            finally:
+                db.close()
+            trigger = MagicMock(return_value=True)
+            with patch.object(__import__("app.api.imports", fromlist=["imports"]),
+                              "trigger_ingest_archives_job", trigger):
+                comp = client.post(
+                    "/imports/strava-archive/complete", headers=auth_headers,
+                    json={"archive_id": body["archive_id"], "key": body["bucket_key"]},
+                )
+            if status == "failed":
+                assert comp.status_code == 409, (status, comp.text)
+            else:
+                assert comp.status_code == 202, (status, comp.text)
+                assert comp.json() == {
+                    "archive_id": body["archive_id"], "status": status, "enqueue": "already",
+                }
+            trigger.assert_not_called()
+            db = SessionLocal()
+            try:
+                assert db.get(PendingArchive, body["archive_id"]).status == status
+            finally:
+                db.close()
+
+    def test_complete_is_per_user_rate_limited(self, client, auth_headers, monkeypatch):
+        """Real slowapi decorator on /complete, keyed by the session user."""
+        from app.rate_limit import limiter
+
+        monkeypatch.setenv("ARCHIVE_COMPLETE_RATE_LIMIT", "2/hour")
+        body = _init(client, auth_headers).json()
+        payload = {"archive_id": body["archive_id"], "key": body["bucket_key"]}
+        limiter.enabled = True
+        limiter.reset()
+        try:
+            codes = [
+                client.post("/imports/strava-archive/complete", headers=auth_headers, json=payload).status_code
+                for _ in range(3)
+            ]
+        finally:
+            limiter.enabled = False
+            limiter.reset()
+        # Nothing was PUT → 409 twice, then the limit answers before the handler.
+        assert codes == [409, 409, 429], codes
+
 
 class TestWholeArchiveWorkerStreamsAndIngests:
     def test_worker_ingests_gpx_and_fit_tagging_manual_upload(self, client, auth_headers, monkeypatch):
@@ -926,18 +948,7 @@ class TestDrainPingsPmtilesRebuild:
     is OSM-free while the drain's real ping wiring runs."""
 
     def _enqueue_two(self, client, auth_headers):
-        resp = client.post(
-            "/imports/strava-archive",
-            headers=auth_headers,
-            files={"file": ("export.zip", _archive_zip(), "application/zip")},
-            data={
-                "sport": "road",
-                "consent": "true",
-                "consent_version": "v1",
-                "consent_text": "consent (ODbL)",
-            },
-        )
-        assert resp.status_code == 202, resp.text
+        _enqueue_member_queue(_user_id(client, auth_headers))
 
     def test_successful_drain_pings_rebuild_once(self, client, auth_headers):
         from unittest.mock import MagicMock, patch

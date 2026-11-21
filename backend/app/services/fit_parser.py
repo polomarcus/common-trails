@@ -7,11 +7,80 @@ import hashlib
 import io
 import json
 import logging
+import os
 from datetime import datetime
 
-from app.services.gpx import GPX_TRACK_TYPE_SKIP, _coord_is_valid
+from app.services.gpx import GPX_TRACK_TYPE_SKIP, TraceTooDenseError, _coord_is_valid, parse_slot
 
 log = logging.getLogger(__name__)
+
+# Upper bound on what fitparse would materialise, checked on the raw bytes
+# BEFORE parsing. fitparse keeps every decoded message in memory (~130 bytes
+# per message + ~170 per field value), so the size cap alone does not bound
+# it: 25 MB of FIT can hold ~1M records (~2 GB once parsed). The budget counts
+# one unit per message plus one per field value; 1.5M units ≈ 250 MB at worst,
+# and a 1 Hz ride with 15-20 fields per record stays below up to ~70k points.
+MAX_FIT_FIELD_VALUES = int(os.environ.get("MAX_FIT_FIELD_VALUES", "1500000"))
+
+
+def count_fit_field_values(content: bytes, stop_after: int | None = None) -> int:
+    """Parse-cost units of FIT ``content``: for each data message, 1 + its
+    number of field values. Walks only the record headers and the definition
+    messages — nothing is decoded.
+
+    Chained FIT files are followed. A structure the scan cannot follow ends it
+    (fitparse rejects such a file anyway). Stops early once ``stop_after`` is
+    exceeded so the scan itself stays cheap.
+    """
+    total = 0
+    pos = 0
+    n = len(content)
+    try:
+        while pos + 12 <= n:
+            header_size = content[pos]
+            if header_size < 12 or content[pos + 8:pos + 12] != b".FIT":
+                break
+            data_size = int.from_bytes(content[pos + 4:pos + 8], "little")
+            p = pos + header_size
+            end = min(p + data_size, n)
+            # local message type → (field count, data size in bytes)
+            local_defs: dict[int, tuple[int, int]] = {}
+            while p < end:
+                header = content[p]
+                p += 1
+                if header & 0x80:  # compressed-timestamp header → data message
+                    fields, size = local_defs[(header >> 5) & 0x03]
+                elif header & 0x40:  # definition message
+                    nfields = content[p + 4]
+                    size = sum(content[p + 6 + 3 * i] for i in range(nfields))
+                    p += 5 + 3 * nfields
+                    if header & 0x20:  # developer fields
+                        ndev = content[p]
+                        size += sum(content[p + 2 + 3 * i] for i in range(ndev))
+                        nfields += ndev
+                        p += 1 + 3 * ndev
+                    local_defs[header & 0x0F] = (nfields, size)
+                    continue
+                else:
+                    fields, size = local_defs[header & 0x0F]
+                p += size
+                total += fields + 1
+                if stop_after is not None and total > stop_after:
+                    return total
+            pos += header_size + data_size + 2  # + file CRC
+    except (IndexError, KeyError):
+        pass  # truncated / undefined local type: the parser will reject it
+    return total
+
+
+def check_fit_bounds(content: bytes) -> None:
+    """Reject a FIT whose parse would exceed MAX_FIT_FIELD_VALUES (no decoding)."""
+    values = count_fit_field_values(content, stop_after=MAX_FIT_FIELD_VALUES)
+    if values > MAX_FIT_FIELD_VALUES:
+        raise TraceTooDenseError(
+            f"FIT has too many records (> {MAX_FIT_FIELD_VALUES} values); "
+            "split or simplify the trace"
+        )
 
 # FIT-native out-of-scope sport values (fitparse decodes the `sport`/`sub_sport`
 # enum to these strings). Mirrors the GPX skip-list philosophy ("skip beats
@@ -172,8 +241,22 @@ def _open_fit(content: bytes):
         return tolerant
 
 
-def parse_fit(content: bytes) -> dict:
-    """Parse FIT bytes, return internal activity dict (same format as parse_gpx)."""
+def parse_fit(content: bytes, *, bounded: bool = True) -> dict:
+    """Parse FIT bytes, return internal activity dict (same format as parse_gpx).
+
+    ``bounded`` (default, the web service): checked before decoding
+    (:func:`check_fit_bounds`, raises ``TraceTooDenseError``) and run under the
+    process-wide parse slot (``gpx.parse_slot``, raises ``ParserBusyError``).
+    The archive jobs (8 GiB) and offline CLIs pass ``bounded=False``: a 24 h
+    ride with power and HR data exceeds the web budget but is a real ride."""
+    if not bounded:
+        return _parse_fit_unbounded(content)
+    check_fit_bounds(content)
+    with parse_slot():
+        return _parse_fit_unbounded(content)
+
+
+def _parse_fit_unbounded(content: bytes) -> dict:
     fit = _open_fit(content)
 
     coords: list[list[float]] = []

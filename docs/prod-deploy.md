@@ -158,8 +158,9 @@ is ever created and the `/admin` dashboard (#443/#447) returns 403 for everyone
 until you explicitly promote an account.
 
 **Promote an account to admin** with the `promote_admin` CLI (idempotent —
-re-running on an already-admin user is a no-op). Register/login with the
-account first, then:
+re-running on an already-admin user is a no-op). Log in once with the
+account's email link first (password register/login only exist under
+`TEST_MODE`), then:
 
 ```bash
 python -m app.cli.promote_admin paul@example.com

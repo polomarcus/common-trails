@@ -53,6 +53,15 @@ def _heatmap_public_base_url() -> str:
     ).rstrip("/")
 
 
+def mask_email(address: str | None) -> str:
+    """``jean.dupont@example.org`` → ``j***@example.org`` for log lines: enough
+    to tell recipients apart while debugging, without the full address."""
+    local, sep, domain = (address or "").strip().partition("@")
+    if not sep:
+        return "***"
+    return f"{local[:1]}***@{domain}"
+
+
 def send_email(to: str, subject: str, html: str) -> bool:
     """Send one transactional email. Returns True on success, False otherwise.
 
@@ -62,14 +71,14 @@ def send_email(to: str, subject: str, html: str) -> bool:
     if TEST_MODE:
         # No external calls in tests / local dev. Log at debug so a test run
         # stays quiet but the intent is inspectable.
-        logger.debug("TEST_MODE: skipping real email send to %s (subject=%r)", to, subject)
+        logger.debug("TEST_MODE: skipping real email send to %s (subject=%r)", mask_email(to), subject)
         return True
 
     if not RESEND_API_KEY:
         logger.warning(
             "RESEND_API_KEY unset — cannot send email to %s (subject=%r). "
             "Wire the secret in prod (scripts/deploy-prod.sh).",
-            to,
+            mask_email(to),
             subject,
         )
         return False
@@ -90,7 +99,7 @@ def send_email(to: str, subject: str, html: str) -> bool:
             timeout=_TIMEOUT_S,
         )
     except Exception as exc:  # noqa: BLE001 — never let a send crash the request
-        logger.error("Resend request failed for %s: %s", to, exc)
+        logger.error("Resend request failed for %s: %s", mask_email(to), exc)
         return False
 
     if resp.status_code >= 300:
@@ -99,12 +108,12 @@ def send_email(to: str, subject: str, html: str) -> bool:
         logger.error(
             "Resend returned %s for %s: %s",
             resp.status_code,
-            to,
+            mask_email(to),
             resp.text[:500],
         )
         return False
 
-    logger.info("Sent email to %s (subject=%r)", to, subject)
+    logger.info("Sent email to %s (subject=%r)", mask_email(to), subject)
     return True
 
 

@@ -136,7 +136,7 @@ describe('confirmEmailChange', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const res = await confirmEmailChange('tok');
-    expect(res).toEqual({ ok: true, status: 200, email: 'new@b.com' });
+    expect(res).toEqual({ ok: true, status: 200, userId: 'u1', email: 'new@b.com' });
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toMatch(/\/auth\/me\/email\/confirm$/);
     expect(JSON.parse(init.body)).toEqual({ token: 'tok' });

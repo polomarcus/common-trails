@@ -28,9 +28,9 @@ async function registerAndLogin(apiContext: Awaited<ReturnType<typeof request.ne
 
 test.describe('1. Register / Login', () => {
   test('magic-link request sends a login email and shows confirmation', async ({ page }) => {
-    // Public auth is passwordless magic-link (the email → link flow). The
-    // legacy email+password form is dev-only and absent from the prod build,
-    // so the real user-facing signup/login path is the magic-link request.
+    // Public auth is passwordless magic-link only (the email → link flow).
+    // Password register/login exist only under TEST_MODE, as API fixtures
+    // (next test); no page offers them.
     const email = `e2e_${Date.now()}@example.com`;
 
     await page.goto('/');

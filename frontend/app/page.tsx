@@ -2,14 +2,13 @@
 
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import TopNav from '@/components/TopNav';
 import PlaceSearch from '@/components/PlaceSearch';
 import EmailLoginForm from '@/components/EmailLoginForm';
 import { HERO_MAP_CENTER, HERO_MAP_ZOOM, DFCI_COLOR, DFCI_COLOR_WHITE, DFCI_LINE_WIDTH, DFCI_DASH_ARRAY, DFCI_MIN_ZOOM } from '@/lib/routing-style';
 import { API_URL } from '@/lib/api-client';
-import { isAuthenticated, setAuthState, clearAuthState } from '@/lib/auth';
+import { isAuthenticated, clearAuthState } from '@/lib/auth';
 import { useI18n } from '@/lib/i18n';
 import { fetchCommunityStats, getPmtilesUrl } from '@/lib/cdn-cache';
 import { type CommunityStats, formatStatValue } from '@/lib/community-stats';
@@ -23,115 +22,17 @@ const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
 // ── Auth Section (slide-in panel) ─────────────────────────────────────────────
 
-function AuthSection({ onLogin, header }: { onLogin: (token: string) => void; header?: ReactNode }) {
-  const { t, locale } = useI18n();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [username, setUsername] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    try {
-      let resp: Response;
-      if (mode === 'register') {
-        resp = await fetch(`${API_URL}/auth/register`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ email, password, username }),
-        });
-      } else {
-        const form = new URLSearchParams();
-        form.append('username', email);
-        form.append('password', password);
-        resp = await fetch(`${API_URL}/auth/login`, {
-          method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          credentials: 'include',
-          body: form.toString(),
-        });
-      }
-      if (!resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        const detail = data.detail;
-        throw new Error(Array.isArray(detail) ? detail.map((e: { msg?: string }) => e.msg || String(e)).join(', ') : detail || `HTTP ${resp.status}`);
-      }
-      const data = await resp.json();
-      setAuthState(data.user_id);
-      onLogin(data.user_id);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
+// Passwordless magic link — the only way to create an account or log in.
+function AuthSection({ header }: { header?: ReactNode }) {
+  const { t } = useI18n();
   return (
-    <div>
-      {/* Passwordless magic-link — the primary path (create account or log in). */}
-      <div style={{ marginBottom: 16 }}>
-        <EmailLoginForm variant="dark" intro={
-          <>
-            {header}
-            <p style={{ color: '#fff', fontSize: 14, fontWeight: 700, margin: '0 0 2px' }}>{t('emailAuth.title')}</p>
-            <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12, margin: '0 0 12px' }}>{t('emailAuth.subtitle')}</p>
-          </>
-        } />
-      </div>
-      {/* Legacy email+password login — DEV ONLY. Public auth is magic-link only
-          (real accounts are passwordless); the backend /auth/login stays for the
-          seeded admin, it is just not surfaced on the public home. */}
-      {process.env.NODE_ENV === 'development' && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '14px 0' }}>
-            <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.12)' }} />
-            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)' }}>{t('common.or')}</span>
-            <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.12)' }} />
-          </div>
-          <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: 'rgba(255,255,255,0.06)', borderRadius: 8, padding: 3 }}>
-            {(['login', 'register'] as const).map((m) => (
-              <button key={m} onClick={() => setMode(m)} data-testid={`mode-${m}`}
-                style={{
-                  flex: 1, padding: '8px', border: 'none', borderRadius: 6, cursor: 'pointer',
-                  fontSize: 13, fontWeight: mode === m ? 700 : 400, transition: 'all 0.15s',
-                  background: mode === m ? '#fff' : 'transparent',
-                  color: mode === m ? '#1a4731' : 'rgba(255,255,255,0.6)',
-                }}>
-                {m === 'login' ? t('home.auth.login') : t('home.auth.register')}
-              </button>
-            ))}
-          </div>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {mode === 'register' && (
-              <input type="text" placeholder={t('home.auth.username')} value={username} onChange={(e) => setUsername(e.target.value)}
-                data-testid="input-username" required
-                style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', fontSize: 13, background: 'rgba(255,255,255,0.08)', color: '#fff', outline: 'none' }} />
-            )}
-            <input type="email" placeholder={t('home.auth.email')} value={email} onChange={(e) => setEmail(e.target.value)}
-              data-testid="input-email" required
-              style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', fontSize: 13, background: 'rgba(255,255,255,0.08)', color: '#fff', outline: 'none' }} />
-            <input type="password" placeholder={t('home.auth.password')} value={password} onChange={(e) => setPassword(e.target.value)}
-              data-testid="input-password" required
-              style={{ padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', fontSize: 13, background: 'rgba(255,255,255,0.08)', color: '#fff', outline: 'none' }} />
-            {error && <p style={{ color: '#ff6b6b', fontSize: 12, margin: 0 }} data-testid="auth-error">{error}</p>}
-            <button type="submit" disabled={loading} data-testid="auth-submit"
-              style={{
-                padding: '11px', border: 'none', borderRadius: 8, cursor: loading ? 'not-allowed' : 'pointer',
-                fontWeight: 700, fontSize: 14, marginTop: 2, opacity: loading ? 0.7 : 1,
-                background: '#fff', color: '#1a4731',
-              }}>
-              {loading ? '…' : mode === 'login' ? t('home.auth.loginBtn') : t('home.auth.registerBtn')}
-            </button>
-          </form>
-          <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 8, textAlign: 'center' }}>
-            Dev : <code style={{ background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: 3 }}>admin@admin</code> / <code style={{ background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: 3 }}>admin</code>
-          </p>
-        </>
-      )}
-    </div>
+    <EmailLoginForm variant="dark" intro={
+      <>
+        {header}
+        <p style={{ color: '#fff', fontSize: 14, fontWeight: 700, margin: '0 0 2px' }}>{t('emailAuth.title')}</p>
+        <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 12, margin: '0 0 12px' }}>{t('emailAuth.subtitle')}</p>
+      </>
+    } />
   );
 }
 
@@ -236,7 +137,6 @@ function CalqueCard() {
 
 export default function HomePage() {
   const { t, locale } = useI18n();
-  const router = useRouter();
   const [loggedIn, setLoggedIn] = useState<boolean>(isAuthenticated);
   const [activeSport, setActiveSport] = useState('all');
   // Ref mirror of activeSport so the async PMTiles setup can apply the filter
@@ -272,14 +172,8 @@ export default function HomePage() {
     if (params.get('garmin') === 'connected') {
       window.history.replaceState({}, '', window.location.pathname);
     }
-  }, [router]);
+  }, []);
 
-  const handleLogin = () => {
-    setLoggedIn(true);
-    // Explicit login action → /map by design (only ARRIVING on / already
-    // logged-in stays on the home; the login form still goes to the map).
-    router.push('/map');
-  };
   const handleLogout = async () => {
     try {
       await fetch(`${API_URL}/auth/logout`, { method: 'DELETE', credentials: 'include' });
@@ -691,7 +585,7 @@ export default function HomePage() {
             pointerEvents: 'auto',
           }}>
             {/* The pitch is the form's `intro`: gone once the link is sent. */}
-            <AuthSection onLogin={handleLogin} header={
+            <AuthSection header={
               <div style={{ marginBottom: 14 }}>
                 <h3 style={{ fontSize: 16, fontWeight: 800, color: '#fff', margin: '0 0 4px' }}>{t('home.hero.join')}</h3>
                 <p style={{ fontSize: 12.5, color: 'rgba(255,255,255,0.55)', margin: 0, lineHeight: 1.5 }}>{t('home.hero.joinSub')}</p>

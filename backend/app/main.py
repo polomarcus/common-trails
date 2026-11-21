@@ -15,6 +15,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from slowapi.errors import RateLimitExceeded
 from starlette.responses import JSONResponse
 
+from app import config as _app_config
 from app.frontend_static import html_response, register_frontend
 from app.logging_config import setup_logging
 from app.rate_limit import limiter
@@ -775,21 +776,35 @@ async def _rate_limit_handler(request, exc):
     )
 
 _is_prod = os.environ.get("ENV", "development") != "development"
+# HSTS: prod does not set ENV, so the deciding signals are the public origin
+# (FRONTEND_URL is https in prod) and the request itself arriving over HTTPS
+# (Cloud Run's front end sets X-Forwarded-Proto). Plain-http dev gets neither.
+_frontend_is_https = _app_config.FRONTEND_URL.lower().startswith("https://")
+_HSTS_VALUE = "max-age=31536000"  # no includeSubDomains: every subdomain is not vetted for HTTPS-only
+# Static-export pages (and /share/* HTML): no framing, no plugins, no <base>
+# hijack. Deliberately no script-src/connect-src/worker-src — the Next.js
+# export uses inline scripts, MapLibre spawns blob: workers and tiles come
+# from third-party hosts.
+_HTML_CSP = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+_API_CSP = "default-src 'none'; frame-ancestors 'none'"
 
 
-@app.middleware("http")
-async def add_security_headers(request, call_next):
-    response = await call_next(request)
+def _request_is_https(request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "")
+    return proto.split(",")[0].strip().lower() == "https"
+
+
+def _apply_security_headers(request, response) -> None:
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     ct = response.headers.get("content-type", "")
-    if "text/html" not in ct:
-        # Strict CSP for API responses only; frontend HTML needs scripts/styles
-        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
-    if _is_prod:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
+    if "Content-Security-Policy" not in response.headers:
+        response.headers["Content-Security-Policy"] = _HTML_CSP if "text/html" in ct else _API_CSP
+    if _is_prod or _frontend_is_https or _request_is_https(request):
+        response.headers["Strict-Transport-Security"] = _HSTS_VALUE
 
 
 app.include_router(health_router)
@@ -821,3 +836,13 @@ _FRONTEND_DIR = Path(os.environ.get("FRONTEND_DIR", "/app/static-frontend"))
 _html_response = html_response  # kept: tests import it from app.main
 
 register_frontend(app, _FRONTEND_DIR)
+
+
+# Registered AFTER register_frontend so it is the OUTERMOST middleware: the
+# frontend's HTML short-circuit (frontend_html_priority) answers without
+# calling the inner stack, and its pages need the same headers.
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    _apply_security_headers(request, response)
+    return response

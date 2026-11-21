@@ -130,10 +130,20 @@ async def gpx_upload(
     if not filename.endswith(".gpx"):
         raise HTTPException(status_code=422, detail="Only .gpx files are accepted")
 
+    # Off the event loop: parse_gpx waits for the process-wide parse slot and a
+    # max-size file takes seconds. Points / elements are bounded on the raw
+    # bytes before any XML parsing (TraceTooDenseError).
     try:
-        parsed = gpx_service.parse_gpx(content)
+        parsed = await run_in_threadpool(gpx_service.parse_gpx, content)
+    except gpx_service.TraceTooDenseError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except gpx_service.ParserBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "10"}) from exc
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"GPX parse error: {exc}") from exc
+        log.info("gpx/upload: parse failed (user=%s)", current_user.user_id, exc_info=True)
+        raise HTTPException(
+            status_code=422, detail="GPX parse error: invalid or corrupted file",
+        ) from exc
 
     # Defend against dense-coordinate DoS: <10 MB GPX can still pack
     # millions of points and inflate ingest CPU/RAM.

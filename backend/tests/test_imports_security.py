@@ -317,7 +317,7 @@ def test_imports_files_single_gpx_rejects_over_max_size(client, auth_headers, mo
     content. The audit's actual invariant is "parse not invoked"."""
     parse_called = {"n": 0}
 
-    def _spy_parse_gpx(_content):
+    def _spy_parse_gpx(_content, **_kw):
         parse_called["n"] += 1
         raise AssertionError(
             "parse_gpx must not be called on oversize input — "
@@ -347,7 +347,7 @@ def test_imports_files_single_fit_rejects_over_max_size(client, auth_headers, mo
     called — same invariant as the .gpx test above."""
     parse_called = {"n": 0}
 
-    def _spy_parse_fit(_content):
+    def _spy_parse_fit(_content, **_kw):
         parse_called["n"] += 1
         raise AssertionError(
             "parse_fit must not be called on oversize input — "

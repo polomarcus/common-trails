@@ -30,7 +30,7 @@ import logging
 from sqlalchemy import text as sa_text
 
 from app.db.session import SessionLocal
-from app.services.email import render_resync_reminder_email, send_email
+from app.services.email import mask_email, render_resync_reminder_email, send_email
 from app.services.provenance import community_eligible_conditions
 
 log = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def send_resync_reminders(*, stale_months: int = DEFAULT_STALE_MONTHS, dry_run: 
         subject, html = render_resync_reminder_email()
         for user_id, email in recipients:
             if dry_run:
-                log.info("resync-reminder DRY-RUN: would email %s", email)
+                log.info("resync-reminder DRY-RUN: would email %s", mask_email(email))
                 continue
             if send_email(email, subject, html):
                 db.execute(
@@ -96,7 +96,7 @@ def send_resync_reminders(*, stale_months: int = DEFAULT_STALE_MONTHS, dry_run: 
                 # Do NOT stamp on failure → retried next run (never lost, never
                 # double-sent on success).
                 failed += 1
-                log.warning("resync-reminder: send failed for %s — will retry next run", email)
+                log.warning("resync-reminder: send failed for %s — will retry next run", mask_email(email))
         summary = {"due": len(recipients), "sent": sent, "failed": failed, "dry_run": dry_run}
         log.info("resync-reminder done: %s", summary)
         return summary

@@ -23,6 +23,8 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `20` / `10` | — | `5` / `3` | Pool SQLAlchemy par instance (db-f1-micro ≈ 22 connexions) |
 | `RATELIMIT_ENABLED` | `true` | `false` | — → `true` | Rate limiting (slowapi) |
 | `UPLOAD_RATE_LIMIT` | `200/hour` | — | — | Limite `/imports/files` |
+| `ARCHIVE_COMPLETE_RATE_LIMIT` | `20/hour` | — | — | Limite par utilisateur de `/imports/strava-archive/complete` |
+| `OG_IMAGE_RATE_LIMIT` | `30/minute` | — | — | Limite par IP des cartes PNG `/share/…/og-image` |
 | `SENTRY_DSN` | vide | vide | secret | Observabilité backend |
 
 ## Heatmap
@@ -54,6 +56,10 @@ ne reflète pas ces défauts (il met `TEST_MODE=false`) — ne pas s'y fier.
 | `UPLOADS_BUCKET` | vide | — | `common-trails-common-trails-uploads-prod` | Archives uploadées par URL signée |
 | `MAX_ARCHIVE_BYTES` | 512 Mo | — | `2147483648` (2 Go) | Taille max d'archive (services + job drain) |
 | `MAX_GPX_SIZE_BYTES` | 25 Mo | — | — | Taille max d'un GPX isolé |
+| `MAX_GPX_XML_TAGS` | `2000000` | — | — | Nombre max de balises d'un GPX, compté avant le parsing (avec le plafond de 100 000 points) |
+| `MAX_FIT_FIELD_VALUES` | `1500000` | — | — | Budget d'un FIT (messages + valeurs), compté avant le décodage |
+| `MAX_CONCURRENT_PARSES` | `1` | — | — | Parsings GPX/FIT simultanés par processus (instance web 512 Mio) |
+| `PARSE_SLOT_TIMEOUT_S` | `30` | — | — | Attente max d'un créneau de parsing, puis 503 |
 | `GCP_PROJECT` / `GCP_REGION` | vide | — | `common-trails` / `europe-west1` | Déclenchement `jobs:run` (`backend/app/services/run_jobs.py`) |
 | `INGEST_ARCHIVES_JOB_NAME` | — | — | `common-trails-ingest-pending-archives-prod` | Job déclenché à `/imports/strava-archive/complete` |
 | `BUILD_PMTILES_JOB_NAME` | — | — | `common-trails-build-pmtiles-prod` | Job de build déclenché après import |

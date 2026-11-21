@@ -18,6 +18,7 @@ from app.config import VALID_SPORTS
 from app.rate_limit import limiter, user_or_ip_key
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
+from app.services.archive_intake import MAX_CONSENT_TEXT_CHARS, MAX_LOCALE_CHARS
 from app.services.gpx_archive import archive_bundle, archive_gpx
 from app.services.provenance import COMMUNITY_SOURCE
 from app.services.run_jobs import trigger_ingest_archives_job
@@ -63,20 +64,6 @@ class ImportResult(BaseModel):
     consent_id: str | None = None
 
 
-class ArchiveIntakeResult(BaseModel):
-    """Result of a consented Strava-archive upload.
-
-    Nothing is ingested on the request thread — members are stored to a
-    per-user bucket prefix and enqueued for a paced worker. ``enqueued``
-    is the number of members that will be ingested progressively.
-    """
-    consent_id: str
-    enqueued: int
-    skipped: int
-    errors: list[str]
-    status: str  # "accepted"
-
-
 class ArchiveInitRequest(BaseModel):
     """Body of ``POST /imports/strava-archive/init``. No file — the archive
     is PUT straight to the bucket via the returned signed URL."""
@@ -86,8 +73,9 @@ class ArchiveInitRequest(BaseModel):
     sport: str | None = None
     consent: bool = False
     consent_version: str
-    consent_text: str
-    locale: str | None = None
+    # Bounded (422 above): stored verbatim in the consent audit row.
+    consent_text: str = Field(max_length=MAX_CONSENT_TEXT_CHARS)
+    locale: str | None = Field(default=None, max_length=MAX_LOCALE_CHARS)
     filename: str | None = None  # informational (original .zip name)
     # Declared .zip size in bytes. Over MAX_ARCHIVE_BYTES → 413 right here,
     # before any upload. On the gcs backend it also unlocks the RESUMABLE mode:
@@ -122,8 +110,14 @@ class ArchiveCompleteRequest(BaseModel):
 
 class ArchiveCompleteResult(BaseModel):
     archive_id: str
-    status: str  # "uploaded"
-    enqueue: str  # "triggered" (job kicked now) | "scheduled" (daily backstop)
+    status: str  # "uploaded" (or the current status of an in-flight archive)
+    # "triggered" (job kicked now) | "scheduled" (daily backstop) |
+    # "already" (a retry: the archive was completed before, no new job)
+    enqueue: str
+
+
+# Statuses a repeated /complete answers 202 for (the first call went through).
+_ARCHIVE_IN_FLIGHT = frozenset({"uploaded", "processing", "done"})
 
 
 @router.post("/imports/files", response_model=ImportResult, status_code=202)
@@ -215,8 +209,10 @@ async def import_files(
     # Dense-coordinate DoS cap — same as /gpx/upload. Applied per parsed
     # item, regardless of source format (single .gpx, single .fit, or
     # any zip member). Without this cap a 49 MB .gpx with 10M trkpts at
-    # /imports/files parses into hundreds of MB of Python tuples.
-    MAX_COORDS_PER_FILE = 100_000
+    # /imports/files parses into hundreds of MB of Python tuples. The
+    # parsers also bound points / records on the raw bytes BEFORE parsing
+    # (TraceTooDenseError); this post-parse check stays as a backstop.
+    MAX_COORDS_PER_FILE = gpx_service.MAX_GPX_COORDS
 
     def _check_coord_cap(parsed: dict, label: str) -> bool:
         """Return True if under cap, else append error and return False."""
@@ -242,12 +238,18 @@ async def import_files(
                 detail=f"GPX file too large ({len(content)} > {gpx_service.MAX_GPX_SIZE} bytes); "
                 "split or simplify the trace",
             )
+        # Parsers run off the event loop, one slot per process (parse_slot).
         try:
-            parsed = gpx_service.parse_gpx(content)
+            parsed = await run_in_threadpool(gpx_service.parse_gpx, content)
             if _check_coord_cap(parsed, filename or "upload.gpx"):
                 parsed_list.append(parsed)
-        except Exception as exc:
-            errors.append(f"GPX parse error: {exc}")
+        except gpx_service.TraceTooDenseError as exc:
+            errors.append(f"{filename or 'upload.gpx'}: {exc}")
+        except gpx_service.ParserBusyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "10"}) from exc
+        except Exception:
+            log.info("imports/files: GPX parse failed (user=%s)", current_user.user_id, exc_info=True)
+            errors.append("GPX parse error: invalid or corrupted file")
 
     elif filename.endswith(".fit"):
         if len(content) > gpx_service.MAX_GPX_SIZE:
@@ -258,20 +260,27 @@ async def import_files(
             )
         try:
             from app.services.fit_parser import parse_fit
-            parsed = parse_fit(content)
+            parsed = await run_in_threadpool(parse_fit, content)
             if _check_coord_cap(parsed, filename or "upload.fit"):
                 parsed_list.append(parsed)
         except ImportError:
             raise HTTPException(status_code=422, detail="FIT file support not installed (pip install fitparse)") from None
-        except Exception as exc:
-            errors.append(f"FIT parse error: {exc}")
+        except gpx_service.TraceTooDenseError as exc:
+            errors.append(f"{filename or 'upload.fit'}: {exc}")
+        except gpx_service.ParserBusyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "10"}) from exc
+        except Exception:
+            log.info("imports/files: FIT parse failed (user=%s)", current_user.user_id, exc_info=True)
+            errors.append("FIT parse error: invalid or corrupted file")
 
     elif filename.endswith(".zip"):
         try:
-            parsed_list_raw = gpx_service.parse_zip_of_gpx(content)
+            parsed_list_raw = await run_in_threadpool(gpx_service.parse_zip_of_gpx, content)
         except gpx_service.ZipBombError as exc:
             # 413: payload too large / suspicious — caller should split.
             raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except gpx_service.ParserBusyError as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "10"}) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         for item in parsed_list_raw:
@@ -383,9 +392,13 @@ async def import_files(
                     created_activity_ids.append(result["activity_id"])
             else:
                 skipped += 1
-        except Exception as exc:
+        except Exception:
             failed += 1
-            errors.append(str(exc))
+            # Details (DB / ingest internals) stay in the server logs.
+            log.warning("imports/files: ingest failed (user=%s)", current_user.user_id, exc_info=True)
+            errors.append(
+                f"{parsed.get('source_file') or file.filename or '?'}: import failed (server error)",
+            )
 
     # Archive raw upload to uploads bucket (safety net for heatmap rebuild).
     # For single-file uploads, key by the activity_id (one file, one row).
@@ -470,98 +483,14 @@ async def import_files(
     )
 
 
-@router.post("/imports/strava-archive", response_model=ArchiveIntakeResult, status_code=202)
-async def import_strava_archive(
-    current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    file: UploadFile = File(...),
-    # Accepted for API back-compat, NOT used: an archive's members get their
-    # sport from activities.csv or their own file, else they are skipped.
-    sport: str | None = Form(None),
-    consent: bool = Form(False),
-    consent_version: str = Form(...),
-    consent_text: str = Form(...),
-    locale: str | None = Form(None),
-) -> ArchiveIntakeResult:
-    """Consented community-contribution intake of a user's OWN Strava archive.
-
-    Legal basis: the user requested their own data via Strava's official
-    export, downloaded the ZIP, and uploads it here with explicit consent to
-    contribute (anonymised, ODbL) to the open community heatmap. This is a
-    DIFFERENT basis from Strava-API-extracted data (which the 2026 API
-    Policy forbids redistributing into a public heatmap).
-
-    Consent is REQUIRED — no consent → 422, nothing stored, nothing ingested.
-
-    The archive is NOT ingested on the request thread. Each member is stored
-    to a per-user bucket prefix and enqueued; a paced worker
-    (``app.jobs.ingest_pending_archives``) ingests them progressively,
-    tagging each activity with provenance ``source="manual_upload"``.
-    """
-    if not consent:
-        raise HTTPException(
-            status_code=422,
-            detail="Consent is required to contribute your archive to the community heatmap.",
-        )
-    if sport is not None and sport not in VALID_SPORTS:
-        raise HTTPException(status_code=422, detail=f"Invalid sport: {sport}")
-    if not consent_version.strip() or not consent_text.strip():
-        raise HTTPException(status_code=422, detail="Missing consent version/text.")
-
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large (max 50 MB)")
-
-    filename = (file.filename or "").lower()
-    if not (filename.endswith(".zip") or filename.endswith(".gpx") or filename.endswith(".fit")):
-        raise HTTPException(status_code=422, detail="Supported formats: .zip, .gpx, .fit")
-
-    from app.db.session import SessionLocal
-    from app.services import archive_intake
-
-    db = SessionLocal()
-    try:
-        # Record consent FIRST — the audit trail must exist even if the
-        # subsequent extraction partially fails.
-        consent_id = archive_intake.record_consent(
-            db,
-            user_id=current_user.user_id,
-            consent_version=consent_version.strip()[:100],
-            consent_text=consent_text.strip(),
-            locale=(locale or None),
-            source=archive_intake.ARCHIVE_PROVENANCE,
-        )
-        try:
-            intake = archive_intake.enqueue_archive(
-                db,
-                user_id=current_user.user_id,
-                content=content,
-                filename=filename,
-                fallback_sport=sport,
-                contribute_heatmap=True,
-                consent_id=consent_id,
-                source=archive_intake.ARCHIVE_PROVENANCE,
-            )
-        except gpx_service.ZipBombError as exc:
-            raise HTTPException(status_code=413, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    finally:
-        db.close()
-
-    return ArchiveIntakeResult(
-        consent_id=consent_id,
-        enqueued=intake.enqueued,
-        skipped=intake.skipped,
-        errors=intake.errors,
-        status="accepted",
-    )
-
-
 def _validate_consent(
     consent: bool, consent_version: str, consent_text: str, sport: str | None,
+    locale: str | None = None,
 ) -> None:
-    """Shared consent + sport gate (reused by the direct + signed-URL flows).
-    ``sport`` is optional (and unused downstream) for archives."""
+    """Consent + sport gate of the signed-URL archive flow. ``sport`` is
+    optional (and only a last resort downstream) for archives."""
+    from app.services import archive_intake
+
     if not consent:
         raise HTTPException(
             status_code=422,
@@ -571,6 +500,10 @@ def _validate_consent(
         raise HTTPException(status_code=422, detail=f"Invalid sport: {sport}")
     if not consent_version.strip() or not consent_text.strip():
         raise HTTPException(status_code=422, detail="Missing consent version/text.")
+    try:
+        archive_intake.check_consent_fields(consent_text, locale)
+    except archive_intake.ConsentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _reuse_archive_as_put(user_id: str, archive_id: str) -> "ArchiveInitResult | None":
@@ -650,10 +583,10 @@ async def init_strava_archive(
 ) -> ArchiveInitResult:
     """Begin a consented WHOLE-archive upload via a signed direct-to-storage URL.
 
-    Why not just POST the .zip (the ``/imports/strava-archive`` endpoint)? A
-    REAL Strava export is ~70 MB zipped / ~400 MB unzipped — it can't route
-    through Cloud Run (~32 MB request cap) and must never be buffered on the
-    512 Mi web instance. So the browser PUTs it STRAIGHT to a per-user bucket
+    Why not POST the .zip? A REAL Strava export is ~70 MB zipped / ~400 MB
+    unzipped — it can't route through Cloud Run (~32 MB request cap) and must
+    never be buffered on the 512 Mi web instance (the old one-shot multipart
+    endpoint is gone for that reason). So the browser PUTs it STRAIGHT to a per-user bucket
     key via the signed URL returned here; the unzip happens later in the 2 Gi
     importer job. Nothing is stored/parsed on THIS request beyond the consent
     row + a tiny ``pending_archives`` bookkeeping row.
@@ -674,7 +607,7 @@ async def init_strava_archive(
     in-flight (not yet drained) OR has called ``init`` more than
     ``MAX_ARCHIVE_INITS_PER_DAY`` times in the last 24 h. Both env-overridable.
     """
-    _validate_consent(body.consent, body.consent_version, body.consent_text, body.sport)
+    _validate_consent(body.consent, body.consent_version, body.consent_text, body.sport, body.locale)
 
     from datetime import UTC, datetime, timedelta
 
@@ -860,13 +793,28 @@ async def upload_strava_archive_local(
     return {"stored": len(content)}
 
 
+# Per-user cap on /complete calls (slowapi, keyed by the session user). A real
+# upload completes once; the bound only stops a loop. Env-overridable.
+def _complete_rate_limit() -> str:
+    return os.environ.get("ARCHIVE_COMPLETE_RATE_LIMIT", "20/hour")
+
+
 @router.post("/imports/strava-archive/complete", response_model=ArchiveCompleteResult, status_code=202)
+@limiter.limit(_complete_rate_limit, key_func=user_or_ip_key)
 async def complete_strava_archive(
+    request: Request,
     current_user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     body: ArchiveCompleteRequest,
 ) -> ArchiveCompleteResult:
     """Finalise a signed-URL upload: verify the object landed + belongs to this
-    user, flip the row to ``uploaded``, and kick the importer to drain it.
+    user, flip the row ``awaiting_upload`` → ``uploaded``, and kick the
+    importer to drain it.
+
+    Only that one transition fires the job. Idempotent for a retry (the 202
+    got lost on the network, the browser calls again): a row already
+    ``uploaded`` / ``processing`` / ``done`` answers 202 with its current
+    status and ``enqueue="already"`` — no second job. A ``failed`` row (or a
+    missing upload) answers 409.
 
     The importer is a scale-to-zero 2 Gi Cloud Run JOB, NOT a Cloud Tasks → web
     handler: the unzip of a ~400 MB payload must run on the 2 Gi job, never on
@@ -890,6 +838,10 @@ async def complete_strava_archive(
             raise HTTPException(status_code=404, detail="Unknown archive.")
         if row.bucket_key != body.key:
             raise HTTPException(status_code=400, detail="Key does not match this archive.")
+        if row.status in _ARCHIVE_IN_FLIGHT:
+            return ArchiveCompleteResult(archive_id=body.archive_id, status=row.status, enqueue="already")
+        if row.status != "awaiting_upload":
+            raise HTTPException(status_code=409, detail=f"Archive is not awaiting an upload (status: {row.status}).")
         if not archive_intake.archive_exists(row.storage_backend, row.bucket_key):
             raise HTTPException(status_code=409, detail="Upload not found in storage yet.")
         # Size guard (SSOT MAX_ARCHIVE_BYTES). The signed PUT URL binds the
@@ -907,9 +859,20 @@ async def complete_strava_archive(
             db.commit()
             archive_intake.delete_archive(row.storage_backend, row.bucket_key)
             raise HTTPException(status_code=413, detail=reason)
-        row.status = "uploaded"
-        db.add(row)
+        # Conditional flip: of two concurrent calls only one moves the row
+        # (and triggers the job below); the other answers like a retry.
+        flipped = (
+            db.query(PendingArchive)
+            .filter(PendingArchive.id == row.id, PendingArchive.status == "awaiting_upload")
+            .update({PendingArchive.status: "uploaded"}, synchronize_session=False)
+        )
         db.commit()
+        if flipped != 1:
+            db.expire_all()
+            current = db.get(PendingArchive, body.archive_id)
+            if current is not None and current.status in _ARCHIVE_IN_FLIGHT:
+                return ArchiveCompleteResult(archive_id=body.archive_id, status=current.status, enqueue="already")
+            raise HTTPException(status_code=409, detail="Archive is not awaiting an upload.")
     finally:
         db.close()
 

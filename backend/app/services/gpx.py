@@ -1,9 +1,12 @@
 """GPX parsing and export utilities."""
+import contextlib
 import gzip
 import hashlib
 import io
 import json
+import logging
 import os
+import threading
 import zipfile
 
 # Harden the stdlib XML parsers BEFORE importing gpxpy. gpxpy uses
@@ -22,6 +25,8 @@ defusedxml.defuse_stdlib()
 import gpxpy  # noqa: E402  — must follow defuse_stdlib()
 import gpxpy.gpx  # noqa: E402
 import numpy as np  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 # ── Elevation smoothing constants ──────────────────────────────────────────
 #
@@ -102,6 +107,7 @@ def _smoothed_elevation_gain(elevations: list[float | None]) -> float:
 # `STRAVA_CSV_TYPE_TO_SPORT` map was deleted to remove the drift that
 # let a "Gravel paradise" Ride classify as road on this path while the
 # CLI classified it as gravel.
+from app.services.gpx_archive import safe_filename  # noqa: E402
 from app.services.strava_utils import GENERIC_ROAD as _GENERIC_ROAD  # noqa: E402
 from app.services.strava_utils import _norm_type  # noqa: E402
 from app.services.strava_utils import classify_sport_marked as _classify_sport  # noqa: E402
@@ -619,13 +625,28 @@ def _coord_is_valid(lat: float, lon: float, ele: float | None) -> bool:
     return not (ele is not None and not (-500.0 <= ele <= 9000.0))
 
 
-def parse_gpx(content: bytes) -> dict:
+def parse_gpx(content: bytes, *, bounded: bool = True) -> dict:
     """Parse GPX bytes, return internal activity dict.
 
     Drops out-of-range coordinates (lat/lon/elevation outside plausible
     ranges) silently and exposes the count via `invalid_point_count` on
     the return dict.
+
+    ``bounded`` (default, the web service: 512 MiB, one instance): checked
+    BEFORE gpxpy builds its in-memory tree (:func:`check_gpx_bounds`, raises
+    :class:`TraceTooDenseError`) and run under the process-wide parse slot
+    (:func:`parse_slot`, raises :class:`ParserBusyError`). The archive jobs
+    (8 GiB, one file at a time) and offline CLIs pass ``bounded=False``: a
+    multi-day ride must not be refused there.
     """
+    if not bounded:
+        return _parse_gpx_unbounded(content)
+    check_gpx_bounds(content)
+    with parse_slot():
+        return _parse_gpx_unbounded(content)
+
+
+def _parse_gpx_unbounded(content: bytes) -> dict:
     gpx = gpxpy.parse(io.BytesIO(content))
 
     coords: list[list[float]] = []
@@ -832,6 +853,75 @@ MAX_ZIP_MEMBER_UNCOMPRESSED = int(
 MAX_GPX_SIZE = int(os.environ.get("MAX_GPX_SIZE_BYTES", str(25 * 1024 * 1024)))
 MAX_GPX_COORDS = 100_000  # dense-coord DoS defence (a small GPX can still pack 5M+ points)
 
+# Element budget checked on the raw bytes BEFORE gpxpy builds its tree. The
+# stdlib ElementTree keeps every element in memory (~150-180 bytes each), so the
+# number of ``<`` in the file is a good proxy of the parse cost whatever the
+# element names. 2M ≈ 350 MB of parser state at worst; a real GPX averages
+# 15-20 bytes per tag, so every legitimate file under MAX_GPX_SIZE stays below.
+MAX_GPX_XML_TAGS = int(os.environ.get("MAX_GPX_XML_TAGS", "2000000"))
+
+# Process-wide limit on concurrent GPX/FIT parses. The web instance has
+# 512 MiB and a max-size parse costs a few hundred MB, so by default parses run
+# one at a time; a caller waits up to PARSE_SLOT_TIMEOUT_S for the slot, then
+# gets ParserBusyError (HTTP 503). Single-threaded jobs/CLIs never wait.
+MAX_CONCURRENT_PARSES = max(1, int(os.environ.get("MAX_CONCURRENT_PARSES", "1")))
+PARSE_SLOT_TIMEOUT_S = float(os.environ.get("PARSE_SLOT_TIMEOUT_S", "30"))
+_PARSE_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_PARSES)
+
+
+class TraceTooDenseError(ValueError):
+    """The GPX / FIT holds more points, elements or records than the parser
+    caps allow. Raised before parsing; the message is user-facing."""
+
+
+class ParserBusyError(RuntimeError):
+    """No parse slot became free within PARSE_SLOT_TIMEOUT_S (HTTP 503)."""
+
+
+PARSER_BUSY_MESSAGE = "Le serveur traite déjà d'autres fichiers — réessayez dans quelques secondes."
+
+
+def too_many_coords_message(count: int) -> str:
+    """User-facing reason shared by the pre-parse and post-parse coord caps."""
+    return (
+        f"GPX has too many coordinates ({count} > {MAX_GPX_COORDS}); "
+        "split or simplify the trace"
+    )
+
+
+def check_gpx_bounds(content: bytes) -> None:
+    """Cheap byte-level caps applied before parsing (no XML decoding).
+
+    * track points (``<trkpt``, the only points the parser keeps) >
+      MAX_GPX_COORDS → same reason as the post-parse coordinate cap (route
+      and way points are bounded by the element cap below);
+    * tags (``<``) > MAX_GPX_XML_TAGS → bounds the parser's memory even when
+      the elements are not points.
+    """
+    points = content.count(b"<trkpt")
+    if points > MAX_GPX_COORDS:
+        raise TraceTooDenseError(too_many_coords_message(points))
+    tags = content.count(b"<")
+    if tags > MAX_GPX_XML_TAGS:
+        raise TraceTooDenseError(
+            f"GPX has too many XML elements ({tags} > {MAX_GPX_XML_TAGS}); "
+            "split or simplify the trace"
+        )
+
+
+@contextlib.contextmanager
+def parse_slot():
+    """Hold one of the MAX_CONCURRENT_PARSES slots for the duration of a parse.
+
+    Blocking (threading) semaphore: call parsers from a worker thread
+    (``run_in_threadpool``), never directly on the event loop."""
+    if not _PARSE_SLOTS.acquire(timeout=PARSE_SLOT_TIMEOUT_S):
+        raise ParserBusyError(PARSER_BUSY_MESSAGE)
+    try:
+        yield
+    finally:
+        _PARSE_SLOTS.release()
+
 
 class ZipBombError(ValueError):
     """Zip violates one of the defensive caps in parse_zip_of_gpx."""
@@ -942,7 +1032,9 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                 if info.filename.startswith("/") or ".." in info.filename.split("/"):
                     # Same guard as the GPX loop; rejecting up front
                     # rather than partway through.
-                    raise ZipBombError(f"ZIP member has unsafe path: {info.filename!r}")
+                    raise ZipBombError(
+                        f"ZIP member has unsafe path: {safe_filename(info.filename, allow_path=True)!r}"
+                    )
                 if info.filename.lower() == "activities.csv" and info.file_size <= MAX_ZIP_MEMBER_UNCOMPRESSED:
                     has_strava_csv = True
                     try:
@@ -986,7 +1078,9 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                 # errors depending on whether `activities.csv` came
                 # first in entry order. PR #359 review S2.
                 if name.startswith("/") or ".." in name.split("/"):
-                    raise ZipBombError(f"ZIP member has unsafe path: {name!r}")
+                    raise ZipBombError(
+                        f"ZIP member has unsafe path: {safe_filename(name, allow_path=True)!r}"
+                    )
                 # Accept `.gpx`, `.gpx.gz`, `.fit`, and `.fit.gz` — Strava
                 # bulk exports post-2022 ship gzipped members
                 # (`activities/<id>.gpx.gz` or `.fit.gz`). Pre-fix the
@@ -1022,8 +1116,10 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                                 fileobj=io.BytesIO(member_bytes),
                             ) as gz:
                                 member_bytes = gz.read(MAX_GPX_SIZE + 1)
-                        except (OSError, EOFError) as exc:
-                            results.append({"source_file": name, "error": f"gzip decompress failed: {exc}"})
+                        except (OSError, EOFError):
+                            log.info("zip member %s: gzip decompress failed",
+                                     safe_filename(name, allow_path=True), exc_info=True)
+                            results.append({"source_file": name, "error": "gzip decompress failed"})
                             continue
                         if len(member_bytes) > MAX_GPX_SIZE:
                             results.append({
@@ -1042,10 +1138,11 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                         from app.services.fit_parser import parse_fit
                         try:
                             parsed = parse_fit(member_bytes)
-                        except ImportError as exc:
+                        except ImportError:
+                            log.error("FIT support not installed (fitparse)", exc_info=True)
                             results.append({
                                 "source_file": name,
-                                "error": f"FIT support not installed (fitparse): {exc}",
+                                "error": "FIT support not installed",
                             })
                             continue
                     else:
@@ -1063,11 +1160,7 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                     if coord_count > MAX_GPX_COORDS:
                         results.append({
                             "source_file": name,
-                            "error": (
-                                f"GPX has too many coordinates "
-                                f"({coord_count} > {MAX_GPX_COORDS}); "
-                                "split or simplify the trace"
-                            ),
+                            "error": too_many_coords_message(coord_count),
                         })
                         continue
                     # CSV-derived sport / skip resolution. Lookups are
@@ -1101,8 +1194,17 @@ def parse_zip_of_gpx(content: bytes) -> list[dict]:
                                 "not ingestible into a heatmap sport"
                             )
                     results.append(parsed)
-                except Exception as exc:
+                except ParserBusyError:
+                    raise  # whole request → 503, not a per-member failure
+                except TraceTooDenseError as exc:
                     results.append({"source_file": name, "error": str(exc)})
+                except Exception:
+                    # Parser internals stay in the server logs; the client
+                    # gets a stable, generic reason.
+                    log.info("zip member %s: parse failed",
+                             safe_filename(name, allow_path=True), exc_info=True)
+                    kind = "FIT" if is_fit else "GPX"
+                    results.append({"source_file": name, "error": f"{kind} parse failed (invalid or corrupted file)"})
     except zipfile.BadZipFile as exc:
         raise ValueError("Invalid ZIP file") from exc
     return results
