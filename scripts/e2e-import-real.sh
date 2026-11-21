@@ -22,7 +22,7 @@ P="ct-import-real-$(date +%s)-$$"
 # Image tag = hash of what goes into the deps layer (pyproject + Dockerfile):
 # a dependency change (e.g. fitdecode added) builds a fresh image instead of
 # silently reusing a stale one. E2E_IMPORT_REBUILD=1 forces a rebuild anyway.
-DEPS_HASH="$(cat "$REPO/backend/pyproject.toml" "$REPO/backend/Dockerfile" | shasum -a 256 | cut -c1-12)"
+DEPS_HASH="$(cat "$REPO/backend/pyproject.toml" "$REPO/backend/uv.lock" "$REPO/backend/Dockerfile" | shasum -a 256 | cut -c1-12)"
 IMAGE="${E2E_IMPORT_IMAGE:-ct-e2e-import-backend:$DEPS_HASH}"
 MEM="${E2E_IMPORT_MEM:-8g}"   # the prod importer job's limit
 # MAX_ARCHIVE_BYTES defaults to PROD's 2 GiB (deploy-prod.sh), not the code's

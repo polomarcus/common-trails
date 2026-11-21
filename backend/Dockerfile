@@ -30,10 +30,19 @@ RUN git clone --depth 1 --branch 2.79.0 https://github.com/felt/tippecanoe.git /
     && cd / \
     && rm -rf /tmp/tippecanoe
 
-# Install Python dependencies
-COPY pyproject.toml .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -e ".[dev]"
+# Install Python dependencies — EXACTLY the versions of uv.lock, each checked
+# against its recorded hash (--require-hashes). Never "latest at build time":
+# an unpinned `pip install` would ship to prod whatever a (possibly
+# compromised) maintainer published minutes earlier, and CI (which caches this
+# layer) would not even have tested it. Update the lock with
+# `cd backend && uv lock --upgrade-package <name>` (Dependabot does it weekly,
+# after a cooldown). uv is only used here to export the lock; pinned by digest.
+COPY --from=ghcr.io/astral-sh/uv:0.9.18@sha256:5713fa8217f92b80223bc83aac7db36ec80a84437dbc0d04bbc659cae030d8c9 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --extra dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt && \
+    pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt && \
+    pip install --no-cache-dir --no-deps -e . && \
+    rm /tmp/requirements.txt
 
 # Copy application code (includes data/ with GT routes and the DFCI cache)
 COPY . .
