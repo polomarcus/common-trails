@@ -33,8 +33,8 @@ export interface MapToolbarProps {
   setShowBasemapMenu: React.Dispatch<React.SetStateAction<boolean>>;
   basemapKey: string;
   setBasemapKey: (k: string) => void;
-  layersMenuRef: React.RefObject<HTMLDivElement>;
-  basemapMenuRef: React.RefObject<HTMLDivElement>;
+  layersMenuRef: React.RefObject<HTMLDivElement | null>;
+  basemapMenuRef: React.RefObject<HTMLDivElement | null>;
 
   // Heatmap controls
   heatmapSport: string;
