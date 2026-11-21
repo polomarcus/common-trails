@@ -32,6 +32,7 @@ import contextlib
 import io
 import logging
 import os
+import re
 import tempfile
 import uuid
 import zipfile
@@ -43,7 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import ContributionConsent, PendingArchiveFile
 from app.services import gpx as gpx_service
-from app.services.gpx_archive import UPLOADS_BUCKET, _get_client
+from app.services.gpx_archive import UPLOADS_BUCKET, _get_client, safe_filename
 from app.services.provenance import COMMUNITY_SOURCE
 
 log = logging.getLogger(__name__)
@@ -70,6 +71,29 @@ class IntakeResult:
 
 # ── Consent audit trail ─────────────────────────────────────────────────────
 
+class ConsentError(ValueError):
+    """A consent payload was malformed (unknown id, or partial version/text,
+    out-of-bounds text/locale).
+    Callers map this to HTTP 422."""
+
+
+# Bounds of the client-supplied consent fields (422 above). The wording shown
+# to the user is a few hundred characters; ``locale`` matches its String(8)
+# column (a longer value would fail the INSERT).
+MAX_CONSENT_TEXT_CHARS = 10_000
+MAX_LOCALE_CHARS = 8
+_LOCALE_RE = re.compile(rf"[A-Za-z0-9_-]{{1,{MAX_LOCALE_CHARS}}}")
+
+
+def check_consent_fields(consent_text: str, locale: str | None) -> None:
+    """Raise :class:`ConsentError` (→ 422) on an oversize wording or a locale
+    that is not a short language tag."""
+    if len(consent_text) > MAX_CONSENT_TEXT_CHARS:
+        raise ConsentError(f"consent_text too long (max {MAX_CONSENT_TEXT_CHARS} characters).")
+    if locale and not _LOCALE_RE.fullmatch(locale):
+        raise ConsentError(f"Invalid locale (max {MAX_LOCALE_CHARS} characters, letters/digits/-/_).")
+
+
 def record_consent(
     db: Session,
     *,
@@ -79,7 +103,11 @@ def record_consent(
     locale: str | None,
     source: str = ARCHIVE_PROVENANCE,
 ) -> str:
-    """Append a ContributionConsent row and return its id (committed)."""
+    """Append a ContributionConsent row and return its id (committed).
+
+    Raises :class:`ConsentError` when the fields are out of bounds
+    (:func:`check_consent_fields`)."""
+    check_consent_fields(consent_text, locale)
     consent = ContributionConsent(
         user_id=user_id,
         source=source,
@@ -90,11 +118,6 @@ def record_consent(
     db.add(consent)
     db.commit()
     return consent.id
-
-
-class ConsentError(ValueError):
-    """A consent payload was malformed (unknown id, or partial version/text).
-    Callers map this to HTTP 422."""
 
 
 def resolve_or_record_consent(
@@ -285,7 +308,9 @@ def _plan_zip(zf: zipfile.ZipFile) -> _ZipPlan:
     # Reject unsafe paths up front (attacker signal → whole-archive reject).
     for info in infos:
         if info.filename.startswith("/") or ".." in info.filename.split("/"):
-            raise gpx_service.ZipBombError(f"ZIP member has unsafe path: {info.filename!r}")
+            raise gpx_service.ZipBombError(
+                f"ZIP member has unsafe path: {safe_filename(info.filename, allow_path=True)!r}"
+            )
 
     # activities.csv → sport-by-filename map (authoritative sport). Found at
     # ANY depth: a re-zipped export folder nests it under a root prefix. The
@@ -492,7 +517,7 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
                 break
             if zinfo.file_size > _MAX_NESTED_ZIP_BYTES:
                 log.warning("archive: nested zip %r too large (%d B) — skipped",
-                            zinfo.filename, zinfo.file_size)
+                            safe_filename(zinfo.filename, allow_path=True), zinfo.file_size)
                 continue
             opened += 1
             try:
@@ -510,7 +535,8 @@ def iter_zip_members(zf: zipfile.ZipFile, *, _depth: int = 0):
             except gpx_service.ZipBombError:
                 raise
             except Exception as exc:  # noqa: BLE001 — a bad inner zip skips, never aborts
-                log.warning("archive: nested zip %r unreadable — skipped: %s", zinfo.filename, exc)
+                log.warning("archive: nested zip %r unreadable — skipped: %s",
+                            safe_filename(zinfo.filename, allow_path=True), type(exc).__name__)
                 continue
 
 
@@ -595,7 +621,8 @@ def enqueue_archive(
             backend, storage_key = store_member(user_id, member_id, name, raw)
         except Exception as exc:
             sentry_sdk.capture_exception(exc)
-            log.error("archive intake store failed for %s", name, exc_info=True)
+            log.error("archive intake store failed for %s",
+                      safe_filename(name, allow_path=True), exc_info=True)
             result.errors.append(f"{name}: storage failed")
             continue
         db.add(PendingArchiveFile(

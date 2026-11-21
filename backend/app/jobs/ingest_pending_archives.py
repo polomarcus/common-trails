@@ -40,6 +40,7 @@ from app.services import archive_intake, garmin_connect
 from app.services import email as email_service
 from app.services import gpx as gpx_service
 from app.services import ingest as ingest_service
+from app.services.gpx_archive import safe_filename
 from app.services.run_jobs import trigger_build_pmtiles_job
 from app.services.strava_utils import resolve_sport_cascade, resolve_sport_cascade_with_default
 
@@ -1018,7 +1019,8 @@ def drain_pending_archives(
                     except Exception as exc:  # noqa: BLE001 — one bad member ≠ fail the archive
                         counts["failed"] += 1
                         sentry_sdk.capture_exception(exc)
-                        log.error("archive %s member %s failed", arch["id"], name, exc_info=True)
+                        log.error("archive %s member %s failed", arch["id"],
+                                  safe_filename(name, allow_path=True), exc_info=True)
                     finally:
                         last_work_s = time.monotonic() - _t0
                 if len(connect_index):
