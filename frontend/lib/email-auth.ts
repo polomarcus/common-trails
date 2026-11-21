@@ -85,10 +85,16 @@ export async function setAccountEmail(
 export interface ConfirmEmailResult {
   ok: boolean;
   status: number;
+  /** The account whose email changed (all its sessions ended server-side). */
+  userId?: string;
   email?: string;
 }
 
-/** POST /auth/me/email/confirm — finalize an email change from its link. */
+/**
+ * POST /auth/me/email/confirm — finalize an email change from its link. It
+ * opens no session and ends the account's existing ones: the user then logs in
+ * with the new address.
+ */
 export async function confirmEmailChange(token: string): Promise<ConfirmEmailResult> {
   try {
     const resp = await fetch(`${API_URL}/auth/me/email/confirm`, {
@@ -99,7 +105,7 @@ export async function confirmEmailChange(token: string): Promise<ConfirmEmailRes
     });
     if (!resp.ok) return { ok: false, status: resp.status };
     const data = await resp.json();
-    return { ok: true, status: resp.status, email: data.email };
+    return { ok: true, status: resp.status, userId: data.user_id, email: data.email };
   } catch {
     return { ok: false, status: 0 };
   }

@@ -2,19 +2,21 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useI18n } from '@/lib/i18n';
 import { confirmEmailChange } from '@/lib/email-auth';
+import { getCurrentUserId, clearAuthState } from '@/lib/auth';
+import EmailLoginForm from '@/components/EmailLoginForm';
 
 /**
  * Email-change confirmation landing page. Reads ?token from the URL
- * (client-side, static-export-safe), POSTs /auth/me/email/confirm, and on
- * success shows a confirmation + redirects to /strava. On failure (expired /
+ * (client-side, static-export-safe) and POSTs /auth/me/email/confirm.
+ * Confirming opens no session and ends the account's existing ones, so on
+ * success this browser forgets that account (when it was the one signed in
+ * here) and offers the email login for the new address. On failure (expired /
  * reused link, or the address got claimed → 409) shows a friendly error.
  */
 export default function ConfirmEmailPage() {
   const { t } = useI18n();
-  const router = useRouter();
   const [state, setState] = useState<'verifying' | 'success' | 'error' | 'missing'>('verifying');
   // Guard against React 18 StrictMode double-invoke consuming the single-use
   // token twice (the second call would fail and flip success to error).
@@ -32,13 +34,13 @@ export default function ConfirmEmailPage() {
 
     confirmEmailChange(token).then((res) => {
       if (res.ok) {
+        if (res.userId && res.userId === getCurrentUserId()) clearAuthState();
         setState('success');
-        setTimeout(() => router.push('/strava'), 1200);
       } else {
         setState('error');
       }
     });
-  }, [router]);
+  }, []);
 
   const message =
     state === 'verifying' ? t('accountEmail.confirming')
@@ -76,6 +78,11 @@ export default function ConfirmEmailPage() {
         >
           {message}
         </p>
+        {state === 'success' && (
+          <div data-testid="confirm-email-login" style={{ marginTop: 20, textAlign: 'left' }}>
+            <EmailLoginForm variant="dark" />
+          </div>
+        )}
         {isError && (
           <Link
             href="/strava"
