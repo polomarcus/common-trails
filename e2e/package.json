@@ -13,6 +13,6 @@
   },
   "dependencies": {
     "@mapbox/vector-tile": "^2.0.4",
-    "pbf": "^4.0.1"
+    "pbf": "^5.1.2"
   }
 }
