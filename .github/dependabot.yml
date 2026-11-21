@@ -16,6 +16,11 @@ updates:
     cooldown: { default-days: 7, semver-major-days: 30 }
     groups:
       backend-minor-patch: { update-types: ["minor", "patch"] }
+    ignore:
+      # SQLAlchemy 2.1 switches the default PostgreSQL driver to psycopg 3, which
+      # the image does not ship (prod outage 2026-10-12) — upgrade it on purpose.
+      - dependency-name: "sqlalchemy"
+        versions: [">=2.1"]
     open-pull-requests-limit: 5
     commit-message: { prefix: "chore(deps)" }
 
@@ -42,11 +47,17 @@ updates:
     schedule: { interval: "weekly", day: "monday", time: "06:00", timezone: "Europe/Paris" }
     cooldown: { default-days: 7 }
     groups:
-      actions: { patterns: ["*"] }
+      # Majors stay separate PRs: the deploy-only actions (gcloud auth/setup,
+      # buildx, build-push) never run in PR CI, a green PR can still break CD.
+      actions: { patterns: ["*"], update-types: ["minor", "patch"] }
     commit-message: { prefix: "chore(ci)" }
 
   - package-ecosystem: "docker"
     directory: "/backend"
     schedule: { interval: "weekly", day: "monday", time: "06:00", timezone: "Europe/Paris" }
     cooldown: { default-days: 7 }
+    ignore:
+      # A new Python runtime (3.13 → 3.14…) is a deliberate change, not a routine bump.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message: { prefix: "chore(deps)" }
