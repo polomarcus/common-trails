@@ -1,4 +1,7 @@
-"""Authentication endpoints — register, login (JWT via httpOnly cookie)."""
+"""Authentication endpoints — passwordless magic-link login (JWT via httpOnly cookie).
+
+Password register/login exist only under TEST_MODE (test fixtures, e2e).
+"""
 import logging
 import os
 import secrets
@@ -18,6 +21,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app import config as app_config
 from app.config import FRONTEND_URL, MAGIC_LINK_TTL_MIN, TEST_MODE
 from app.db.models import MagicLinkToken, User
 from app.db.session import get_db
@@ -202,10 +206,32 @@ def _verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def _create_token(user_id: str, email: str) -> str:
+def _create_token(user_id: str, email: str, token_version: int = 0) -> str:
+    """Session JWT. ``tv`` = the account's ``token_version`` at issue time;
+    ``get_current_user`` rejects the token once the account's version moved."""
     expire = datetime.now(UTC) + timedelta(minutes=JWT_EXPIRE_MINUTES)
-    payload = {"sub": user_id, "email": email, "exp": expire}
+    payload = {"sub": user_id, "email": email, "tv": token_version, "exp": expire}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _session_token_for(user: User) -> str:
+    return _create_token(user.id, user.email, user.token_version)
+
+
+def _bump_token_version(db: Session, user_id: str) -> None:
+    """End every session of the account: tokens carrying the previous ``tv``
+    are rejected from now on. Not committed — the caller commits."""
+    db.query(User).filter(User.id == user_id).update(
+        {User.token_version: User.token_version + 1}, synchronize_session=False
+    )
+
+
+def _token_version_matches(payload: dict, user: User) -> bool:
+    """A session token without ``tv`` predates the claim and counts as 0."""
+    tv = payload.get("tv", 0)
+    if not isinstance(tv, int) or isinstance(tv, bool):
+        return False
+    return tv == (user.token_version or 0)
 
 
 def _default_post_login_path(db: Session, user_id: str) -> str:
@@ -379,6 +405,13 @@ async def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if not _token_version_matches(payload, user):
+        # Session ended server-side (logout, email change, password dropped).
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return _user_to_auth(user)
 
 
@@ -397,9 +430,20 @@ async def get_current_user_optional(
         return None
 
 
+def _password_auth_test_only() -> None:
+    """Password register/login answer only under TEST_MODE (backend fixtures,
+    e2e). Elsewhere they answer exactly like an unknown route. Read at request
+    time so a test can switch the flag."""
+    if not app_config.TEST_MODE:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
-@router.post("/register", response_model=LoginResponse, status_code=201)
+@router.post(
+    "/register", response_model=LoginResponse, status_code=201,
+    dependencies=[Depends(_password_auth_test_only)], include_in_schema=TEST_MODE,
+)
 @limiter.limit("5/minute")
 async def register(
     request: Request,
@@ -407,7 +451,8 @@ async def register(
     db: Annotated[Session, Depends(get_db)],
     response: Response,
 ) -> LoginResponse:
-    """Create a new user account.
+    """Create a password account — TEST_MODE only (see
+    ``_password_auth_test_only``); real accounts come from the magic link.
 
     Closed beta gate: if env BETA_INVITE_CODE is set (non-empty), the
     request must include a matching invite_code. When the env is unset
@@ -441,12 +486,15 @@ async def register(
     db.add(user)
     db.commit()
 
-    token = _create_token(user_id, body.email)
+    token = _session_token_for(user)
     _set_auth_cookie(response, token)
     return LoginResponse(access_token=token, user_id=user_id, email=body.email)
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post(
+    "/login", response_model=LoginResponse,
+    dependencies=[Depends(_password_auth_test_only)], include_in_schema=TEST_MODE,
+)
 @limiter.limit("5/minute")
 async def login(
     request: Request,
@@ -454,7 +502,7 @@ async def login(
     db: Annotated[Session, Depends(get_db)],
     response: Response,
 ) -> LoginResponse:
-    """Authenticate with email + password, return JWT."""
+    """Authenticate with email + password, return JWT — TEST_MODE only."""
     user = db.query(User).filter(User.email == form.username).first()
     if not user or not user.hashed_password:
         # Constant-time rejection: run bcrypt even when user not found (prevents timing-based email enumeration)
@@ -470,14 +518,26 @@ async def login(
             detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = _create_token(user.id, user.email)
+    token = _session_token_for(user)
     _set_auth_cookie(response, token)
     return LoginResponse(access_token=token, user_id=user.id, email=user.email)
 
 
 @router.delete("/logout", status_code=204)
-async def logout(response: Response) -> None:
-    """Clear the auth cookie."""
+async def logout(
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[AuthenticatedUser | None, Depends(get_current_user_optional)],
+) -> None:
+    """End the account's sessions and clear the auth cookie.
+
+    A valid session bumps ``token_version``: this token, and every other
+    session of the account, stops authenticating. Without a valid session the
+    cookie is just cleared.
+    """
+    if current_user is not None:
+        _bump_token_version(db, current_user.user_id)
+        db.commit()
     _clear_auth_cookie(response)
 
 
@@ -586,6 +646,10 @@ async def verify_magic_link(
     Verifies signature + TTL + ``purpose`` + jti-not-yet-consumed. On success
     marks the jti consumed (single-use) and sets the SAME httpOnly session
     cookie as /auth/login. Any failure → 401 with a non-enumerating message.
+
+    An account that still has a password becomes passwordless here: the hash
+    is cleared and ``token_version`` bumped BEFORE the new session is issued,
+    so any session obtained with that password stops authenticating.
     """
     invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -632,7 +696,16 @@ async def verify_magic_link(
     if not user:
         raise invalid
 
-    session_token = _create_token(user.id, user.email)
+    if user.hashed_password is not None:
+        # One conditional UPDATE: two links verified at once bump only once.
+        db.query(User).filter(User.id == user.id, User.hashed_password.isnot(None)).update(
+            {User.hashed_password: None, User.token_version: User.token_version + 1},
+            synchronize_session=False,
+        )
+        db.commit()
+        db.refresh(user)
+
+    session_token = _session_token_for(user)
     _set_auth_cookie(response, session_token)
     if _is_first_login(db, user.id):
         # Sent AFTER the response (Resend round-trip): the login never waits
@@ -741,16 +814,18 @@ async def confirm_email_change(
     request: Request,
     body: ConfirmEmailRequest,
     db: Annotated[Session, Depends(get_db)],
-    response: Response,
 ) -> ConfirmEmailResponse:
     """Finalize an email change — consume the confirmation link.
 
     Verifies signature + TTL + ``purpose=email_change`` + jti-not-yet-consumed,
     then writes the new address to the account. No active session is required
     (the token itself authorizes the change for its ``sub``), so the link works
-    from any device — same posture as the magic-link login. Re-checks the
-    takeover guard at finalize time in case the address was claimed between
-    request and confirm; the DB unique constraint is the final backstop.
+    from any device. Re-checks the takeover guard at finalize time in case the
+    address was claimed between request and confirm; the DB unique constraint
+    is the final backstop.
+
+    Confirming opens NO session: it bumps ``token_version`` (every session of
+    the account ends) and the user then signs in with the new address.
     """
     invalid = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -807,9 +882,7 @@ async def confirm_email_change(
         )
 
     user.email = new_email
+    db.flush()
+    _bump_token_version(db, user.id)
     db.commit()
-
-    # Refresh the session cookie so the email claim in the JWT stays coherent.
-    session_token = _create_token(user.id, user.email)
-    _set_auth_cookie(response, session_token)
-    return ConfirmEmailResponse(ok=True, user_id=user.id, email=user.email)
+    return ConfirmEmailResponse(ok=True, user_id=user_id, email=new_email)
