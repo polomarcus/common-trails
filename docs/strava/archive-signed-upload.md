@@ -38,8 +38,9 @@ instance must never hold the archive bytes.**
 3. **`POST /imports/strava-archive/complete`** — body `{archive_id, key}`.
    Verifies the key sits under `archive-intake/<user_id>/` (403 otherwise), that
    it matches the row (400), and that the object exists in the bucket (409 if the
-   PUT hasn't landed). Flips the row to `status=uploaded`. Returns `202`
-   `{archive_id, status:"uploaded", enqueue:"scheduled"}`.
+   PUT hasn't landed). Flips the row `awaiting_upload` → `uploaded` (any other
+   status → 409, no job trigger; per-user limit `ARCHIVE_COMPLETE_RATE_LIMIT`).
+   Returns `202` `{archive_id, status:"uploaded", enqueue:"triggered"|"scheduled"}`.
 4. **Cold-start importer** `python -m app.jobs.ingest_pending_archives` — for
    each `uploaded` `pending_archives` row (claimed `FOR UPDATE SKIP LOCKED`),
    STREAMS the `.zip` from the bucket to a temp file, opens it with `zipfile`
@@ -55,10 +56,10 @@ instance must never hold the archive bytes.**
 
 ### Backward compatibility
 - Per-file `POST /imports` (single `.gpx`/`.fit`) — unchanged.
-- Old whole-zip `POST /imports/strava-archive` — KEPT for small zips / the dev
-  fallback (still capped at `MAX_IMPORT_FILE_SIZE`). The importer drains BOTH the
-  new `pending_archives` (whole-zip) queue AND the legacy `pending_archive_files`
-  (per-member) queue.
+- Old whole-zip multipart `POST /imports/strava-archive` — REMOVED (it buffered
+  the whole .zip on the web instance; the frontend only uses init → PUT →
+  complete). The importer still drains BOTH the `pending_archives` (whole-zip)
+  queue AND the legacy `pending_archive_files` (per-member) queue.
 - Local/dev (no `UPLOADS_BUCKET`): `init` returns a backend upload path; the
   browser PUTs to `PUT /imports/strava-archive/upload/<archive_id>` (auth'd)
   which lands the bytes under `ARCHIVE_INTAKE_DIR`. Buffering on the web is
