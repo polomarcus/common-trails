@@ -31,8 +31,8 @@ export interface LayerToggleState {
   setShowBasemapMenu: React.Dispatch<React.SetStateAction<boolean>>;
   basemapKey: string;
   setBasemapKey: (k: string) => void;
-  layersMenuRef: React.RefObject<HTMLDivElement>;
-  basemapMenuRef: React.RefObject<HTMLDivElement>;
+  layersMenuRef: React.RefObject<HTMLDivElement | null>;
+  basemapMenuRef: React.RefObject<HTMLDivElement | null>;
   /** True while heatmap is fading in/out (Crouzet discovery technique). */
   heatmapFading: boolean;
   /** Toggle heatmap with fade animation (triggered by H key or button). */
