@@ -30,11 +30,19 @@ export function useUserMenu(): UserMenuState {
         // and admin flag silently stayed empty).
         const resp = await fetch(`${API_URL}/auth/me`, { credentials: 'include' });
         if (resp.status === 401) {
-          // The session ended server-side (signed out on another device, email
-          // changed): forget it here too instead of showing a signed-in UI
-          // whose every call fails. Reload so every component re-reads it.
-          clearAuthState();
-          window.location.reload();
+          // A session cookie was sent but refused (signed out on another
+          // device, email changed, expired): forget it here too — drop the
+          // dead cookie, clear the local flag, reload so every component
+          // re-reads it — instead of a signed-in UI whose every call fails.
+          // No cookie at all ("Not authenticated") is left alone.
+          const body = await resp.json().catch(() => null);
+          if (body?.detail && body.detail !== 'Not authenticated') {
+            try {
+              await fetch(`${API_URL}/auth/logout`, { method: 'DELETE', credentials: 'include' });
+            } catch { /* best-effort */ }
+            clearAuthState();
+            window.location.reload();
+          }
           return;
         }
         if (!resp.ok) return;
