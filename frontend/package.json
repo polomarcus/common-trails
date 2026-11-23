@@ -28,7 +28,7 @@
     "@types/react-dom": "19.3.0",
     "@vitest/ui": "^4.1.12",
     "jsdom": "^29.0.2",
-    "typescript": "5.5.2",
+    "typescript": "7.0.2",
     "vitest": "^4.1.12"
   },
   "engines": {
