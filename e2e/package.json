@@ -12,7 +12,7 @@
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@mapbox/vector-tile": "^2.0.4",
+    "@mapbox/vector-tile": "^3.0.0",
     "pbf": "^5.1.2"
   }
 }
